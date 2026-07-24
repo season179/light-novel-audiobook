@@ -81,6 +81,49 @@ tar -cJf "$distribution/v$node_version/$archive" -C "$temporary_directory/payloa
 )
 printf 'Linux microsoft-standard-WSL2 test kernel\n' > "$temporary_directory/wsl-version"
 
+assert_no_install_leaks() {
+  local toolchain_root="$1"
+  if [[ -d "$toolchain_root" ]] &&
+    find "$toolchain_root" -mindepth 1 -maxdepth 1 -name '.install.*' -print -quit | grep -q .; then
+    fail "a failed install leaked a .install.* directory under $toolchain_root"
+  fi
+}
+
+expect_clean_install_failure() {
+  local name="$1"
+  local dist_url="$2"
+  local failure_data="$temporary_directory/failure-$name"
+  local toolchain_root="$failure_data/light-novel-audiobook/toolchain"
+  mkdir -p "$toolchain_root/unrelated"
+  printf 'keep\n' > "$toolchain_root/unrelated/sentinel"
+  if TOOLCHAIN_PROC_VERSION_FILE="$temporary_directory/wsl-version" \
+    TOOLCHAIN_NODE_DIST_URL="$dist_url" XDG_DATA_HOME="$failure_data" \
+    bash "$installer" > "$temporary_directory/failure-$name.out" 2>&1; then
+    fail "$name installation unexpectedly succeeded"
+  fi
+  assert_no_install_leaks "$toolchain_root"
+  [[ -f "$toolchain_root/unrelated/sentinel" ]] ||
+    fail "$name failure cleanup removed an unrelated path"
+}
+
+expect_clean_install_failure 'curl' "file://$temporary_directory/missing-distribution"
+
+checksum_failure_distribution="$temporary_directory/checksum-failure-distribution"
+mkdir -p "$checksum_failure_distribution/v$node_version"
+cp "$distribution/v$node_version/$archive" "$checksum_failure_distribution/v$node_version/$archive"
+printf '%064d  %s\n' 0 "$archive" > \
+  "$checksum_failure_distribution/v$node_version/SHASUMS256.txt"
+expect_clean_install_failure 'checksum' "file://$checksum_failure_distribution"
+
+tar_failure_distribution="$temporary_directory/tar-failure-distribution"
+mkdir -p "$tar_failure_distribution/v$node_version"
+printf 'not an xz archive\n' > "$tar_failure_distribution/v$node_version/$archive"
+(
+  cd "$tar_failure_distribution/v$node_version"
+  sha256sum "$archive" > SHASUMS256.txt
+)
+expect_clean_install_failure 'tar' "file://$tar_failure_distribution"
+
 install_data="$temporary_directory/install-data"
 install_root="$install_data/light-novel-audiobook/toolchain"
 target="$install_root/node-v$node_version-linux-$node_arch"
@@ -118,4 +161,5 @@ grep -q 'Discarding invalid cached' "$temporary_directory/recovery.out" ||
 [[ "$(sha256sum "$target/bin/node")" == "$original_checksum" ]] ||
   fail 'a corrupted cached target was not repaired'
 
-printf '%s\n' 'WSL2 installer parsing, rejection, cache recovery, and idempotency tests passed.'
+printf '%s\n' \
+  'WSL2 installer parsing, failure cleanup, rejection, cache recovery, and idempotency tests passed.'

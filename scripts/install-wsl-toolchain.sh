@@ -81,14 +81,22 @@ toolchain_cache_is_valid() {
   [[ "$("$target/bin/node" -p '`${process.platform}:${process.arch}`')" == "linux:$architecture" ]]
 }
 
-toolchain_install_node() {
+toolchain_install_node() (
+  set -euo pipefail
   local target="$1"
   local install_root="$2"
   local version="$3"
   local architecture="$4"
   local dist_url="$5"
   local archive="node-v$version-linux-$architecture.tar.xz"
-  local temporary_directory
+  local temporary_directory=''
+
+  cleanup_install_directory() {
+    if [[ -n "$temporary_directory" && "$temporary_directory" == "$install_root"/.install.* ]]; then
+      rm -rf -- "$temporary_directory"
+    fi
+  }
+  trap cleanup_install_directory EXIT
   temporary_directory="$(mktemp -d "$install_root/.install.XXXXXX")"
 
   printf 'Downloading native Linux Node.js v%s...\n' "$version"
@@ -114,25 +122,21 @@ toolchain_install_node() {
   local extracted="$temporary_directory/node-v$version-linux-$architecture"
   if [[ ! -x "$extracted/bin/node" || ! -x "$extracted/bin/corepack" ]]; then
     toolchain_error 'downloaded Node archive is incomplete.'
-    rm -rf "$temporary_directory"
     return 1
   fi
   if [[ "$("$extracted/bin/node" --version)" != "v$version" ]] ||
     [[ "$("$extracted/bin/node" -p '`${process.platform}:${process.arch}`')" != "linux:$architecture" ]]; then
     toolchain_error 'downloaded Node archive does not match the requested version and architecture.'
-    rm -rf "$temporary_directory"
     return 1
   fi
 
   toolchain_write_integrity_manifest "$extracted" "$version" "$architecture"
   if [[ -e "$target" || -L "$target" ]]; then
     toolchain_error "refusing to nest the Node installation into an existing target: $target"
-    rm -rf "$temporary_directory"
     return 1
   fi
   mv "$extracted" "$target"
-  rm -rf "$temporary_directory"
-}
+)
 
 toolchain_main() {
   set -euo pipefail
