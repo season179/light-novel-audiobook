@@ -1,31 +1,77 @@
 {
-  "evidence_schema": 1,
+  "evidence_schema": 2,
   "observed_on": "2026-07-24",
-  "fixture": "tests/fixtures/epub/synthetic-complex.epub",
+  "fixtures": [
+    "tests/fixtures/epub/synthetic-complex.epub",
+    "tests/fixtures/epub/synthetic-malformed.epub"
+  ],
+  "hash_semantics": "SHA-256 of JSON serialization of actual structural/chapter output or canonical accepted/rejected outcome.",
   "candidates": {
     "@lingo-reader/epub-parser@0.4.6": {
-      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
-      "toc_ids": ["chapter-2", "chapter-1"],
-      "source_access": "transformed-body-only",
-      "body_markup_exact": false,
-      "malformed_xhtml": "accepted",
-      "repeated_summary_identical": true
+      "facts": {
+        "source_access": "transformed-body-only",
+        "body_markup_exact": false
+      },
+      "relevant_output_sha256": {
+        "run_1": "281d8e6be1ff8f29451449ad93c26962d7efc448361c2b05049faa276a4bdf90",
+        "run_2": "281d8e6be1ff8f29451449ad93c26962d7efc448361c2b05049faa276a4bdf90"
+      },
+      "malformed_outcome": {
+        "status": "accepted",
+        "output": {
+          "html": "<p>This paragraph never closes.",
+          "css": []
+        }
+      },
+      "malformed_outcome_sha256": {
+        "run_1": "0a7ba5d46336cbb833efe12e5617a20bdd13691abbca8694f48b9db879bba1c9",
+        "run_2": "0a7ba5d46336cbb833efe12e5617a20bdd13691abbca8694f48b9db879bba1c9"
+      },
+      "deterministic": true
     },
     "epub2@3.0.2": {
-      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
-      "toc_ids": ["chapter-2", "chapter-1"],
-      "source_access": "raw-xhtml",
-      "raw_xhtml_exact": true,
-      "malformed_xhtml": "rejected: File not found \"broken\"",
-      "repeated_summary_identical": true
+      "facts": {
+        "source_access": "raw-xhtml",
+        "raw_xhtml_exact": true
+      },
+      "relevant_output_sha256": {
+        "run_1": "c803ab5ca1d0324b383d3811ede8f9ef56e38dae1c25af612ff365392ab19fca",
+        "run_2": "c803ab5ca1d0324b383d3811ede8f9ef56e38dae1c25af612ff365392ab19fca"
+      },
+      "malformed_outcome": {
+        "status": "rejected",
+        "error": {
+          "name": "Error",
+          "message": "File not found \"broken\""
+        }
+      },
+      "malformed_outcome_sha256": {
+        "run_1": "ab1a19f1a71cbc060c1eaf7a86cd207ab5eb0887bd0d2f4a1ede4a90ee0e1d52",
+        "run_2": "ab1a19f1a71cbc060c1eaf7a86cd207ab5eb0887bd0d2f4a1ede4a90ee0e1d52"
+      },
+      "deterministic": true
     },
-    "fflate@0.8.3+saxes@6.0.0+rules@1": {
-      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
-      "toc_paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml", "EPUB/side-story.xhtml"],
-      "source_access": "strict-decoded-text-nodes-with-ledger",
-      "extraction_sha256": "f5c273df2e60dcae19052dcfc9ab74f016962a1972cbcece363fc22b548ecde0",
-      "malformed_xhtml": "rejected: EPUB/broken.xhtml: malformed XML: 2:121: unexpected close tag.",
-      "repeated_summary_identical": true
+    "fflate@0.8.3+saxes@6.0.0+rules@2": {
+      "facts": {
+        "source_access": "strict-decoded-text-nodes-with-ledger"
+      },
+      "relevant_output_sha256": {
+        "run_1": "f4eaf3c50c0baa40d4233b201e7d762ecef7b19e2333107b8b9b7e370ddc7091",
+        "run_2": "f4eaf3c50c0baa40d4233b201e7d762ecef7b19e2333107b8b9b7e370ddc7091"
+      },
+      "malformed_outcome": {
+        "status": "rejected",
+        "error": {
+          "name": "Error",
+          "message": "EPUB/broken.xhtml: malformed XML: 2:121: unexpected close tag."
+        }
+      },
+      "malformed_outcome_sha256": {
+        "run_1": "60367260a041c16779f4e72601feffb282d535d07c1a3f151bf0e09f194603ed",
+        "run_2": "60367260a041c16779f4e72601feffb282d535d07c1a3f151bf0e09f194603ed"
+      },
+      "deterministic": true,
+      "extraction_sha256": "09caf7b8d7c502694ee00da82cc8e70fb76d7677f497bdbfa1216f4cd48a301d"
     }
   }
 }

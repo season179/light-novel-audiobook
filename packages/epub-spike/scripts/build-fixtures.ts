@@ -6,6 +6,14 @@ import { type Zippable, zipSync } from 'fflate'
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const fixtureRoot = path.join(repositoryRoot, 'tests/fixtures/epub')
 const fixedTime = new Date('2000-01-01T00:00:00.000Z')
+export const fixtureNames = [
+  'synthetic-complex',
+  'synthetic-malformed',
+  'synthetic-malformed-nav',
+  'synthetic-missing-nav',
+  'synthetic-ncx-only',
+  'synthetic-nested-parent',
+] as const
 
 async function listFiles(directory: string, prefix = ''): Promise<string[]> {
   const entries = await readdir(path.join(directory, prefix), { withFileTypes: true })
@@ -46,7 +54,7 @@ export async function buildFixture(name: string): Promise<string> {
 }
 
 if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] ?? '')) {
-  for (const name of ['synthetic-complex', 'synthetic-malformed']) {
+  for (const name of fixtureNames) {
     const outputPath = await buildFixture(name)
     console.log(path.relative(repositoryRoot, outputPath))
   }

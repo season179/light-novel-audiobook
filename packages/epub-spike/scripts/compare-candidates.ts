@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,55 +12,138 @@ const fixtureSource = path.join(
   repositoryRoot,
   'tests/fixtures/epub/synthetic-complex/EPUB/chapter-1.xhtml',
 )
-const resourceDirectory = path.join(repositoryRoot, 'work/epub-spike-lingo-resources')
+const resourceDirectory = '/tmp/light-novel-audiobook-epub-spike-lingo-resources'
 
 function bodyMarkup(xhtml: string): string {
   return xhtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? ''
 }
 
+function outputHash(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function rejected(error: unknown) {
+  if (error instanceof Error) {
+    const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined
+    return {
+      status: 'rejected' as const,
+      error: { name: error.name, message: error.message, ...(code ? { code } : {}) },
+    }
+  }
+  return { status: 'rejected' as const, error: { name: 'NonError', message: String(error) } }
+}
+
+async function captureOutcome<T>(operation: () => Promise<T>) {
+  try {
+    return { status: 'accepted' as const, output: await operation() }
+  } catch (error) {
+    return rejected(error)
+  }
+}
+
 async function observeLingo(complexPath: string, malformedPath: string) {
   await rm(resourceDirectory, { recursive: true, force: true })
-  const parser = await initEpubFile(complexPath, resourceDirectory)
-  const chapter = await parser.loadChapter('chapter-1')
   const sourceBody = bodyMarkup(await readFile(fixtureSource, 'utf8'))
-  const summary = {
-    spine_ids: parser.getSpine().map((item) => item.id),
-    toc_ids: parser.getToc().map((item) => item.id),
-    source_access: 'transformed-body-only',
-    body_markup_exact: chapter.html === sourceBody,
-  }
-  parser.destroy()
-
-  let malformedResult = 'accepted'
-  const malformed = await initEpubFile(malformedPath, resourceDirectory)
+  let parser: Awaited<ReturnType<typeof initEpubFile>> | undefined
   try {
-    await malformed.loadChapter('broken')
-  } catch (error) {
-    malformedResult = `rejected: ${error instanceof Error ? error.message : String(error)}`
+    parser = await initEpubFile(complexPath, resourceDirectory)
+    const chapter = await parser.loadChapter('chapter-1')
+    const relevantOutput = {
+      spine: parser.getSpine().map((item) => ({
+        id: item.id,
+        href: item.href,
+        media_type: item.mediaType,
+        linear: item.linear,
+      })),
+      toc: parser.getToc().map((item) => ({
+        id: item.id,
+        href: item.href,
+        label: item.label,
+        play_order: item.playOrder,
+      })),
+      chapter: {
+        html: chapter.html,
+        css: chapter.css.map((item) => ({ id: item.id, href: item.href })),
+      },
+    }
+    parser.destroy()
+    parser = undefined
+
+    const malformedOutcome = await captureOutcome(async () => {
+      const malformed = await initEpubFile(malformedPath, resourceDirectory)
+      try {
+        const loaded = await malformed.loadChapter('broken')
+        return { html: loaded.html, css: loaded.css }
+      } finally {
+        malformed.destroy()
+      }
+    })
+    return {
+      relevantOutput,
+      malformedOutcome,
+      facts: {
+        source_access: 'transformed-body-only',
+        body_markup_exact: chapter.html === sourceBody,
+      },
+    }
   } finally {
-    malformed.destroy()
+    parser?.destroy()
     await rm(resourceDirectory, { recursive: true, force: true })
   }
-  return { ...summary, malformed_xhtml: malformedResult }
 }
 
 async function observeEpub2(complexPath: string, malformedPath: string) {
   const parser = await EPub.createAsync(complexPath)
   const source = await readFile(fixtureSource, 'utf8')
   const raw = await parser.getChapterRawAsync('chapter-1')
-  const malformed = await EPub.createAsync(malformedPath)
-  let malformedResult = 'accepted'
-  try {
-    await malformed.getChapterRawAsync('broken')
-  } catch (error) {
-    malformedResult = `rejected: ${error instanceof Error ? error.message : String(error)}`
+  const relevantOutput = {
+    spine: parser.flow.map((item: { id: string; href: string; mediaType?: string }) => ({
+      id: item.id,
+      href: item.href,
+      media_type: item.mediaType ?? null,
+    })),
+    toc: parser.toc.map((item: { id: string; href: string; title?: string; order?: number }) => ({
+      id: item.id,
+      href: item.href,
+      title: item.title ?? null,
+      order: item.order ?? null,
+    })),
+    raw_xhtml: raw,
   }
+  const malformedOutcome = await captureOutcome(async () => {
+    const malformed = await EPub.createAsync(malformedPath)
+    return malformed.getChapterRawAsync('broken')
+  })
   return {
-    spine_ids: parser.flow.map((item: { id: string }) => item.id),
-    toc_ids: parser.toc.map((item: { id: string }) => item.id),
-    source_access: 'raw-xhtml',
-    raw_xhtml_exact: raw === source,
-    malformed_xhtml: malformedResult,
+    relevantOutput,
+    malformedOutcome,
+    facts: { source_access: 'raw-xhtml', raw_xhtml_exact: raw === source },
+  }
+}
+
+async function observeSelected(complexBytes: Uint8Array, malformedBytes: Uint8Array) {
+  const relevantOutput = extractEpubForSpike(complexBytes)
+  const malformedOutcome = await captureOutcome(async () => extractEpubForSpike(malformedBytes))
+  return {
+    relevantOutput,
+    malformedOutcome,
+    facts: { source_access: 'strict-decoded-text-nodes-with-ledger' },
+  }
+}
+
+function determinismEvidence<
+  T extends { relevantOutput: unknown; malformedOutcome: unknown; facts: unknown },
+>(first: T, second: T) {
+  const outputRun1 = outputHash(first.relevantOutput)
+  const outputRun2 = outputHash(second.relevantOutput)
+  const malformedRun1 = outputHash(first.malformedOutcome)
+  const malformedRun2 = outputHash(second.malformedOutcome)
+  return {
+    facts: first.facts,
+    relevant_output_sha256: { run_1: outputRun1, run_2: outputRun2 },
+    malformed_outcome: first.malformedOutcome,
+    malformed_outcome_sha256: { run_1: malformedRun1, run_2: malformedRun2 },
+    deterministic: outputRun1 === outputRun2 && malformedRun1 === malformedRun2,
   }
 }
 
@@ -73,36 +157,24 @@ async function main() {
   const lingoSecond = await observeLingo(complexPath, malformedPath)
   const epub2First = await observeEpub2(complexPath, malformedPath)
   const epub2Second = await observeEpub2(complexPath, malformedPath)
-  const selectedFirst = extractEpubForSpike(complexBytes)
-  const selectedSecond = extractEpubForSpike(complexBytes)
-  let selectedMalformed = 'accepted'
-  try {
-    extractEpubForSpike(malformedBytes)
-  } catch (error) {
-    selectedMalformed = `rejected: ${error instanceof Error ? error.message : String(error)}`
-  }
+  const selectedFirst = await observeSelected(complexBytes, malformedBytes)
+  const selectedSecond = await observeSelected(complexBytes, malformedBytes)
 
   const evidence = {
-    evidence_schema: 1,
+    evidence_schema: 2,
     observed_on: '2026-07-24',
-    fixture: 'tests/fixtures/epub/synthetic-complex.epub',
+    fixtures: [
+      'tests/fixtures/epub/synthetic-complex.epub',
+      'tests/fixtures/epub/synthetic-malformed.epub',
+    ],
+    hash_semantics:
+      'SHA-256 of JSON serialization of actual structural/chapter output or canonical accepted/rejected outcome.',
     candidates: {
-      '@lingo-reader/epub-parser@0.4.6': {
-        ...lingoFirst,
-        repeated_summary_identical: JSON.stringify(lingoFirst) === JSON.stringify(lingoSecond),
-      },
-      'epub2@3.0.2': {
-        ...epub2First,
-        repeated_summary_identical: JSON.stringify(epub2First) === JSON.stringify(epub2Second),
-      },
-      'fflate@0.8.3+saxes@6.0.0+rules@1': {
-        spine_ids: selectedFirst.documents.map((document) => document.idref),
-        toc_paths: selectedFirst.navigation.epub3_nav_paths,
-        source_access: 'strict-decoded-text-nodes-with-ledger',
-        extraction_sha256: selectedFirst.extraction_sha256,
-        malformed_xhtml: selectedMalformed,
-        repeated_summary_identical:
-          JSON.stringify(selectedFirst) === JSON.stringify(selectedSecond),
+      '@lingo-reader/epub-parser@0.4.6': determinismEvidence(lingoFirst, lingoSecond),
+      'epub2@3.0.2': determinismEvidence(epub2First, epub2Second),
+      'fflate@0.8.3+saxes@6.0.0+rules@2': {
+        ...determinismEvidence(selectedFirst, selectedSecond),
+        extraction_sha256: selectedFirst.relevantOutput.extraction_sha256,
       },
     },
   }

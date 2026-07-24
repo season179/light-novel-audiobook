@@ -2,12 +2,13 @@
   "identity": {
     "archive_parser": "fflate@0.8.3",
     "xml_parser": "saxes@6.0.0",
-    "extraction_rules": "epub-source-text@1"
+    "extraction_rules": "epub-source-text@2"
   },
   "offset_unit": "unicode-scalar-value",
-  "publication_content_sha256": "d33ef9a991de66544c232d7e5b36af6cc9118677dedad1bb5e04ce06f9ea072c",
+  "publication_content_sha256": "9456efa4e8b002150f3a49595b31b5edbdf1f9b4bc0327ec77754d4bf417bd95",
   "metadata_title": "Clockwork Lantern — Synthetic Fixture",
   "navigation": {
+    "package_version": "3.0",
     "spine_paths": [
       "EPUB/chapter-1.xhtml",
       "EPUB/chapter-2.xhtml",
@@ -16,9 +17,16 @@
       "EPUB/low-text.xhtml",
       "EPUB/side-story.xhtml"
     ],
-    "epub3_nav_paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml", "EPUB/side-story.xhtml"],
-    "ncx_paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml"],
-    "conflict": true
+    "epub3_nav": {
+      "status": "valid",
+      "paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml", "EPUB/side-story.xhtml"]
+    },
+    "ncx": {
+      "status": "valid",
+      "paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml"]
+    },
+    "conflict": true,
+    "conflict_sources": ["epub3-nav", "ncx"]
   },
   "documents": [
     {
@@ -30,7 +38,7 @@
       "semantic_hints": [],
       "passages": [
         {
-          "id": "436f79f49b2ec01adde336d8f902f5f11c0b186b4f01720d4ba7eeacd6afdec9",
+          "id": "9027bc686849b6eed5bdee76a662aee6900d31cb863960e1fb6621466212b2fa",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/div[1]",
           "element": "div",
           "source_text": "CLOCKWORK LANTERN",
@@ -39,7 +47,7 @@
           "semantic_hints": ["page-furniture"]
         },
         {
-          "id": "a90f524e4609462b8a697609f1f1e01c836e7f696064aa7f12338811be9aa618",
+          "id": "2fb7199de31384b374a7e98c892d26a10357b480e2b035df00755faf22264083",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/span[1]",
           "element": "span",
           "source_text": "1",
@@ -48,7 +56,7 @@
           "semantic_hints": ["page-furniture"]
         },
         {
-          "id": "5c54ef9d335038d8d0f27d52c4793ec7b8eb8f7d4ec7068644d3d52eab472d86",
+          "id": "0bec81860ab5ee3eb4e3d30c981155f1fec1c7504ddbd74e732918c9defd00f4",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/h1[1]",
           "element": "h1",
           "source_text": "The Brass Door",
@@ -57,7 +65,7 @@
           "semantic_hints": ["heading"]
         },
         {
-          "id": "7bad77b85d6a6556d46af9d4439247402316fa574e86edd118e0db7f21c7bb8e",
+          "id": "0c666771e5bb4f771e6ecc3ebe30a3c9aa906f6f3e9415b7702db4d649862994",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/p[1]",
           "element": "p",
           "source_text": "A & B 🙂 é   end.",
@@ -73,7 +81,7 @@
           "semantic_hints": []
         },
         {
-          "id": "ab05dcaa3b59a994ff6c4ee87bfd9c54a164a856bc2162ff6c84ddd95b7e6f0b",
+          "id": "4f92de1a8f55c501f0ee59de8939c2e29b2f7f620c0726b729dd72935e1f5df8",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/p[2]",
           "element": "p",
           "source_text": "  Keep\tboth\nspaces.  ",
@@ -82,7 +90,7 @@
           "semantic_hints": []
         },
         {
-          "id": "81eddb17ac3106e7f9263e262b2d212923ef25a553e91da6cc79313f85030d73",
+          "id": "3064ecf7122ca3b461fa6403f97266ab80330fa4f1ef9a8b6091df3276a1c1f2",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/p[3]",
           "element": "p",
           "source_text": "She opened the door—slowly.",
@@ -104,7 +112,7 @@
           "semantic_hints": []
         },
         {
-          "id": "576895d3cd94dc0d28f57b6043d9548a8425908ee09b545b6b36115ffa24bd3a",
+          "id": "1ebd2264a4942024df06d7d743fd8b558a3fbff16999d55c0743ffce280830d6",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/p[4]",
           "element": "p",
           "source_text": "The mark 星 glowed.*",
@@ -129,7 +137,7 @@
           "semantic_hints": []
         },
         {
-          "id": "8b9be5df7b23b899e284bc04700c2da932d36f6f1665db3501c16582f2587a65",
+          "id": "936709460cfbaac9ba088719acfbb1426d36f0360b2929855ce80009808b3bba",
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/figure[1]/figcaption[1]",
           "element": "figcaption",
           "source_text": "Figure 1",
@@ -290,8 +298,10 @@
           "locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/figure[1]/img[1]",
           "source": "images/lantern.svg",
           "alt": "A lantern marked \"III\".",
+          "passage_locator": "spine[0000]::EPUB/chapter-1.xhtml::/html[1]/body[1]/figure[1]",
           "source_offset": 0,
-          "offset_unit": "unicode-scalar-value"
+          "offset_unit": "unicode-scalar-value",
+          "semantic_hints": ["passage-root-without-source-text"]
         }
       ]
     },
@@ -301,10 +311,10 @@
       "path": "EPUB/chapter-2.xhtml",
       "linear": true,
       "title": "Another title in metadata",
-      "semantic_hints": ["ambiguous-content", "requires-review"],
+      "semantic_hints": ["unanchored-image", "requires-review", "ambiguous-content"],
       "passages": [
         {
-          "id": "de2a2b4a2aeddf1431ebb656f4164bfbff1934a417b6b471c844b7ec5340d8ef",
+          "id": "8439e67e36d331990f76b708cf1f407c09b2c257fc45fe005bc43dea1a8a1050",
           "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/h1[1]",
           "element": "h1",
           "source_text": "The Brass Door",
@@ -313,7 +323,7 @@
           "semantic_hints": ["heading"]
         },
         {
-          "id": "9daecf7655abb65332e46bd3c2b2d41c5726ecd9ccf353752b3bfd42c5dcaa95",
+          "id": "a8a8a31a60c637b9b8bad51f306ea58fdc12e5ce190649f55ba9922ba177b34b",
           "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/p[1]",
           "element": "p",
           "source_text": "“Nothing moved,” said Noa.",
@@ -322,7 +332,7 @@
           "semantic_hints": []
         },
         {
-          "id": "0a7fe5ce3c502f74f2ff7ee09246d27d48be59ba223459ccfb12f1dec2ec07aa",
+          "id": "2e2102e8a1f13f4176a84649017316ee2cd4b1cf29dd858553afe5e807d97788",
           "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/aside[1]/p[1]",
           "element": "p",
           "source_text": "Was this a memory, or a warning?",
@@ -365,10 +375,45 @@
         {
           "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/text()[4]",
           "role": "layout-whitespace",
+          "text": "\n    "
+        },
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/script[1]/text()[1]",
+          "role": "non-story-markup",
+          "text": " \n"
+        },
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/text()[5]",
+          "role": "layout-whitespace",
+          "text": "\n    "
+        },
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/style[1]/text()[1]",
+          "role": "non-story-markup",
+          "text": "\t"
+        },
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/text()[6]",
+          "role": "layout-whitespace",
+          "text": "\n    "
+        },
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/text()[7]",
+          "role": "layout-whitespace",
           "text": "\n  "
         }
       ],
-      "images": []
+      "images": [
+        {
+          "locator": "spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/img[1]",
+          "source": "images/lantern.svg",
+          "alt": "A loose lantern illustration.",
+          "passage_locator": null,
+          "source_offset": null,
+          "offset_unit": "unicode-scalar-value",
+          "semantic_hints": ["outside-passage-root", "requires-review"]
+        }
+      ]
     },
     {
       "spine_index": 2,
@@ -379,7 +424,7 @@
       "semantic_hints": ["nonlinear-spine-item", "requires-review"],
       "passages": [
         {
-          "id": "3508170b8bead250f4eb9101483eb5329406af5eac51e95d640fd0c5efb2a169",
+          "id": "dc4569ffa5ce0830f9b40a9c0d9d7e8555286058be42077dcf50f70d06bdcdc1",
           "locator": "spine[0002]::EPUB/notes.xhtml::/html[1]/body[1]/aside[1]/p[1]",
           "element": "p",
           "source_text": "* The inventor’s original wording.",
@@ -421,8 +466,10 @@
           "locator": "spine[0003]::EPUB/image-page.xhtml::/html[1]/body[1]/figure[1]/img[1]",
           "source": "images/lantern.svg",
           "alt": "The unlit brass lantern.",
+          "passage_locator": "spine[0003]::EPUB/image-page.xhtml::/html[1]/body[1]/figure[1]",
           "source_offset": 0,
-          "offset_unit": "unicode-scalar-value"
+          "offset_unit": "unicode-scalar-value",
+          "semantic_hints": ["passage-root-without-source-text"]
         }
       ]
     },
@@ -435,7 +482,7 @@
       "semantic_hints": ["low-text", "requires-review"],
       "passages": [
         {
-          "id": "9fb7a06c759f28f987a1e4e7cac2a4faef5ba9ec10226882c9e53a924a5d73e1",
+          "id": "abc4b89ec0f9a3b9d8298b863c3f63a7f9e3c1a8e91ae8615713ac87d9c2b3ff",
           "locator": "spine[0004]::EPUB/low-text.xhtml::/html[1]/body[1]/p[1]",
           "element": "p",
           "source_text": "*",
@@ -462,7 +509,7 @@
       "semantic_hints": ["nonlinear-spine-item", "requires-review"],
       "passages": [
         {
-          "id": "91d8af4ae3065a751ea68d8ff30978c62315d5ec57c5238ed352ebd424fd3f29",
+          "id": "26ceeb70f0c791039dd8842694d5725ee1157a5005fe6e93239d9abaef3d5222",
           "locator": "spine[0005]::EPUB/side-story.xhtml::/html[1]/body[1]/h1[1]",
           "element": "h1",
           "source_text": "After the Bell",
@@ -471,7 +518,7 @@
           "semantic_hints": ["heading"]
         },
         {
-          "id": "e01284037a8bd8e59490337ad4d487a0375a56723a14eb2ecb87a1acb1d868be",
+          "id": "0019eae2b08fbeb7d952a073dc08c99a2bd0acddd9c045baef9ea7fd8e196e68",
           "locator": "spine[0005]::EPUB/side-story.xhtml::/html[1]/body[1]/p[1]",
           "element": "p",
           "source_text": "Noa carried the lantern home.",
@@ -514,7 +561,7 @@
     {
       "kind": "navigation-spine-conflict",
       "locators": [],
-      "detail": "Spine order is authoritative; navigation orders are retained as evidence."
+      "detail": "Spine order is authoritative; conflicting sources: epub3-nav, ncx."
     },
     {
       "kind": "duplicate-heading",
@@ -525,9 +572,14 @@
       "detail": "Heading is retained 2 times: \"The Brass Door\""
     },
     {
+      "kind": "image-outside-passage-root",
+      "locators": ["spine[0001]::EPUB/chapter-2.xhtml::/html[1]/body[1]/img[1]"],
+      "detail": "1 image occurrence(s) require structural review."
+    },
+    {
       "kind": "ambiguous-spine-content",
       "locators": ["spine[0001]::EPUB/chapter-2.xhtml"],
-      "detail": "Retained with hints: ambiguous-content, requires-review"
+      "detail": "Retained with hints: unanchored-image, requires-review, ambiguous-content"
     },
     {
       "kind": "ambiguous-spine-content",
@@ -550,5 +602,5 @@
       "detail": "Retained with hints: nonlinear-spine-item, requires-review"
     }
   ],
-  "extraction_sha256": "f5c273df2e60dcae19052dcfc9ab74f016962a1972cbcece363fc22b548ecde0"
+  "extraction_sha256": "09caf7b8d7c502694ee00da82cc8e70fb76d7677f497bdbfa1216f4cd48a301d"
 }

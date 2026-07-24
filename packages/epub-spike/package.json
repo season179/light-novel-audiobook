@@ -6,6 +6,7 @@
   "scripts": {
     "build:fixtures": "tsx scripts/build-fixtures.ts",
     "compare": "tsx scripts/compare-candidates.ts && biome format --write ../../docs/evidence/epub-parser-comparison.json",
+    "update:goldens": "tsx scripts/update-goldens.ts && biome format --write test/golden",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. packages/epub-spike/test"
   },

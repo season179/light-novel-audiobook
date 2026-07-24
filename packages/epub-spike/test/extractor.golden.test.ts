@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { strToU8, unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
-import { buildFixtureArchive } from '../scripts/build-fixtures.js'
+import { buildFixtureArchive, fixtureNames } from '../scripts/build-fixtures.js'
 import {
   deriveSourcePassageId,
   EXTRACTION_IDENTITY,
@@ -10,30 +11,42 @@ import {
 } from '../src/extractor.js'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const complexFixture = path.join(repositoryRoot, 'tests/fixtures/epub/synthetic-complex.epub')
-const malformedFixture = path.join(repositoryRoot, 'tests/fixtures/epub/synthetic-malformed.epub')
-const goldenPath = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'golden/synthetic-complex.json',
-)
+const fixtureRoot = path.join(repositoryRoot, 'tests/fixtures/epub')
+const goldenRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'golden')
 
-async function extract(pathname: string) {
-  return extractEpubForSpike(new Uint8Array(await readFile(pathname)))
+function fixturePath(name: string): string {
+  return path.join(fixtureRoot, `${name}.epub`)
+}
+
+async function extract(name: string) {
+  return extractEpubForSpike(new Uint8Array(await readFile(fixturePath(name))))
+}
+
+async function readGolden(name: string) {
+  return JSON.parse(await readFile(path.join(goldenRoot, name), 'utf8'))
+}
+
+function thrownMessage(operation: () => unknown): string {
+  try {
+    operation()
+    return '<accepted>'
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
 }
 
 describe('EPUB source-text semantics spike', () => {
-  it('rebuilds byte-identical redistributable fixtures', async () => {
-    expect(await buildFixtureArchive('synthetic-complex')).toEqual(
-      new Uint8Array(await readFile(complexFixture)),
-    )
-    expect(await buildFixtureArchive('synthetic-malformed')).toEqual(
-      new Uint8Array(await readFile(malformedFixture)),
-    )
+  it('rebuilds every redistributable fixture byte-for-byte', async () => {
+    for (const name of fixtureNames) {
+      expect(await buildFixtureArchive(name)).toEqual(
+        new Uint8Array(await readFile(fixturePath(name))),
+      )
+    }
   })
 
   it('matches the complete golden extraction repeatedly and in spine order', async () => {
-    const expected = JSON.parse(await readFile(goldenPath, 'utf8'))
-    const runs = await Promise.all(Array.from({ length: 5 }, () => extract(complexFixture)))
+    const expected = await readGolden('synthetic-complex.json')
+    const runs = await Promise.all(Array.from({ length: 5 }, () => extract('synthetic-complex')))
 
     for (const result of runs) expect(result).toEqual(expected)
     expect(new Set(runs.map((result) => JSON.stringify(result))).size).toBe(1)
@@ -61,7 +74,7 @@ describe('EPUB source-text semantics spike', () => {
   })
 
   it('partitions decoded body text once and preserves source-node order', async () => {
-    const result = await extract(complexFixture)
+    const result = await extract('synthetic-complex')
 
     for (const document of result.documents) {
       const sourceLedger = document.text_ledger
@@ -79,10 +92,63 @@ describe('EPUB source-text semantics spike', () => {
     expect(
       allLedger.filter((entry) => entry.role === 'ruby-annotation').map((entry) => entry.text),
     ).toEqual(['(', 'ほし', ')'])
+    const scriptAndStyleWhitespace = allLedger.filter(
+      (entry) => entry.locator.includes('/script[') || entry.locator.includes('/style['),
+    )
+    expect(scriptAndStyleWhitespace.length).toBe(2)
+    expect(scriptAndStyleWhitespace.every((entry) => entry.role === 'non-story-markup')).toBe(true)
+  })
+
+  it('fails closed before nested passage roots can reorder parent-owned text', async () => {
+    const expected = await readGolden('adversarial-errors.json')
+    const bytes = new Uint8Array(await readFile(fixturePath('synthetic-nested-parent')))
+    expect(thrownMessage(() => extractEpubForSpike(bytes))).toBe(expected.nested_parent_text)
+  })
+
+  it('captures and flags images that have no source passage anchor', async () => {
+    const result = await extract('synthetic-complex')
+    const looseImage = result.documents
+      .flatMap((document) => document.images)
+      .find((image) => image.alt === 'A loose lantern illustration.')
+
+    expect(looseImage).toMatchObject({
+      passage_locator: null,
+      source_offset: null,
+      semantic_hints: ['outside-passage-root', 'requires-review'],
+    })
+    expect(
+      result.findings.find((finding) => finding.kind === 'image-outside-passage-root'),
+    ).toBeDefined()
+  })
+
+  it('distinguishes navigation states and only reports genuine order conflicts', async () => {
+    const cases = Object.fromEntries(
+      await Promise.all(
+        [
+          'synthetic-complex',
+          'synthetic-ncx-only',
+          'synthetic-missing-nav',
+          'synthetic-malformed-nav',
+        ].map(async (name) => {
+          const result = await extract(name)
+          return [
+            name,
+            {
+              navigation: result.navigation,
+              finding_kinds: result.findings.map((finding) => finding.kind),
+              source_text: result.documents.flatMap((document) =>
+                document.passages.map((passage) => passage.source_text),
+              ),
+            },
+          ]
+        }),
+      ),
+    )
+    expect(cases).toEqual(await readGolden('navigation-cases.json'))
   })
 
   it('uses half-open Unicode scalar offsets rather than UTF-16 code units', async () => {
-    const result = await extract(complexFixture)
+    const result = await extract('synthetic-complex')
     const entityPassage = result.documents[0]?.passages.find((passage) =>
       passage.source_text.includes('🙂'),
     )
@@ -100,9 +166,10 @@ describe('EPUB source-text semantics spike', () => {
   })
 
   it('retains and flags content instead of silently dropping it', async () => {
-    const result = await extract(complexFixture)
+    const result = await extract('synthetic-complex')
 
     expect(result.navigation.conflict).toBe(true)
+    expect(result.navigation.conflict_sources).toEqual(['epub3-nav', 'ncx'])
     expect(result.findings.map((finding) => finding.kind)).toContain('duplicate-heading')
     expect(
       result.documents.find((document) => document.path.endsWith('side-story.xhtml')),
@@ -113,7 +180,7 @@ describe('EPUB source-text semantics spike', () => {
     expect(
       result.documents.find((document) => document.path.endsWith('image-page.xhtml')),
     ).toMatchObject({
-      semantic_hints: ['image-only', 'requires-review'],
+      semantic_hints: expect.arrayContaining(['image-only', 'requires-review']),
       images: [{ alt: 'The unlit brass lantern.' }],
     })
     expect(
@@ -124,22 +191,40 @@ describe('EPUB source-text semantics spike', () => {
     })
   })
 
-  it('fails closed on malformed XHTML', async () => {
-    const malformedBytes = new Uint8Array(await readFile(malformedFixture))
-    expect(() => extractEpubForSpike(malformedBytes)).toThrow(/malformed XML/)
+  it('fails closed on malformed story XHTML', async () => {
+    const bytes = new Uint8Array(await readFile(fixturePath('synthetic-malformed')))
+    expect(() => extractEpubForSpike(bytes)).toThrow(/malformed XML/)
   })
 
-  it('makes parser and extraction-rule versions part of passage IDs', async () => {
-    const result = await extract(complexFixture)
+  it('rejects unsafe unreferenced ZIP entry names before EPUB processing', async () => {
+    const expected = await readGolden('adversarial-errors.json')
+    const safeEntries = unzipSync(new Uint8Array(await readFile(fixturePath('synthetic-ncx-only'))))
+    const actual = Object.fromEntries(
+      Object.keys(expected.unsafe_zip_entries).map((entryName) => {
+        const archive = zipSync({ ...safeEntries, [entryName]: strToU8('unreferenced') })
+        return [entryName, thrownMessage(() => extractEpubForSpike(archive))]
+      }),
+    )
+    expect(actual).toEqual(expected.unsafe_zip_entries)
+  })
+
+  it('serializes named parser/rule identity fields independently of insertion order', async () => {
+    const result = await extract('synthetic-complex')
     const passage = result.documents[0]?.passages[0]
     expect(passage).toBeDefined()
     if (!passage) return
 
+    const reorderedIdentity = {
+      extraction_rules: EXTRACTION_IDENTITY.extraction_rules,
+      archive_parser: EXTRACTION_IDENTITY.archive_parser,
+      xml_parser: EXTRACTION_IDENTITY.xml_parser,
+    }
     expect(
       deriveSourcePassageId(
         result.publication_content_sha256,
         passage.locator,
         passage.source_text_sha256,
+        reorderedIdentity,
       ),
     ).toBe(passage.id)
     expect(
@@ -147,7 +232,7 @@ describe('EPUB source-text semantics spike', () => {
         result.publication_content_sha256,
         passage.locator,
         passage.source_text_sha256,
-        { ...EXTRACTION_IDENTITY, extraction_rules: 'epub-source-text@2' },
+        { ...EXTRACTION_IDENTITY, extraction_rules: 'epub-source-text@3' },
       ),
     ).not.toBe(passage.id)
   })

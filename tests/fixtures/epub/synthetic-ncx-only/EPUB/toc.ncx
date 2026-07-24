@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+  <navPoint id="one" playOrder="1"><navLabel><text>One</text></navLabel><content src="one.xhtml"/></navPoint>
+  <navPoint id="two" playOrder="2"><navLabel><text>Two</text></navLabel><content src="two.xhtml"/></navPoint>
+</navMap></ncx>

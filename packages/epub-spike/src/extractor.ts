@@ -6,7 +6,7 @@ import { SaxesParser, type SaxesTagPlain } from 'saxes'
 export const EXTRACTION_IDENTITY = Object.freeze({
   archive_parser: 'fflate@0.8.3',
   xml_parser: 'saxes@6.0.0',
-  extraction_rules: 'epub-source-text@1',
+  extraction_rules: 'epub-source-text@2',
 })
 
 export const OFFSET_UNIT = 'unicode-scalar-value' as const
@@ -23,9 +23,19 @@ export function deriveSourcePassageId(
   sourceTextHash: string,
   identity: ExtractionIdentity = EXTRACTION_IDENTITY,
 ): string {
-  const versionKey = Object.values(identity).join('|')
+  const versionKey = [
+    `archive_parser=${identity.archive_parser}`,
+    `xml_parser=${identity.xml_parser}`,
+    `extraction_rules=${identity.extraction_rules}`,
+  ].join('\0')
   return sha256(
-    `source-passage\0${versionKey}\0${publicationContentHash}\0${locator}\0${sourceTextHash}`,
+    [
+      'source-passage-id@1',
+      versionKey,
+      `publication_content_sha256=${publicationContentHash}`,
+      `locator=${locator}`,
+      `source_text_sha256=${sourceTextHash}`,
+    ].join('\0'),
   )
 }
 
@@ -76,8 +86,10 @@ export interface ImageOccurrence {
   readonly locator: string
   readonly source: string
   readonly alt: string | null
-  readonly source_offset: number
+  readonly passage_locator: string | null
+  readonly source_offset: number | null
   readonly offset_unit: typeof OFFSET_UNIT
+  readonly semantic_hints: readonly string[]
 }
 
 export interface ExtractedSpineDocument {
@@ -92,11 +104,22 @@ export interface ExtractedSpineDocument {
   readonly images: readonly ImageOccurrence[]
 }
 
+export type NavigationSourceStatus = 'valid' | 'missing' | 'malformed' | 'not-applicable'
+
+export interface NavigationSourceEvidence {
+  readonly status: NavigationSourceStatus
+  readonly paths: readonly string[]
+  readonly error?: string
+  readonly error_sha256?: string
+}
+
 export interface NavigationEvidence {
+  readonly package_version: string
   readonly spine_paths: readonly string[]
-  readonly epub3_nav_paths: readonly string[]
-  readonly ncx_paths: readonly string[]
+  readonly epub3_nav: NavigationSourceEvidence
+  readonly ncx: NavigationSourceEvidence
   readonly conflict: boolean
+  readonly conflict_sources: readonly ('epub3-nav' | 'ncx')[]
 }
 
 export interface ExtractionFinding {
@@ -167,6 +190,22 @@ function scalarLength(value: string): number {
   return Array.from(value).length
 }
 
+function validateArchiveEntryNames(entries: Readonly<Record<string, Uint8Array>>): void {
+  for (const entryName of Object.keys(entries)) {
+    const segments = entryName.split('/')
+    if (
+      entryName.length === 0 ||
+      entryName.includes('\\') ||
+      entryName.includes('\0') ||
+      path.posix.isAbsolute(entryName) ||
+      path.win32.isAbsolute(entryName) ||
+      segments.includes('..')
+    ) {
+      throw new Error(`Unsafe ZIP entry name: ${JSON.stringify(entryName)}`)
+    }
+  }
+}
+
 function canonicalArchivePath(baseDirectory: string, href: string): string {
   let decoded: string
   try {
@@ -193,7 +232,7 @@ function decodeXml(bytes: Uint8Array, archivePath: string): string {
   }
   const declaration = decoded.match(/^\s*<\?xml\s+[^>]*encoding=["']([^"']+)["']/i)
   if (declaration && !/^utf-?8$/i.test(declaration[1] ?? '')) {
-    throw new Error(`${archivePath}: only UTF-8 XML is supported by extraction rules v1`)
+    throw new Error(`${archivePath}: only UTF-8 XML is supported by extraction rules v2`)
   }
   return decoded
 }
@@ -324,6 +363,7 @@ function parsePackage(entries: Readonly<Record<string, Uint8Array>>) {
   const packageBytes = entries[packagePath]
   if (!packageBytes) throw new Error(`EPUB rootfile does not exist: ${packagePath}`)
   const packageRoot = parseXml(packageBytes, packagePath)
+  const packageVersion = attribute(packageRoot, 'version') ?? 'unknown'
   const packageDirectory = path.posix.dirname(packagePath)
   const manifestElement = firstDescendant(packageRoot, 'manifest')
   const spineElement = firstDescendant(packageRoot, 'spine')
@@ -362,40 +402,70 @@ function parsePackage(entries: Readonly<Record<string, Uint8Array>>) {
     manifest,
     metadataTitle: metadataTitle ? allText(metadataTitle) : null,
     packageDirectory,
+    packageVersion,
     spine,
     tocId: attribute(spineElement, 'toc'),
   }
+}
+
+function malformedNavigation(error: unknown): NavigationSourceEvidence {
+  const message = error instanceof Error ? error.message : String(error)
+  return { status: 'malformed', paths: [], error: message, error_sha256: sha256(message) }
 }
 
 function navigationPaths(
   entries: Readonly<Record<string, Uint8Array>>,
   manifest: ReadonlyMap<string, ManifestItem>,
   tocId: string | undefined,
-): { epub3: string[]; ncx: string[] } {
-  const epub3: string[] = []
-  const navItem = [...manifest.values()].find((item) => item.properties.includes('nav'))
-  const navBytes = navItem ? entries[navItem.path] : undefined
-  if (navItem && navBytes) {
-    const root = parseXml(navBytes, navItem.path)
-    const nav = descendants(root, 'nav').find((node) => epubType(node).includes('toc'))
-    if (nav) {
+  packageVersion: string,
+): { epub3: NavigationSourceEvidence; ncx: NavigationSourceEvidence } {
+  const navItems = [...manifest.values()].filter((item) => item.properties.includes('nav'))
+  let epub3: NavigationSourceEvidence
+  if (navItems.length === 0) {
+    epub3 = {
+      status: packageVersion.startsWith('3') ? 'missing' : 'not-applicable',
+      paths: [],
+    }
+  } else if (navItems.length > 1) {
+    epub3 = malformedNavigation(new Error('EPUB manifest contains multiple navigation documents'))
+  } else {
+    const navItem = navItems[0]
+    try {
+      if (!navItem) throw new Error('EPUB navigation manifest item is missing')
+      const navBytes = entries[navItem.path]
+      if (!navBytes) throw new Error(`EPUB navigation resource does not exist: ${navItem.path}`)
+      const root = parseXml(navBytes, navItem.path)
+      const nav = descendants(root, 'nav').find((node) => epubType(node).includes('toc'))
+      if (!nav) throw new Error(`${navItem.path}: no nav element with epub:type="toc"`)
       const base = path.posix.dirname(navItem.path)
-      for (const link of descendants(nav, 'a')) {
+      const paths = descendants(nav, 'a').flatMap((link) => {
         const href = attribute(link, 'href')
-        if (href) epub3.push(canonicalArchivePath(base, href))
-      }
+        return href ? [canonicalArchivePath(base, href)] : []
+      })
+      epub3 = { status: 'valid', paths }
+    } catch (error) {
+      epub3 = malformedNavigation(error)
     }
   }
 
-  const ncx: string[] = []
-  const ncxItem = tocId ? manifest.get(tocId) : undefined
-  const ncxBytes = ncxItem ? entries[ncxItem.path] : undefined
-  if (ncxItem && ncxBytes) {
-    const root = parseXml(ncxBytes, ncxItem.path)
-    const base = path.posix.dirname(ncxItem.path)
-    for (const content of descendants(root, 'content')) {
-      const source = attribute(content, 'src')
-      if (source) ncx.push(canonicalArchivePath(base, source))
+  let ncx: NavigationSourceEvidence
+  if (!tocId) {
+    ncx = { status: 'missing', paths: [] }
+  } else {
+    try {
+      const ncxItem = manifest.get(tocId)
+      if (!ncxItem) throw new Error(`NCX manifest item does not exist: ${tocId}`)
+      const ncxBytes = entries[ncxItem.path]
+      if (!ncxBytes) throw new Error(`NCX resource does not exist: ${ncxItem.path}`)
+      const root = parseXml(ncxBytes, ncxItem.path)
+      const base = path.posix.dirname(ncxItem.path)
+      const paths = descendants(root, 'content').flatMap((content) => {
+        const source = attribute(content, 'src')
+        return source ? [canonicalArchivePath(base, source)] : []
+      })
+      ncx = { status: 'valid', paths }
+    } catch (error) {
+      ncx = malformedNavigation(error)
     }
   }
   return { epub3, ncx }
@@ -422,16 +492,57 @@ function extractDocument(
   }
   indexTextNodes(body)
   const images: ImageOccurrence[] = []
+  const capturedImageNodes = new Set<ElementNode>()
   const passages: SourcePassageRecord[] = []
   const visitedBlocks = new Set<ElementNode>()
   const documentPrefix = `spine[${spineIndex.toString().padStart(4, '0')}]::${item.path}::`
+
+  const parentOwnedTextAndNestedRoot = (
+    block: ElementNode,
+  ): { text: string; nestedRoot?: ElementNode } => {
+    let text = ''
+    let nestedRoot: ElementNode | undefined
+    const collect = (node: ElementNode) => {
+      for (const child of node.children) {
+        if (child.type === 'text') {
+          text += child.text
+        } else {
+          const isNonSource =
+            child.name === 'script' ||
+            child.name === 'style' ||
+            child.name === 'rt' ||
+            child.name === 'rp'
+          if (isNonSource) continue
+          if (isPassageElement(child)) nestedRoot ??= child
+          else collect(child)
+        }
+      }
+    }
+    collect(block)
+    return nestedRoot ? { text, nestedRoot } : { text }
+  }
+
+  const validateNestedPassageOrder = (node: ElementNode, ancestors: ElementNode[]) => {
+    for (const child of elementChildren(node)) {
+      const childAncestors = [...ancestors, child]
+      if (isPassageElement(child)) {
+        const ownership = parentOwnedTextAndNestedRoot(child)
+        if (ownership.nestedRoot && !/^\s*$/u.test(ownership.text)) {
+          throw new Error(
+            `${item.path}: nested passage root would reorder parent-owned text at ${documentPrefix}${elementPath(childAncestors)}`,
+          )
+        }
+      }
+      validateNestedPassageOrder(child, childAncestors)
+    }
+  }
 
   const recordUnclaimed = (node: ElementNode, ancestors: ElementNode[]) => {
     for (const child of node.children) {
       if (child.type === 'text') {
         ledger.push({
           locator: documentPrefix + textPath(ancestors, child),
-          role: /^\s*$/u.test(child.text) ? 'layout-whitespace' : 'non-story-markup',
+          role: 'non-story-markup',
           text: child.text,
           node: child,
         })
@@ -444,6 +555,7 @@ function extractDocument(
   const extractBlock = (block: ElementNode, ancestors: ElementNode[]) => {
     if (visitedBlocks.has(block)) return
     visitedBlocks.add(block)
+    const locator = documentPrefix + elementPath(ancestors)
     let sourceText = ''
     const annotations: MutableAnnotation[] = []
     const sourceNodes: Array<{ node: TextNode; locator: string }> = []
@@ -468,12 +580,15 @@ function extractDocument(
 
         const start = scalarLength(sourceText)
         if (child.name === 'img' || child.name === 'image') {
+          capturedImageNodes.add(child)
           blockImages.push({
             locator: documentPrefix + elementPath([...nodeAncestors, child]),
             source: attribute(child, 'src') ?? attribute(child, 'href') ?? '',
             alt: attribute(child, 'alt') ?? null,
+            passage_locator: locator,
             source_offset: start,
             offset_unit: OFFSET_UNIT,
+            semantic_hints: [],
           })
         }
         if (child.name === 'br') {
@@ -546,13 +661,19 @@ function extractDocument(
     }
 
     walk(block, ancestors)
-    images.push(...blockImages)
     if (/^\s*$/u.test(sourceText)) {
+      images.push(
+        ...blockImages.map((image) => ({
+          ...image,
+          semantic_hints: ['passage-root-without-source-text'],
+        })),
+      )
       for (const sourceNode of sourceNodes) {
         ledger.push({ ...sourceNode, role: 'layout-whitespace', text: sourceNode.node.text })
       }
       return
     }
+    images.push(...blockImages)
     for (const sourceNode of sourceNodes) {
       ledger.push({ ...sourceNode, role: 'source', text: sourceNode.node.text })
     }
@@ -586,7 +707,6 @@ function extractDocument(
       semanticHints.push('low-text')
     }
 
-    const locator = documentPrefix + elementPath(ancestors)
     const sourceTextHash = sha256(sourceText)
     passages.push({
       id: deriveSourcePassageId(publicationContentHash, locator, sourceTextHash),
@@ -619,7 +739,38 @@ function extractDocument(
     }
     return findPath(root, rootPath) ?? [root, body]
   })()
+  validateNestedPassageOrder(body, bodyAncestors)
   visit(body, bodyAncestors)
+
+  const imageOrder = new Map<string, number>()
+  const captureImages = (node: ElementNode, ancestors: ElementNode[]) => {
+    for (const child of elementChildren(node)) {
+      const childAncestors = [...ancestors, child]
+      if (child.name === 'img' || child.name === 'image') {
+        const locator = documentPrefix + elementPath(childAncestors)
+        imageOrder.set(locator, imageOrder.size)
+        if (!capturedImageNodes.has(child)) {
+          capturedImageNodes.add(child)
+          images.push({
+            locator,
+            source: attribute(child, 'src') ?? attribute(child, 'href') ?? '',
+            alt: attribute(child, 'alt') ?? null,
+            passage_locator: null,
+            source_offset: null,
+            offset_unit: OFFSET_UNIT,
+            semantic_hints: ['outside-passage-root', 'requires-review'],
+          })
+        }
+      }
+      captureImages(child, childAncestors)
+    }
+  }
+  captureImages(body, bodyAncestors)
+  images.sort(
+    (left, right) =>
+      (imageOrder.get(left.locator) ?? Number.MAX_SAFE_INTEGER) -
+      (imageOrder.get(right.locator) ?? Number.MAX_SAFE_INTEGER),
+  )
 
   const seenLedgerNodes = new Set(ledger.map((entry) => entry.node))
   const captureSpecial = (node: ElementNode, ancestors: ElementNode[]) => {
@@ -658,6 +809,9 @@ function extractDocument(
     documentHints.push('navigation-document', 'requires-review')
   }
   if (!linear) documentHints.push('nonlinear-spine-item', 'requires-review')
+  if (images.some((image) => image.semantic_hints.includes('outside-passage-root'))) {
+    documentHints.push('unanchored-image', 'requires-review')
+  }
   if (images.length > 0 && passages.every((passage) => /^\s*$/u.test(passage.source_text))) {
     documentHints.push('image-only', 'requires-review')
   }
@@ -691,32 +845,69 @@ function deepFreeze<T>(value: T): T {
 
 export function extractEpubForSpike(archive: Uint8Array): EpubSpikeExtraction {
   const entries = unzipSync(archive)
+  validateArchiveEntryNames(entries)
   const mime = entries.mimetype
   if (!mime || utf8Decoder.decode(mime) !== 'application/epub+zip') {
     throw new Error('EPUB mimetype must be exactly application/epub+zip')
   }
   const contentHash = publicationHash(entries)
   const parsedPackage = parsePackage(entries)
-  const nav = navigationPaths(entries, parsedPackage.manifest, parsedPackage.tocId)
+  const nav = navigationPaths(
+    entries,
+    parsedPackage.manifest,
+    parsedPackage.tocId,
+    parsedPackage.packageVersion,
+  )
   const documents = parsedPackage.spine.map(({ item, linear, spineIndex }) => {
     const bytes = entries[item.path]
     if (!bytes) throw new Error(`Spine resource does not exist: ${item.path}`)
     return extractDocument(parseXml(bytes, item.path), item, spineIndex, linear, contentHash)
   })
   const spinePaths = documents.map((document) => document.path)
-  const overlapOrder = (paths: readonly string[]) =>
-    paths.filter((value) => spinePaths.includes(value))
-  const navigationConflict =
-    JSON.stringify(overlapOrder(nav.epub3)) !== JSON.stringify(overlapOrder(spinePaths)) ||
-    JSON.stringify(overlapOrder(nav.ncx)) !==
-      JSON.stringify(overlapOrder(spinePaths).filter((value) => nav.ncx.includes(value)))
+  const sourceConflictsWithSpine = (source: NavigationSourceEvidence): boolean => {
+    if (source.status !== 'valid') return false
+    const referenced = source.paths.filter((value) => spinePaths.includes(value))
+    const expected = spinePaths.filter((value) => referenced.includes(value))
+    return JSON.stringify(referenced) !== JSON.stringify(expected)
+  }
+  const conflictSources: Array<'epub3-nav' | 'ncx'> = []
+  if (sourceConflictsWithSpine(nav.epub3)) conflictSources.push('epub3-nav')
+  if (sourceConflictsWithSpine(nav.ncx)) conflictSources.push('ncx')
+  const navigationConflict = conflictSources.length > 0
 
   const findings: ExtractionFinding[] = []
+  if (nav.epub3.status === 'missing') {
+    findings.push({
+      kind: 'missing-epub3-navigation',
+      locators: [],
+      detail: 'EPUB 3 package has no manifest item with the nav property.',
+    })
+  } else if (nav.epub3.status === 'malformed') {
+    findings.push({
+      kind: 'malformed-epub3-navigation',
+      locators: [],
+      detail: nav.epub3.error ?? 'EPUB 3 navigation is malformed.',
+    })
+  }
+  if (nav.ncx.status === 'malformed') {
+    findings.push({
+      kind: 'malformed-ncx-navigation',
+      locators: [],
+      detail: nav.ncx.error ?? 'NCX navigation is malformed.',
+    })
+  }
+  if (nav.epub3.status === 'not-applicable' && nav.ncx.status === 'missing') {
+    findings.push({
+      kind: 'missing-navigation',
+      locators: [],
+      detail: 'Publication has neither applicable EPUB 3 navigation nor an NCX.',
+    })
+  }
   if (navigationConflict) {
     findings.push({
       kind: 'navigation-spine-conflict',
       locators: [],
-      detail: 'Spine order is authoritative; navigation orders are retained as evidence.',
+      detail: `Spine order is authoritative; conflicting sources: ${conflictSources.join(', ')}.`,
     })
   }
   const headings = new Map<string, string[]>()
@@ -736,6 +927,18 @@ export function extractEpubForSpike(archive: Uint8Array): EpubSpikeExtraction {
       })
     }
   }
+  for (const document of documents) {
+    const unanchoredImages = document.images.filter((image) =>
+      image.semantic_hints.includes('outside-passage-root'),
+    )
+    if (unanchoredImages.length > 0) {
+      findings.push({
+        kind: 'image-outside-passage-root',
+        locators: unanchoredImages.map((image) => image.locator),
+        detail: `${unanchoredImages.length} image occurrence(s) require structural review.`,
+      })
+    }
+  }
   for (const document of documents.filter((value) =>
     value.semantic_hints.includes('requires-review'),
   )) {
@@ -752,10 +955,12 @@ export function extractEpubForSpike(archive: Uint8Array): EpubSpikeExtraction {
     publication_content_sha256: contentHash,
     metadata_title: parsedPackage.metadataTitle,
     navigation: {
+      package_version: parsedPackage.packageVersion,
       spine_paths: spinePaths,
-      epub3_nav_paths: nav.epub3,
-      ncx_paths: nav.ncx,
+      epub3_nav: nav.epub3,
+      ncx: nav.ncx,
       conflict: navigationConflict,
+      conflict_sources: conflictSources,
     },
     documents,
     findings,
