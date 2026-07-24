@@ -5,19 +5,25 @@
   "type": "module",
   "packageManager": "pnpm@11.17.0",
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "pnpm": "11.17.0"
   },
   "scripts": {
+    "preinstall": "node scripts/preflight-toolchain.mjs",
+    "postinstall": "node scripts/preflight-toolchain.mjs --dependencies",
+    "preflight": "node scripts/preflight-toolchain.mjs --dependencies",
+    "verify:toolchain": "node scripts/verify-toolchain-config.mjs",
     "dev": "pnpm dev:direct",
     "dev:direct": "pnpm --parallel --filter @light-novel-audiobook/web --filter @light-novel-audiobook/worker dev",
     "build": "pnpm --recursive --if-present build",
-    "typecheck": "pnpm --recursive --if-present typecheck",
-    "test": "vitest run",
+    "typecheck": "pnpm verify:toolchain && pnpm --recursive --if-present typecheck",
+    "test": "pnpm test:toolchain && vitest run",
+    "test:toolchain": "node --test scripts/test/*.test.mjs",
     "test:watch": "vitest",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "check": "biome check . && pnpm typecheck && vitest run"
+    "check": "pnpm preflight && biome check . && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",
