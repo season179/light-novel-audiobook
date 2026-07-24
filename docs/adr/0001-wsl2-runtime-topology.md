@@ -1,47 +1,60 @@
-# ADR 0001: WSL2 runtime, storage, SQLite, and Portless topology
+# ADR 0001: WSL2 runtime, storage, SQLite, and direct-loopback topology
 
-- Status: **Blocked pending exact HTTPS/Windows-browser acceptance**
+- Status: **Accepted**
 - Date: 2026-07-24
+- Revised: 2026-07-24 after the direct-port milestone decision
 - Issue: [#2](https://github.com/season179/light-novel-audiobook/issues/2)
 - Evidence: [`../evidence/issue-2-topology-wsl2.json`](../evidence/issue-2-topology-wsl2.json)
 
 ## Context
 
-The application needs one local launcher, concurrent web and worker access to SQLite, two isolated model servers, stable browser names, large Windows-visible workspaces, and safe recovery after interruption. The supported execution environment is WSL2. SQLite behavior over WSL ext4 and the `/mnt/c` 9p/DrvFS mount had to be measured rather than assumed.
+The application needs one local launcher, concurrent web and worker access to SQLite, two isolated model servers, safe restart behavior, and Windows-browser access to a WSL-hosted review app. The current milestone favors the smallest unprivileged topology: direct HTTP listeners on stable loopback ports, with no routing proxy, TLS, certificate authority, or elevation.
 
-The committed probe uses the issue #1 native Linux Node.js toolchain and temporary synthetic data only. It does not download books, voices, models, or inference engines.
+The committed probe uses the issue #1 native Linux Node.js toolchain and temporary synthetic data only. It downloads no books, voices, models, or inference engines.
 
 ## Decision
 
-### Process ownership
+### Fixed direct endpoints
 
-All application and inference processes run inside the same Ubuntu WSL2 distribution. Windows runs only the browser.
+The current defaults are:
 
-| Component | Environment and OS owner | Lifecycle owner | State owner |
-| --- | --- | --- | --- |
-| Launcher | WSL2, normal Linux user | User invokes one launcher command | Runtime manifest and lock |
-| Portless proxy | WSL2; root only when required to bind HTTPS port 443 | Launcher invokes `portless proxy start/stop` | Dedicated Portless state directory on ext4 |
-| Web app | WSL2, normal Linux user, separate Node process | Launcher | SQLite plus workspace files |
-| Worker | WSL2, normal Linux user, separate Node process | Launcher | SQLite leases/heartbeats plus workspace files |
-| SQLite | In-process library, not a server process | Web/worker connections under application transaction rules | One ext4 database |
-| Brain router | WSL2, normal Linux user, separate standard `llama.cpp` process and install directory | Launcher | Runtime manifest; model files on ext4 |
-| TTS server | WSL2, normal Linux user, separate `llama.cpp-omni` process and install directory | Launcher | Runtime manifest; model files on ext4 |
-| Browser | Windows host | User | No authoritative state |
+| Service | WSL listen/base endpoint | User-facing endpoint |
+| --- | --- | --- |
+| Review app | `http://127.0.0.1:3000` | `http://localhost:3000` |
+| Brain router | `http://127.0.0.1:8080/v1` | same |
+| TTS server | `http://127.0.0.1:8081` | same |
 
-The launcher must hold an exclusive `flock` for its instance. It starts each child directly, so Portless does not own application or model-server children. Portless aliases route to already-started children. This avoids Portless's worktree hostname prefix and preserves the required exact route names.
+Ports are configurable, but startup never silently substitutes another port. The launcher binds each configured endpoint directly and fails closed on `EADDRINUSE`. All listeners are unprivileged plain HTTP and bind only to `127.0.0.1`, never `0.0.0.0` or a LAN address.
 
-Each process record is atomically written and contains at least:
+The review app displays `http://localhost:3000` because Windows-to-WSL localhost forwarding makes that the convenient browser form. Service-to-service configuration uses explicit `127.0.0.1` URLs.
 
-- launcher instance/owner token;
-- service name and lifecycle state;
-- PID and Linux `/proc/<pid>/stat` start-time ticks;
-- canonical `/proc/<pid>/exe` path, executable device/inode, and command-line hash;
-- executable/config identity;
-- loopback address and dynamically allocated port;
-- direct URL and Portless route;
-- start time and last health observation.
+Portless, previously considered as a named local routing proxy, is deferred. It may be reconsidered after the launcher and core runtime work reliably, but it is not a dependency, script, process, or acceptance requirement for this milestone.
 
-A PID alone is never proof of ownership. Stop or cleanup may signal a process only when PID, start-time ticks, executable path/device/inode, and command-line hash still match the launch record. The launcher supplies a random owner token to each child; the child must echo it over startup IPC and a loopback health-response header before registration. Tokens are runtime secrets and are never committed. Any identity mismatch is stale state and must not be killed. Graceful stop sends `SIGTERM`, waits a bounded time for checkpoint/exit, and only then sends `SIGKILL` to a still-matching owned process. Restart replaces stale records and Portless aliases atomically.
+### Process ownership and runtime manifest
+
+All application and inference processes run inside the same Ubuntu WSL2 distribution as the normal Linux user. Windows runs only the browser.
+
+| Component | Environment | Lifecycle owner |
+| --- | --- | --- |
+| Launcher | WSL2 normal user | User invokes one launcher command |
+| Web app | Separate WSL2 Node process | Launcher |
+| Worker | Separate WSL2 Node process | Launcher |
+| SQLite | In-process library | Web/worker transaction policy |
+| Brain router | Separate standard `llama.cpp` WSL2 process/install | Launcher |
+| TTS server | Separate `llama.cpp-omni` WSL2 process/install | Launcher |
+| Browser | Windows host | User |
+
+The launcher holds an exclusive `flock`. Every process record contains:
+
+- launcher owner token and service name;
+- PID and `/proc/<pid>/stat` start-time ticks;
+- canonical executable path, device/inode, and command-line hash;
+- configured host/port and effective endpoint;
+- lifecycle state and health observation.
+
+A child must echo its owner token over startup IPC and a loopback health-response header before it is accepted. Stop or cleanup may signal a process only when all recorded process identity fields still match. A mismatch is stale state and must not be killed. Graceful stop sends `SIGTERM`, waits a bounded time, and uses `SIGKILL` only for the same still-owned process.
+
+After startup and every restart, the launcher atomically writes one runtime manifest using write, fsync, rename, and parent-directory fsync. It records the configured/effective endpoints and full runtime process identities. The probe reads the completed manifest back, verifies generation advancement after restart, and proves the review service reclaims the same configured port.
 
 ### Filesystem placement
 
@@ -54,15 +67,15 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/light-novel-audiobook/
 ${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}}/light-novel-audiobook/run/
 ```
 
-Portless receives an explicit state directory below the application state directory. Brain and TTS source trees, binaries, and weights also remain on ext4 and stay isolated from one another.
+Brain and TTS source trees, binaries, and weights also remain on ext4 and stay isolated from one another. Large per-book assets may live under a user-selected `/mnt/<drive>/...` workspace.
 
-Large per-book assets may live under a user-selected `/mnt/<drive>/...` workspace. This includes source EPUBs, extracted assets, reference voices, clips, chapter masters, and exports. Temporary high-I/O render products should prefer ext4 when space allows, then be durably copied into the workspace. Git continues to exclude databases, workspaces, models, books, and audio.
+Before filesystem experiments, `findmnt` must prove that the ext4 candidate is actually ext4 and that the mounted-Windows candidate is an explicit `/mnt/<drive>` DrvFS/9p path. Canonicalizing a symlink into ext4 or defaulting an ext4 checkout to the mounted candidate is rejected.
 
-Both candidate filesystems passed the synthetic SQLite safety probe. Before either run, `findmnt` must prove that the ext4 candidate is actually ext4 and that the mounted-Windows candidate is an explicit `/mnt/<drive>` DrvFS/9p path. Canonicalizing a symlink into ext4 or defaulting an ext4 checkout to the mounted candidate is rejected. Ext4 is nevertheless selected for the database because it provides native Linux locking and rename semantics and avoids a 9p/DrvFS boundary. Passing one mounted-volume probe is not a guarantee across Windows, WSL, antivirus, or mount-option updates. Keeping only large assets on `/mnt/c` gives Windows visibility without putting the source-of-truth database there.
+Both candidates passed the synthetic SQLite probe. Ext4 remains selected for the source-of-truth database because it supplies native Linux locking and rename semantics and avoids the 9p/DrvFS boundary. Large assets can remain Windows-visible without placing SQLite there.
 
 ### SQLite policy
 
-The persistence adapter must apply and verify the following on every connection:
+Every persistence connection must apply and verify:
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -71,97 +84,72 @@ PRAGMA synchronous = FULL;
 PRAGMA busy_timeout = 5000;
 ```
 
-Transactions must be short. A worker claim uses a brief write transaction and performs no model inference or filesystem rendering while holding the write lock. Busy responses beyond the bounded timeout are reported/retried; they are not treated as successful work.
+Transactions stay short; inference and rendering never occur while a write transaction is held. Use SQLite's online backup API before every migration, then open the completed backup and require `PRAGMA integrity_check` to return `ok` before proceeding.
 
-Use SQLite's online backup API before each migration. Open the completed backup and run `PRAGMA integrity_check` before migration proceeds. Normal updates use SQLite transactions. Never replace an open database file and never rename a database independently of live `-wal` or `-shm` files. The tested durable rename procedure—fsync the completed replacement, rename, then fsync the parent directory—is allowed only for a validated, closed database with all handles closed and sidecars absent, such as an offline restore.
+Never replace an open database or rename it independently of live `-wal`/`-shm` files. Durable replacement is allowed only for a validated closed database with all handles closed and sidecars absent.
 
-The probe demonstrated:
+The committed ext4 and mounted-Windows probes demonstrate:
 
-- one writer excludes a second writer;
-- a zero busy timeout fails while a 2-second timeout waits for a 300 ms lock and succeeds;
-- WAL and rollback journal selection;
-- consistent online backup and integrity validation;
+- writer locking and bounded busy waiting;
+- WAL and rollback journal behavior;
+- online backup plus full `integrity_check`;
 - durable closed-database replacement;
-- rollback of an uncommitted transaction after `SIGKILL` in DELETE journal mode;
-- recovery of a committed transaction after `SIGKILL` in WAL mode;
-- successful integrity checks after both crash cases.
-
-These are integration tests, not a claim that a synthetic kill reproduces power loss through every storage cache. Backups remain required.
+- rollback of uncommitted DELETE-journal work after `SIGKILL`;
+- recovery of committed WAL work after `SIGKILL`;
+- post-crash integrity checks.
 
 ### Canonical paths
 
-Configuration uses absolute Linux POSIX paths as seen inside WSL2. Do not store `C:\...` syntax and do not silently translate paths. An example workspace is `/mnt/c/Users/<windows-user>/Audiobooks`.
+Configuration uses absolute Linux POSIX paths as seen inside WSL2, never `C:\...` syntax. SQLite stores normalized workspace-relative POSIX paths such as `books/<book-id>/source/book.epub` and rejects absolute paths, backslashes, NUL, and `..` traversal.
 
-SQLite asset records use normalized workspace-relative POSIX paths such as `books/<book-id>/source/book.epub`. They must reject absolute paths, backslashes, NUL, and `..` traversal. Resolve the configured workspace root once to its canonical absolute path. Resolve every existing target—or the nearest existing ancestor for a future target—before checking containment, so a symlink cannot escape the root. This keeps a workspace movable without rewriting every database row.
+Resolve the configured workspace root once. For each existing target—or the nearest existing ancestor of a future target—resolve symlinks before containment checks. This prevents a path that looks lexically internal from escaping through a symlink.
 
-Runtime directories, database locations, inference installs, and model paths are absolute canonical WSL paths. Dynamic direct URLs and PID-file paths belong only in the runtime manifest, not in durable domain records.
+Runtime directories, database locations, inference installs, and model paths are absolute canonical WSL paths. Runtime endpoints and process records belong in the runtime manifest, not durable domain records.
 
-### Ports, Portless, and binding
+## Evidence and acceptance
 
-Every web/model control endpoint binds explicitly to `127.0.0.1`, never `0.0.0.0`. Portless normal mode binds its proxy only to `127.0.0.1` and `::1`; LAN, Tailscale, Funnel, ngrok, wildcard, and mDNS/LAN modes are disabled.
+The repeatable direct-network probe:
 
-The launcher requests an ephemeral loopback port from the Linux kernel, starts the child on it, confirms the listener and health identity, and records the actual port. If a server cannot inherit a reserved socket, startup retries a bind race rather than falling back to a hardcoded port. The launcher then installs these exact aliases:
+1. binds the configured fixed ports and verifies owner-token health responses;
+2. attempts a second bind and requires fail-closed `EADDRINUSE` behavior;
+3. atomically records and reads back the effective endpoints;
+4. gracefully stops and restarts the review process on the same port;
+5. reruns `ss` checks against the final processes and proves every listener is `127.0.0.1` only;
+6. attempts every final port through the WSL LAN address and requires all attempts to fail;
+7. invokes Windows Chrome directly, without PowerShell, CMD, or another shell wrapper, and verifies `http://localhost:3000` renders the expected service response.
 
-- `audiobook` -> `audiobook.localhost`;
-- `brain.audiobook` -> `brain.audiobook.localhost`;
-- `tts.audiobook` -> `tts.audiobook.localhost`.
+Committed evidence is redacted: no user paths, IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
 
-Application configuration uses the named routes. The runtime manifest and `portless list` expose direct ports for troubleshooting. Portless `run` remains convenient for ad hoc development, but the future launcher must use explicit aliases because `run` deliberately prefixes linked-worktree branch names.
-
-The repeatable synthetic harness assigns distinct dynamic backend ports, verifies owner-token routed and direct responses, restarts and re-aliases the web process, and only then reruns Linux `ss` listener checks and LAN-address connection failures against the final ports. It uses isolated HTTP Portless state on an unprivileged high proxy port and never invokes Windows Chrome. This proves dynamic routing, restart, and isolation mechanics, but it is not the configured HTTPS acceptance check.
-
-Acceptance additionally requires the exact URLs `https://audiobook.localhost`, `https://brain.audiobook.localhost`, and `https://tts.audiobook.localhost` on loopback port 443. Linux `curl` must pass without `--insecure`, and Windows Chrome must render service-specific screenshots without a certificate interstitial or TLS bypass. The committed evidence reports this acceptance as blocked because no Portless proxy is listening on 443 and non-interactive sudo is unavailable. The earlier high-port HTTP browser run is explicitly not accepted as proof of HTTPS, trust, or port-443 behavior.
-
-### Effective machine constraints
-
-The evidence captured these effective WSL values:
-
-- Ubuntu on WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`;
-- 57,587,864 kB (about 54.9 GiB) visible RAM;
-- 16 GiB swap;
-- 16 visible CPUs;
-- NVIDIA GeForce RTX 5070 Ti with 16,303 MiB reported VRAM, driver 610.74, `/dev/dxg` visible;
-- ext4: about 941 GiB free at capture time;
-- `/mnt/c`: about 1.6 TiB free at capture time;
-- `.wslconfig`: `memory=56GB`, `swap=16GB`.
-
-No `.wslconfig` change is required for this topology spike. Runtime preflight and later model benchmarks must use the effective 54.9 GiB value, not assume all 64 GB of host RAM is available. Keep the existing Windows reserve. Consider `memory=60GB` only if representative model benchmarks prove 56 GB insufficient and the user accepts less Windows headroom; such a change requires a Windows-side WSL shutdown/restart and is not made here.
-
-## Repeatable verification
-
-Run the committed integration tests with the issue #1 toolchain:
+Run the integration tests and host probe with the issue #1 toolchain:
 
 ```sh
 export PATH="$HOME/.local/share/light-novel-audiobook/toolchain/current/bin:$PATH"
 pnpm test:topology
-```
 
-Capture a redacted host report and explicitly request the exact HTTPS acceptance:
-
-```sh
 TOPOLOGY_WINDOWS_BROWSER='/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
-  pnpm probe:topology --https-acceptance \
-  --output docs/evidence/issue-2-topology-wsl2.json
+  pnpm probe:topology --output docs/evidence/issue-2-topology-wsl2.json
 ```
 
-The probe invokes Windows Chrome only after it confirms a loopback-only listener on port 443 and successfully reaches all exact HTTPS routes through Linux without disabling certificate verification. Otherwise it records a blocker and does not invoke the browser. Temporary databases, Portless state, processes, aliases, profiles, and screenshots are cleaned up. The normal test suite covers verified ext4 and mounted-Windows SQLite behavior, full backup `integrity_check`, canonical-root/symlink containment, atomic state writes, owner-token and executable process identity, dynamic ports, route replacement, graceful stop, and post-restart loopback/LAN isolation. Committed evidence redacts user paths, IP addresses, PIDs, owner tokens, temporary paths, and full `.wslconfig` content while retaining probe/source versions, generating commit, browser version, and reproduction commands.
+The host probe fails rather than changing ports when 3000, 8080, or 8081 is occupied.
 
-## Consequences and tradeoffs
+## Effective machine constraints
 
-- The database is not automatically portable with a Windows workspace. Export/import and tested backups provide portability instead.
-- Ext4 state depends on the WSL distribution/VHD being backed up appropriately.
-- Multiple application processes can share SQLite safely, but there remains one writer at a time.
-- Exact stable names are independent of backend ports and Git worktree names.
-- The launcher must manage Portless aliases and process identity instead of delegating child ownership to `portless run`.
-- Root elevation may be needed for the normal HTTPS proxy on port 443, while application/model children remain unprivileged.
-- Windows does not own or directly manipulate Linux PIDs, SQLite, model files, or runtime manifests.
+The evidence records effective WSL RAM, swap, CPUs, ext4 and mounted-volume capacity, and GPU visibility. On the measured host, WSL sees about 54.9 GiB RAM, 16 GiB swap, 16 CPUs, and an RTX 5070 Ti with about 16 GiB VRAM. `.wslconfig` contributes `memory=56GB` and `swap=16GB`; the committed evidence records only those relevant parsed settings, not the full file or its path.
 
-## Integration blocker and unresolved environmental checks
+No `.wslconfig` change is required for this topology. Later representative model benchmarks must use effective WSL limits rather than assuming all host RAM is available.
 
-The ADR is not accepted for integration until item 1 passes and fresh redacted evidence reports `acceptanceStatus: "pass"`.
+## Consequences
 
-1. Start the normal Portless HTTPS proxy interactively on port 443, run `portless trust`, restart Windows Chrome if needed, and rerun the exact HTTPS acceptance command. This worker had no non-interactive sudo credential, did not modify host trust stores, and therefore did not invoke Windows Chrome for the blocked run.
-2. Repeat the probe after changes to WSL networking mode, Portless version, Windows browser, antivirus policy, or `/mnt/c` mount behavior.
-3. Validate the eventual real `llama.cpp` and `llama.cpp-omni` binaries accept the assigned loopback addresses/ports and stop within the launcher grace period. No models or inference engines were downloaded in this spike.
-4. Measure model RAM, swap, VRAM, and throughput under representative load. GPU visibility is proven; inference capacity is not.
-5. Define and test the user's ext4/VHD backup policy before irreplaceable production review state is created.
+- The current runtime has visible stable port numbers and no friendly named routes.
+- Port conflicts produce an actionable startup error instead of hidden reassignment.
+- There is no local TLS or CA lifecycle to install, trust, elevate, or debug.
+- The database is not automatically portable with a Windows workspace; tested backups and exports provide portability.
+- SQLite still has one writer at a time.
+- Windows does not own or manipulate Linux PIDs, SQLite, model files, or runtime manifests.
+
+## Remaining non-blocking environmental work
+
+- Validate the eventual real `llama.cpp` and `llama.cpp-omni` binaries bind the configured addresses, report health, and stop within the launcher grace period.
+- Measure representative model RAM, swap, VRAM, and throughput.
+- Define and test the user's ext4/VHD backup policy before irreplaceable review state is created.
+- Reconsider named local routing only after core launcher behavior is stable and only through a separate decision.

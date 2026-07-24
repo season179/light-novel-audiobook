@@ -4,4 +4,6 @@ Development, model benchmarking, and operational helper scripts belong here. Pro
 
 ## Topology probe
 
-`pnpm test:topology` runs the synthetic SQLite, canonical-root/symlink, process-identity, dynamic-port, Portless, and post-restart loopback-isolation integration tests. `pnpm probe:topology` records redacted host evidence and repeats SQLite checks only after verifying WSL ext4 and an explicit mounted-Windows DrvFS/9p root. To attempt the configured port-443 and trust check, pass `--https-acceptance` and set `TOPOLOGY_WINDOWS_BROWSER` to mounted Windows Chrome. Chrome is never invoked by the synthetic harness or before HTTPS preconditions pass. See [`docs/adr/0001-wsl2-runtime-topology.md`](../docs/adr/0001-wsl2-runtime-topology.md).
+`pnpm test:topology` runs the synthetic SQLite, canonical-root/symlink, process-identity, fixed-port collision/restart, atomic-manifest, and loopback/LAN-isolation integration tests. `pnpm probe:topology` records redacted host evidence and repeats SQLite checks only after verifying WSL ext4 and an explicit mounted-Windows DrvFS/9p root.
+
+The configured host probe binds the review, brain, and TTS fixtures to `127.0.0.1` ports 3000, 8080, and 8081. Set `TOPOLOGY_WINDOWS_BROWSER` to mounted Windows Chrome to test `http://localhost:3000` directly without a shell wrapper. See [`docs/adr/0001-wsl2-runtime-topology.md`](../docs/adr/0001-wsl2-runtime-topology.md).

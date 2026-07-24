@@ -16,7 +16,7 @@ Architecture foundation and model evaluation. See [`docs/PLAN.md`](docs/PLAN.md)
 - TanStack Start review app
 - TanStack AI director integration
 - Vitest, Zod, and Biome
-- Portless local development URLs
+- Direct loopback-only local runtime endpoints
 
 ## Development
 
@@ -31,10 +31,10 @@ pnpm build
 pnpm dev
 ```
 
-The review app is available at `https://audiobook.localhost`. The current worker is only a
-scaffold; model-server lifecycle management will be added with the processing pipeline. See the
-[WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the verified storage/process
-boundaries and the remaining exact-HTTPS integration blocker.
+The review app listens at `http://127.0.0.1:3000`; open `http://localhost:3000` in the browser.
+The current worker is only a scaffold; model-server lifecycle management will be added with the
+processing pipeline. See the [WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the
+storage, process, and direct-loopback boundaries.
 
 ## Repository boundaries
 

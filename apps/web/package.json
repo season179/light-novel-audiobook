@@ -4,11 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "portless run vite dev",
+    "dev": "vite dev --host 127.0.0.1 --port 3000 --strictPort",
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "portless": "audiobook",
   "dependencies": {
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-router": "1.170.18",

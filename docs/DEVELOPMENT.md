@@ -66,9 +66,15 @@ pnpm check
 pnpm build
 ```
 
+`pnpm dev` binds the review app directly to `127.0.0.1:3000`; open
+`http://localhost:3000` in the Windows browser. Startup fails if port 3000 is occupied rather
+than selecting another port. The planned brain and TTS defaults are `127.0.0.1:8080` and
+`127.0.0.1:8081`.
+
 The WSL2 topology integration checks can also be run directly with `pnpm test:topology`.
-`pnpm probe:topology` captures repeatable filesystem, SQLite, networking, process, and resource
-evidence; see [`docs/adr/0001-wsl2-runtime-topology.md`](adr/0001-wsl2-runtime-topology.md).
+`pnpm probe:topology` captures repeatable filesystem, SQLite, fixed-port networking, process,
+and resource evidence; see
+[`docs/adr/0001-wsl2-runtime-topology.md`](adr/0001-wsl2-runtime-topology.md).
 
 `pnpm check` runs the environment preflight, Biome formatting/lint/import checks, verifies that
 the normal `tsc` command is TypeScript 7, checks the strict compiler options, typechecks every

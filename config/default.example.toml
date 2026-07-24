@@ -5,14 +5,18 @@ root = "/mnt/c/Users/WINDOWS 11/Audiobooks"
 # Private source, gold labels, model runs, and reports use <workspace.root>/evaluation/.
 # They must remain outside this repository.
 
+[review]
+listen_url = "http://127.0.0.1:3000"
+browser_url = "http://localhost:3000"
+
 [brain]
-base_url = "https://brain.audiobook.localhost/v1"
+base_url = "http://127.0.0.1:8080/v1"
 model = ""
 context_size = 32768
 temperature = 0.0
 
 [tts]
-base_url = "https://tts.audiobook.localhost"
+base_url = "http://127.0.0.1:8081"
 model = "voxcpm"
 seed = 42
 cfg_value = 2.0

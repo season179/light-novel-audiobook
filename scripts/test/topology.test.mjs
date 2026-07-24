@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { probeExactHttpsAcceptance, probePortless, runTopologyProbe } from '../probe-topology.mjs'
+import {
+  configuredEndpointCheck,
+  endpointSet,
+  probeDirectEndpoints,
+  runTopologyProbe,
+} from '../probe-topology.mjs'
 import {
   assertMountedWindowsRoot,
   atomicWriteJson,
@@ -15,6 +21,25 @@ import {
   resolveWorkspaceAsset,
 } from '../topology/core.mjs'
 import { probeSqliteLocation } from '../topology/sqlite-probe.mjs'
+
+async function availablePort() {
+  const server = createServer()
+  await new Promise((resolvePromise, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolvePromise)
+  })
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  await new Promise((resolvePromise) => server.close(resolvePromise))
+  return address.port
+}
+
+async function testEndpoints() {
+  const ports = new Set()
+  while (ports.size < 3) ports.add(await availablePort())
+  const [reviewPort, brainPort, ttsPort] = ports
+  return endpointSet({ reviewPort, brainPort, ttsPort })
+}
 
 test('canonical paths reject traversal and symlink escapes', async () => {
   assert.equal(
@@ -83,29 +108,36 @@ test('SQLite safety behavior passes only after mounted-Windows filesystem verifi
   assert.ok(Object.values(result.checks).every((status) => status === 'pass'))
 })
 
-test('Portless checks final restarted routes and owner-token process identity', async () => {
-  const result = await probePortless()
-  assert.equal(result.dynamicPortsDistinct, true)
-  assert.equal(result.loopbackOnlyAfterRestart, 'pass')
-  assert.ok(result.finalLan.attempts > 0)
-  assert.equal(result.processOwnership.ownerTokenSignaledByIpcAndHttp, true)
-  assert.equal(result.processOwnership.restartAndRouteReplacement, 'pass')
+test('configured defaults are direct, fixed, loopback-only, and strict-port', () => {
+  const result = configuredEndpointCheck()
+  assert.equal(result.status, 'pass')
+  assert.equal(result.reviewBrowserUrl, 'http://localhost:3000')
+  assert.equal(result.brainBaseUrl, 'http://127.0.0.1:8080/v1')
+  assert.equal(result.ttsBaseUrl, 'http://127.0.0.1:8081')
+  assert.equal(result.occupiedPortPolicy, 'fail-closed')
 })
 
-test('exact HTTPS acceptance remains blocked unless explicitly requested and proven', async () => {
-  const result = await probeExactHttpsAcceptance({ requested: false })
-  assert.equal(result.status, 'blocked')
-  assert.equal(result.browserInvoked, false)
-  assert.ok(result.blockers.includes('exact HTTPS acceptance was not explicitly requested'))
+test('direct fixed endpoints fail on collision and survive restart on the same port', async () => {
+  const result = await probeDirectEndpoints({ endpoints: await testEndpoints() })
+  assert.equal(result.status, 'pass')
+  assert.equal(result.fixedPorts, true)
+  assert.equal(result.collisionFailedClosed, true)
+  assert.equal(result.restartReusedConfiguredReviewPort, true)
+  assert.equal(result.runtimeManifest.atomicReadBack, 'pass')
+  assert.equal(result.runtimeManifest.effectiveEndpointsRecorded, true)
+  assert.equal(result.processOwnership.ownerTokenSignaledByIpcAndHttp, true)
+  assert.ok(result.finalListeners.every(({ loopbackOnly }) => loopbackOnly))
+  assert.equal(result.finalLan.allUnavailable, true)
+  assert.equal(result.browser.status, 'not-run')
 })
 
 test('committed evidence shape redacts host-specific paths and process data', async () => {
-  const evidence = await runTopologyProbe({ skipPortless: true })
+  const evidence = await runTopologyProbe({ skipNetwork: true })
   const serialized = JSON.stringify(evidence)
-  assert.equal(evidence.acceptanceStatus, 'blocked')
+  assert.equal(evidence.acceptanceStatus, 'test-only-skip')
   assert.equal(evidence.redaction.userPaths, 'redacted')
   assert.doesNotMatch(serialized, /\/mnt\/[a-z]\/Users\//i)
-  assert.doesNotMatch(serialized, /"(?:pid|ownerToken|stateDirectory|executablePath)"/)
+  assert.doesNotMatch(serialized, /"(?:pid|ownerToken|runtimeDirectory|executablePath)"/)
   assert.doesNotMatch(serialized, /172\.\d+\.\d+\.\d+/)
   assert.doesNotMatch(serialized, /\[wsl2\]/i)
 })

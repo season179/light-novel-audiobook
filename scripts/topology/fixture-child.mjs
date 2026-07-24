@@ -10,8 +10,13 @@ function send(message) {
 }
 
 if (mode === 'server') {
-  const [service = 'unknown', ownerToken = 'missing-owner-token'] = arguments_
-  const colors = { audiobook: '#123456', brain: '#345612', tts: '#561234' }
+  const [
+    service = 'unknown',
+    ownerToken = 'missing-owner-token',
+    host = '127.0.0.1',
+    portValue = '0',
+  ] = arguments_
+  const colors = { review: '#123456', brain: '#345612', tts: '#561234' }
   const server = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8')
     response.setHeader('x-topology-owner-token', ownerToken)
@@ -19,7 +24,16 @@ if (mode === 'server') {
       `<!doctype html><html><body style="margin:0;background:${colors[service] ?? '#111111'};color:white"><h1>topology-service:${service}</h1></body></html>`,
     )
   })
-  server.listen(0, '127.0.0.1', () => {
+  server.once('error', (error) => {
+    send({
+      type: 'bind-error',
+      service,
+      ownerToken,
+      code: 'code' in error ? error.code : 'UNKNOWN',
+    })
+    setImmediate(() => process.exit(1))
+  })
+  server.listen(Number(portValue), host, () => {
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('missing server address')
     send({
