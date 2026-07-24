@@ -1,11 +1,18 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type Zippable, zipSync } from 'fflate'
+import { type ZipAttributes, type Zippable, zipSync } from 'fflate'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const fixtureRoot = path.join(repositoryRoot, 'tests/fixtures/epub')
-const fixedTime = new Date('2000-01-01T00:00:00.000Z')
+// fflate writes DOS local time fields. Construct local components so every timezone writes 00:00.
+const fixedTime = new Date(2000, 0, 1, 0, 0, 0, 0)
+export const CANONICAL_ZIP_OS = 3
+export const CANONICAL_ZIP_FILE_ATTRIBUTES = 0o100644 * 0x10000
+const canonicalZipAttributes = {
+  os: CANONICAL_ZIP_OS,
+  attrs: CANONICAL_ZIP_FILE_ATTRIBUTES,
+} as const satisfies ZipAttributes
 export const fixtureNames = [
   'synthetic-complex',
   'synthetic-malformed',
@@ -40,11 +47,15 @@ export async function buildFixtureArchive(name: string): Promise<Uint8Array> {
     const bytes = new Uint8Array(await readFile(path.join(sourceDirectory, relativePath)))
     entries[relativePath] = [
       bytes,
-      { level: relativePath === 'mimetype' ? 0 : 9, mtime: fixedTime },
+      {
+        ...canonicalZipAttributes,
+        level: relativePath === 'mimetype' ? 0 : 9,
+        mtime: fixedTime,
+      },
     ]
   }
 
-  return zipSync(entries)
+  return zipSync(entries, canonicalZipAttributes)
 }
 
 export async function buildFixture(name: string): Promise<string> {

@@ -3,7 +3,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { strToU8, unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
-import { buildFixtureArchive, fixtureNames } from '../scripts/build-fixtures.js'
+import {
+  buildFixtureArchive,
+  CANONICAL_ZIP_FILE_ATTRIBUTES,
+  CANONICAL_ZIP_OS,
+  fixtureNames,
+} from '../scripts/build-fixtures.js'
 import {
   deriveSourcePassageId,
   EXTRACTION_IDENTITY,
@@ -26,6 +31,49 @@ async function readGolden(name: string) {
   return JSON.parse(await readFile(path.join(goldenRoot, name), 'utf8'))
 }
 
+function centralDirectoryMetadata(archive: Uint8Array) {
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength)
+  let endOffset = -1
+  for (
+    let offset = archive.length - 22;
+    offset >= Math.max(0, archive.length - 65_557);
+    offset -= 1
+  ) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endOffset = offset
+      break
+    }
+  }
+  if (endOffset < 0) throw new Error('fixture ZIP has no end-of-central-directory record')
+
+  const entryCount = view.getUint16(endOffset + 10, true)
+  let offset = view.getUint32(endOffset + 16, true)
+  const decoder = new TextDecoder()
+  return Array.from({ length: entryCount }, () => {
+    if (view.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error(`fixture ZIP has invalid central-directory entry at ${offset}`)
+    }
+    const nameLength = view.getUint16(offset + 28, true)
+    const extraLength = view.getUint16(offset + 30, true)
+    const commentLength = view.getUint16(offset + 32, true)
+    const localOffset = view.getUint32(offset + 42, true)
+    if (view.getUint32(localOffset, true) !== 0x04034b50) {
+      throw new Error(`fixture ZIP has invalid local entry at ${localOffset}`)
+    }
+    const metadata = {
+      name: decoder.decode(archive.subarray(offset + 46, offset + 46 + nameLength)),
+      os: view.getUint16(offset + 4, true) >>> 8,
+      attrs: view.getUint32(offset + 38, true),
+      dos_time: view.getUint16(offset + 12, true),
+      dos_date: view.getUint16(offset + 14, true),
+      local_dos_time: view.getUint16(localOffset + 10, true),
+      local_dos_date: view.getUint16(localOffset + 12, true),
+    }
+    offset += 46 + nameLength + extraLength + commentLength
+    return metadata
+  })
+}
+
 function thrownMessage(operation: () => unknown): string {
   try {
     operation()
@@ -41,6 +89,23 @@ describe('EPUB source-text semantics spike', () => {
       expect(await buildFixtureArchive(name)).toEqual(
         new Uint8Array(await readFile(fixturePath(name))),
       )
+    }
+  })
+
+  it('pins ZIP creator OS, Unix file attributes, and DOS timestamps', async () => {
+    for (const name of fixtureNames) {
+      const metadata = centralDirectoryMetadata(await buildFixtureArchive(name))
+      expect(metadata.length).toBeGreaterThan(0)
+      for (const entry of metadata) {
+        expect(entry).toMatchObject({
+          os: CANONICAL_ZIP_OS,
+          attrs: CANONICAL_ZIP_FILE_ATTRIBUTES,
+          dos_time: 0,
+          dos_date: 0x2821,
+          local_dos_time: 0,
+          local_dos_date: 0x2821,
+        })
+      }
     }
   })
 

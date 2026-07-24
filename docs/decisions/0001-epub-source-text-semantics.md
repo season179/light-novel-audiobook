@@ -175,7 +175,12 @@ both hashes, not just an opaque ID.
 
 The fixtures are original synthetic text dedicated to this repository; no book text is used.
 Their readable source trees and deterministic `.epub` archives are under
-`tests/fixtures/epub/`.
+`tests/fixtures/epub/`. The canonical builder writes every ZIP member with creator OS `3` (Unix),
+regular-file mode `0100644` in the external attributes, and DOS local timestamp 2000-01-01
+00:00:00. The date is constructed from local calendar components because fflate serializes local
+getters; using a UTC instant would vary the ZIP bytes by runner timezone. Tests parse both local
+headers and the central directory to assert these fields, in addition to retaining byte-identical
+archive assertions.
 
 `synthetic-complex.epub` covers:
 

@@ -13,4 +13,7 @@ XML, missing navigation, valid NCX-only EPUB 2, and adversarial nested passage o
 pnpm --filter @light-novel-audiobook/epub-spike build:fixtures
 ```
 
-The fixture story, names, metadata, SVG, and UUID are fictional and are not excerpts from a book.
+The builder pins ZIP creator OS to Unix, regular-file attributes to mode `0100644`, and DOS local
+calendar time to 2000-01-01 00:00:00 so archives are byte-identical across filesystems, operating
+systems, and runner timezones. The fixture story, names, metadata, SVG, and UUID are fictional and
+are not excerpts from a book.
