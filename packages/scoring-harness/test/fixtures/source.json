@@ -1,0 +1,375 @@
+{
+  "schema_version": "evaluation-source@1",
+  "source_version": "synthetic-representative-source@1",
+  "source_id": "issue-4-synthetic-analogue",
+  "provenance": {
+    "origin": "project_synthetic",
+    "redistribution": "committed_allowed",
+    "license": "CC0-1.0",
+    "contains_personal_data": false
+  },
+  "extraction_identity": {
+    "archive_parser": "synthetic-fixture-builder@1",
+    "xml_parser": "synthetic-fixture-builder@1",
+    "extraction_rules": "epub-source-text@2",
+    "publication_content_sha256": "64cdeb42f3469dbc5885fa208da113bfbbc1b1e0d66b81e0d566c8965eded87b",
+    "extraction_sha256": "e6756ef5e2619e769f7033b961addaa79f5974283b21fac02e5e9832df8a13ec",
+    "offset_unit": "unicode-scalar-value"
+  },
+  "passages": [
+    {
+      "source_ref": "source-ref-001",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[1]",
+      "source_text": "The brass bell rang.The brass bell rang.",
+      "source_text_sha256": "8f50bb80b126fb16c009c7109f04605ab766995d4745eae4edac2e938b1ee513"
+    },
+    {
+      "source_ref": "source-ref-002",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[2]",
+      "source_text": "The lantern blinked twice.",
+      "source_text_sha256": "d908a137bc0bf42171c7bd92c57d8f26643db18a1c9161200138853484f56f9b"
+    },
+    {
+      "source_ref": "source-ref-003",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[3]",
+      "source_text": "The lantern blinked twice.",
+      "source_text_sha256": "d908a137bc0bf42171c7bd92c57d8f26643db18a1c9161200138853484f56f9b"
+    },
+    {
+      "source_ref": "source-ref-004",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[4]",
+      "source_text": "Original synthetic benchmark line 005.",
+      "source_text_sha256": "e770ba690f726b6bfc76942d4e294c23cc996e1d31867a5fefc38204d8abae54"
+    },
+    {
+      "source_ref": "source-ref-005",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[5]",
+      "source_text": "Original synthetic benchmark line 006.",
+      "source_text_sha256": "5fb728f0b7f8ab7bc33fbd9d60fb8b4b3cd09c956da48c81de6fcd37d1055719"
+    },
+    {
+      "source_ref": "source-ref-006",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[6]",
+      "source_text": "Original synthetic benchmark line 007.",
+      "source_text_sha256": "9172813d36369e8591edec05d5fa55a9f059b95237f453b77f24fd03090da83e"
+    },
+    {
+      "source_ref": "source-ref-007",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[7]",
+      "source_text": "Original synthetic benchmark line 008.",
+      "source_text_sha256": "93d4681cb0f10a9d5f5cd398fe80feb609f046a2ec6d4473f76fa649fd1b1743"
+    },
+    {
+      "source_ref": "source-ref-008",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[8]",
+      "source_text": "Original synthetic benchmark line 009.",
+      "source_text_sha256": "ad27564d79d0efd6ed2b0ac3a6447110ab7a4337e3ef7a9956fa440f1e590145"
+    },
+    {
+      "source_ref": "source-ref-009",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[9]",
+      "source_text": "Original synthetic benchmark line 010.",
+      "source_text_sha256": "4fcb9331df45a31d33ddb5fc9f2182c2511ddae9d98b9b1c53af65707ae1aa28"
+    },
+    {
+      "source_ref": "source-ref-010",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[10]",
+      "source_text": "Original synthetic benchmark line 011.",
+      "source_text_sha256": "3a3a6c2555e32b6dd8e51e7b8ff5dcadb0d4423769171a1820129cb34ea2d712"
+    },
+    {
+      "source_ref": "source-ref-011",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[11]",
+      "source_text": "Original synthetic benchmark line 012.",
+      "source_text_sha256": "673d2e82e5b2f10748121679eae86995db35cb9b2bcee476773ba136a8c2dca1"
+    },
+    {
+      "source_ref": "source-ref-012",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[12]",
+      "source_text": "Original synthetic benchmark line 013.",
+      "source_text_sha256": "b6d6357fd7a0e8b3bfcd05d6af5515bb396821684e91164500529edbdd931266"
+    },
+    {
+      "source_ref": "source-ref-013",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[13]",
+      "source_text": "Original synthetic benchmark line 014.",
+      "source_text_sha256": "6a924d4130e0b4c91f2c8b50b6da00070bd19593b48c9eaaa27473244295bcba"
+    },
+    {
+      "source_ref": "source-ref-014",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[14]",
+      "source_text": "Original synthetic benchmark line 015.",
+      "source_text_sha256": "8344366874f895fa6db8596b1796ca7bebcf3f0559d7ee89cb194a5c5ece314b"
+    },
+    {
+      "source_ref": "source-ref-015",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[15]",
+      "source_text": "Original synthetic benchmark line 016.",
+      "source_text_sha256": "38887c01edc7d1fc9a120ac7f3d73c76d78daaa1693e16d7fff92ec77e9f7454"
+    },
+    {
+      "source_ref": "source-ref-016",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[16]",
+      "source_text": "Original synthetic benchmark line 017.",
+      "source_text_sha256": "5be1d77e45a3ee0665dafeb378aac6c76f9078e00891bfd03970fda62b0e6787"
+    },
+    {
+      "source_ref": "source-ref-017",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[17]",
+      "source_text": "Original synthetic benchmark line 018.",
+      "source_text_sha256": "750eb02e5aa467e93007d1e7e36a0e50295b665ca7297e50495df9927348eea3"
+    },
+    {
+      "source_ref": "source-ref-018",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[18]",
+      "source_text": "Original synthetic benchmark line 019.",
+      "source_text_sha256": "a713b4cc42f4011bf4cc74bee28f1b9c16e2db9c65c4667f627aebcd715f7c38"
+    },
+    {
+      "source_ref": "source-ref-019",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[19]",
+      "source_text": "Original synthetic benchmark line 020.",
+      "source_text_sha256": "588707e9d9b375bbc88b0c552616ff736b8042ea851b89f88cfb77856b38442d"
+    },
+    {
+      "source_ref": "source-ref-020",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[20]",
+      "source_text": "Original synthetic benchmark line 021.",
+      "source_text_sha256": "599f3691ecf503f0639fe2827d0dc620c6082c4a40a13d5d64634e84876d4566"
+    },
+    {
+      "source_ref": "source-ref-021",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[21]",
+      "source_text": "Original synthetic benchmark line 022.",
+      "source_text_sha256": "debad448d86829c8ba8eddf42dd1af140c272c88e9c0745432fcb859aeb6f128"
+    },
+    {
+      "source_ref": "source-ref-022",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[22]",
+      "source_text": "Original synthetic benchmark line 023.",
+      "source_text_sha256": "83588c8c7a91d6ac67d5814940afb8996d6088a52dd46e602c6da0c2ed772bea"
+    },
+    {
+      "source_ref": "source-ref-023",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[23]",
+      "source_text": "Original synthetic benchmark line 024.",
+      "source_text_sha256": "e274ab7f4e7c87c78c83948c68d5d0c5c0699d16136681130d107ec7a71d4031"
+    },
+    {
+      "source_ref": "source-ref-024",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[24]",
+      "source_text": "Original synthetic benchmark line 025.",
+      "source_text_sha256": "8f5c7269c16e19b9fab25a11ab3b76d299b9528328581ce531883a627054d051"
+    },
+    {
+      "source_ref": "source-ref-025",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[25]",
+      "source_text": "Original synthetic benchmark line 026.",
+      "source_text_sha256": "8885cdee820a161d00df346223321929dc2395fd486567dd98c1155558616183"
+    },
+    {
+      "source_ref": "source-ref-026",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[26]",
+      "source_text": "Original synthetic benchmark line 027.",
+      "source_text_sha256": "2add57733bd1d0370924f0eb217ae7d6aeed9d38efaf876dae97a1961f1165e8"
+    },
+    {
+      "source_ref": "source-ref-027",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[27]",
+      "source_text": "Original synthetic benchmark line 028.",
+      "source_text_sha256": "3e7ceacfe82f66db36e6aa6f46e9922d727c7eaa32d8d1d66807209b178356bc"
+    },
+    {
+      "source_ref": "source-ref-028",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[28]",
+      "source_text": "Original synthetic benchmark line 029.",
+      "source_text_sha256": "3d23114253192030535e255060122a1ab70f9f7c2e3b1887acd9f826e8df4b96"
+    },
+    {
+      "source_ref": "source-ref-029",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[29]",
+      "source_text": "Original synthetic benchmark line 030.",
+      "source_text_sha256": "8e14c65a853ba916b08a0e9b19686e46b764f2bd34d923dc628d083b68505573"
+    },
+    {
+      "source_ref": "source-ref-030",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[30]",
+      "source_text": "Original synthetic benchmark line 031.",
+      "source_text_sha256": "f55c7724df65b276026b80d74d94ce5d6b473144b7106d4bcef7058eab8a2c48"
+    },
+    {
+      "source_ref": "source-ref-031",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[31]",
+      "source_text": "Original synthetic benchmark line 032.",
+      "source_text_sha256": "ce7d2d892fd42b7c28102374408b98cb4e75e232b3abb840f6d5adf8e2dacf12"
+    },
+    {
+      "source_ref": "source-ref-032",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[32]",
+      "source_text": "Original synthetic benchmark line 033.",
+      "source_text_sha256": "82e214e9d4d54e7411f53bfc9c9acd70895e1e97d7de2807f04d2f84297237a8"
+    },
+    {
+      "source_ref": "source-ref-033",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[33]",
+      "source_text": "Original synthetic benchmark line 034.",
+      "source_text_sha256": "3922b0eef8c2a0a70714e05c004266df0b479526eff6506ec0258712bbe12ad6"
+    },
+    {
+      "source_ref": "source-ref-034",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[34]",
+      "source_text": "Original synthetic benchmark line 035.",
+      "source_text_sha256": "26b237eab4bbcfd2c999ef1bd92aebf4d9c7b5ce7eb9c97fd20631330eff66f8"
+    },
+    {
+      "source_ref": "source-ref-035",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[35]",
+      "source_text": "Original synthetic benchmark line 036.",
+      "source_text_sha256": "73514550f12415eefb1a3f4930f0249c201d682cfa668712a37d4650926a69d6"
+    },
+    {
+      "source_ref": "source-ref-036",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[36]",
+      "source_text": "Original synthetic benchmark line 037.",
+      "source_text_sha256": "a200e8ad89d852dc726cfcaa3583a119ff6dc5eea76f9e4e9fe1a7eadc03ab36"
+    },
+    {
+      "source_ref": "source-ref-037",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[37]",
+      "source_text": "Original synthetic benchmark line 038.",
+      "source_text_sha256": "bc889396b5fd006d19fa54a22894dac9cd14a8aab3658992e4fa026ab9fa6ce2"
+    },
+    {
+      "source_ref": "source-ref-038",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[38]",
+      "source_text": "Original synthetic benchmark line 039.",
+      "source_text_sha256": "0a1efb0fac6cf50c2f7d5768ba1639631f1a77af8cc865cf559ec4c3cf66ef5f"
+    },
+    {
+      "source_ref": "source-ref-039",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[39]",
+      "source_text": "Original synthetic benchmark line 040.",
+      "source_text_sha256": "6724e463a5089e1effc89e1554023e44c4ccb2cc76a6f8715d2e65f88aa4b806"
+    },
+    {
+      "source_ref": "source-ref-040",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[40]",
+      "source_text": "Original synthetic benchmark line 041.",
+      "source_text_sha256": "7d3a154a3b4c036a790a64331c4830598dcce377d2f7cbaac58213745fea3940"
+    },
+    {
+      "source_ref": "source-ref-041",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[41]",
+      "source_text": "Original synthetic benchmark line 042.",
+      "source_text_sha256": "a0add5d747080e85e1dfbbedb7060d69bb11e256b9b74571c0a4466fcfb42d14"
+    },
+    {
+      "source_ref": "source-ref-042",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[42]",
+      "source_text": "Original synthetic benchmark line 043.",
+      "source_text_sha256": "2d950925cb9334092b81f374ff75e20bd416027b0af24eb83e9662c7b3bed64a"
+    },
+    {
+      "source_ref": "source-ref-043",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[43]",
+      "source_text": "Original synthetic benchmark line 044.",
+      "source_text_sha256": "c147eccb1c1a6aa106ffef418032ba02944a4e2a355bac396a6d7c6abc9c0065"
+    },
+    {
+      "source_ref": "source-ref-044",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[44]",
+      "source_text": "Original synthetic benchmark line 045.",
+      "source_text_sha256": "5a2c38ad56716f87afc6194d11052d66dd8a455e71f51fd69d87a86915351614"
+    },
+    {
+      "source_ref": "source-ref-045",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[45]",
+      "source_text": "Original synthetic benchmark line 046.",
+      "source_text_sha256": "3fdaf0a1c6a98540e00bf014d04c44c63f11f4a85c4c8c429f08a732b6480aba"
+    },
+    {
+      "source_ref": "source-ref-046",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[46]",
+      "source_text": "Original synthetic benchmark line 047.",
+      "source_text_sha256": "b1dd6072edace333f378642c4a118372c2298b158256f40a4be339db48dd76b1"
+    },
+    {
+      "source_ref": "source-ref-047",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[47]",
+      "source_text": "Original synthetic benchmark line 048.",
+      "source_text_sha256": "77012481d124e39794c68de62487acc5212a8025753ef902c95c523ceaf50519"
+    },
+    {
+      "source_ref": "source-ref-048",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[48]",
+      "source_text": "Original synthetic benchmark line 049.",
+      "source_text_sha256": "01b900835e66f3a46d867a6d1bf95ebca5c7517fd0ebb4faf27d94da10272d25"
+    },
+    {
+      "source_ref": "source-ref-049",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[49]",
+      "source_text": "Original synthetic benchmark line 050.",
+      "source_text_sha256": "9cbfee7de71b6613023d2d4056bdccbafec07e59d9b9da918574cade568ba582"
+    },
+    {
+      "source_ref": "source-ref-050",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[50]",
+      "source_text": "Original synthetic benchmark line 051.",
+      "source_text_sha256": "409155efd8e6c4a6dab425b49a8ebb82e9587e8983b3284269bc0a947de06b69"
+    },
+    {
+      "source_ref": "source-ref-051",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[51]",
+      "source_text": "Original synthetic benchmark line 052.",
+      "source_text_sha256": "826126686c5b4078cc0b697975bd0bb95b9e54d95bb71957844f94f4fcec3a23"
+    },
+    {
+      "source_ref": "source-ref-052",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[52]",
+      "source_text": "Original synthetic benchmark line 053.",
+      "source_text_sha256": "5dda7080dc15c8e404bb479ab12d15a7730e58c3c7840b8f12afe3cd260aad98"
+    },
+    {
+      "source_ref": "source-ref-053",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[53]",
+      "source_text": "Original synthetic benchmark line 054.",
+      "source_text_sha256": "bc819c40a272e4bdce44283cff81a0084a8cb0021a4c3a995ceca5bcb095b1bd"
+    },
+    {
+      "source_ref": "source-ref-054",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[54]",
+      "source_text": "Original synthetic benchmark line 055.",
+      "source_text_sha256": "df1d54426f07d4305bc00bf870ce35d7b9aba0d4bbdbf2d2a71a3905d1a8fa29"
+    },
+    {
+      "source_ref": "source-ref-055",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[55]",
+      "source_text": "Original synthetic benchmark line 056.",
+      "source_text_sha256": "cb859664c66a20cd5181f1cb42d1f2e442d7fcd1d6594d9e1299f43c0cda8972"
+    },
+    {
+      "source_ref": "source-ref-056",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[56]",
+      "source_text": "Original synthetic benchmark line 057.",
+      "source_text_sha256": "85296da674d4535b0eb5f12529c542a56af588c83dc11a01a3757573032623f6"
+    },
+    {
+      "source_ref": "source-ref-057",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[57]",
+      "source_text": "Original synthetic benchmark line 058.",
+      "source_text_sha256": "65dc2001dbb8632334d0696f5318739a7c768edf4aaad15b47929f539f22e936"
+    },
+    {
+      "source_ref": "source-ref-058",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[58]",
+      "source_text": "Original synthetic benchmark line 059.",
+      "source_text_sha256": "264d71f952dee886bc077ee5d0b95e75ebca3edc97f84005a648c63342470ce9"
+    },
+    {
+      "source_ref": "source-ref-059",
+      "locator": "spine[0000]::EPUB/synthetic.xhtml::/html[1]/body[1]/p[59]",
+      "source_text": "Original synthetic benchmark line 060.",
+      "source_text_sha256": "0d6e3b034a65fd545881ef361a5dbdf7d574db9e86578b7c7471da68d88d0fe7"
+    }
+  ]
+}

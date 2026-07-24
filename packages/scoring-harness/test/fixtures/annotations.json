@@ -1,0 +1,549 @@
+{
+  "schema_version": "gold-annotations@1",
+  "annotation_version": "synthetic-gold@1",
+  "annotation_policy_version": "gold-annotation-policy@1",
+  "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
+  "corpus_sha256": "e8af15d4867b8ad450cc253e03ad9c74f5fb2997f6b0964d8740a37aaef938c0",
+  "cases": [
+    {
+      "case_id": "case-001",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-002",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-003",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-004",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-005",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-006",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-007",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-008",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-009",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-010",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-011",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-012",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-013",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-014",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-015",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-016",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-017",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-018",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-019",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-a"],
+        "evidence": "alias"
+      }
+    },
+    {
+      "case_id": "case-020",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "exact",
+        "accepted_character_ids": ["character-b"],
+        "evidence": "coreference"
+      }
+    },
+    {
+      "case_id": "case-021",
+      "kind": "dialogue",
+      "speaker": {
+        "status": "ambiguous",
+        "accepted_character_ids": [],
+        "evidence": "ambiguous"
+      }
+    },
+    {
+      "case_id": "case-022",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-023",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-024",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-025",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-026",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-027",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-028",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-029",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-030",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-031",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-032",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-033",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-034",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-035",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-036",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-037",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-038",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-039",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-040",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-041",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-042",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-043",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-044",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-045",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-046",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-047",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-048",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-049",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-050",
+      "kind": "thought",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-051",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-052",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-053",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-054",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-055",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-056",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-057",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-058",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-059",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    },
+    {
+      "case_id": "case-060",
+      "kind": "narration",
+      "speaker": {
+        "status": "not_applicable",
+        "accepted_character_ids": [],
+        "evidence": "none"
+      }
+    }
+  ]
+}

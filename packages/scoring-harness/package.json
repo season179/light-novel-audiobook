@@ -1,0 +1,20 @@
+{
+  "name": "@light-novel-audiobook/scoring-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "generate:schemas": "tsx scripts/generate-schemas.ts && biome format --write ../../schemas/evaluation",
+    "score": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/scoring-harness/test",
+    "build:fixtures": "tsx scripts/build-synthetic-fixture.ts && biome format --write test/fixtures"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

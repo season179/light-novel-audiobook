@@ -1,0 +1,491 @@
+{
+  "schema_version": "representative-corpus@1",
+  "corpus_version": "synthetic-representative-corpus@1",
+  "corpus_id": "issue-4-synthetic-analogue",
+  "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
+  "storage_class": "committed_synthetic",
+  "selection_policy_version": "representative-selection@1",
+  "selection_rationale": "Synthetic cases cover every required semantic and structural evaluation dimension.",
+  "cases": [
+    {
+      "case_id": "case-001",
+      "source_ref": "source-ref-001",
+      "source_start": 0,
+      "source_end": 20,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias", "source_reference"]
+    },
+    {
+      "case_id": "case-002",
+      "source_ref": "source-ref-001",
+      "source_start": 20,
+      "source_end": 40,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference", "source_reference"]
+    },
+    {
+      "case_id": "case-003",
+      "source_ref": "source-ref-002",
+      "source_start": 0,
+      "source_end": 26,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias", "repeated_text"]
+    },
+    {
+      "case_id": "case-004",
+      "source_ref": "source-ref-003",
+      "source_start": 0,
+      "source_end": 26,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference", "repeated_text"]
+    },
+    {
+      "case_id": "case-005",
+      "source_ref": "source-ref-004",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-006",
+      "source_ref": "source-ref-005",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-007",
+      "source_ref": "source-ref-006",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-008",
+      "source_ref": "source-ref-007",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-009",
+      "source_ref": "source-ref-008",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-010",
+      "source_ref": "source-ref-009",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-011",
+      "source_ref": "source-ref-010",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-012",
+      "source_ref": "source-ref-011",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-013",
+      "source_ref": "source-ref-012",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-014",
+      "source_ref": "source-ref-013",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-015",
+      "source_ref": "source-ref-014",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-016",
+      "source_ref": "source-ref-015",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-017",
+      "source_ref": "source-ref-016",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-018",
+      "source_ref": "source-ref-017",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-019",
+      "source_ref": "source-ref-018",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "alias"]
+    },
+    {
+      "case_id": "case-020",
+      "source_ref": "source-ref-019",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "coreference"]
+    },
+    {
+      "case_id": "case-021",
+      "source_ref": "source-ref-020",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["dialogue", "ambiguous_speaker"]
+    },
+    {
+      "case_id": "case-022",
+      "source_ref": "source-ref-021",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-023",
+      "source_ref": "source-ref-022",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-024",
+      "source_ref": "source-ref-023",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-025",
+      "source_ref": "source-ref-024",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-026",
+      "source_ref": "source-ref-025",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-027",
+      "source_ref": "source-ref-026",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-028",
+      "source_ref": "source-ref-027",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-029",
+      "source_ref": "source-ref-028",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-030",
+      "source_ref": "source-ref-029",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-031",
+      "source_ref": "source-ref-030",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-032",
+      "source_ref": "source-ref-031",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-033",
+      "source_ref": "source-ref-032",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-034",
+      "source_ref": "source-ref-033",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-035",
+      "source_ref": "source-ref-034",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-036",
+      "source_ref": "source-ref-035",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-037",
+      "source_ref": "source-ref-036",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-038",
+      "source_ref": "source-ref-037",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-039",
+      "source_ref": "source-ref-038",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-040",
+      "source_ref": "source-ref-039",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-041",
+      "source_ref": "source-ref-040",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-042",
+      "source_ref": "source-ref-041",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-043",
+      "source_ref": "source-ref-042",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-044",
+      "source_ref": "source-ref-043",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-045",
+      "source_ref": "source-ref-044",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-046",
+      "source_ref": "source-ref-045",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-047",
+      "source_ref": "source-ref-046",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-048",
+      "source_ref": "source-ref-047",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-049",
+      "source_ref": "source-ref-048",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-050",
+      "source_ref": "source-ref-049",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["internal_thought"]
+    },
+    {
+      "case_id": "case-051",
+      "source_ref": "source-ref-050",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration", "structurally_ambiguous"]
+    },
+    {
+      "case_id": "case-052",
+      "source_ref": "source-ref-051",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-053",
+      "source_ref": "source-ref-052",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-054",
+      "source_ref": "source-ref-053",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-055",
+      "source_ref": "source-ref-054",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-056",
+      "source_ref": "source-ref-055",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-057",
+      "source_ref": "source-ref-056",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-058",
+      "source_ref": "source-ref-057",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-059",
+      "source_ref": "source-ref-058",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    },
+    {
+      "case_id": "case-060",
+      "source_ref": "source-ref-059",
+      "source_start": 0,
+      "source_end": 38,
+      "legitimate": true,
+      "criteria": ["narration"]
+    }
+  ]
+}
