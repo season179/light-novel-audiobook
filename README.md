@@ -41,6 +41,6 @@ storage, process, and direct-loopback boundaries.
 - Source code, prompts, schemas, tests, and documentation belong here.
 - SQLite and runtime state belong on WSL ext4 outside Git. Large book workspaces, reference
   voices, and generated audio may use an explicit Linux-mounted path such as
-  `/mnt/c/Users/WINDOWS 11/Audiobooks`.
+  `/mnt/c/Users/<windows-user>/Audiobooks` after replacing the placeholder.
 - Model weights and inference engines belong on WSL ext4 under paths such as
-  `/home/windows_11/models/audiobook` and `/home/windows_11/src`.
+  `/home/<wsl-user>/models/audiobook` and `/home/<wsl-user>/src`, again replacing the placeholder.

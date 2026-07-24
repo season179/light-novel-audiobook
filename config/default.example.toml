@@ -1,6 +1,6 @@
 [workspace]
-# Per-book workspace outside this repository.
-root = "/mnt/c/Users/WINDOWS 11/Audiobooks"
+# Per-book workspace outside this repository. Replace <windows-user> before use.
+root = "/mnt/c/Users/<windows-user>/Audiobooks"
 
 # Private source, gold labels, model runs, and reports use <workspace.root>/evaluation/.
 # They must remain outside this repository.
@@ -8,6 +8,12 @@ root = "/mnt/c/Users/WINDOWS 11/Audiobooks"
 [review]
 listen_url = "http://127.0.0.1:3000"
 browser_url = "http://localhost:3000"
+
+[local_security]
+allowed_review_hosts = ["localhost:3000", "127.0.0.1:3000"]
+allowed_review_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+require_csrf_for_state_changes = true
+allow_browser_origins_on_model_endpoints = false
 
 [brain]
 base_url = "http://127.0.0.1:8080/v1"

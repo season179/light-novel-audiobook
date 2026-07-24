@@ -17,7 +17,44 @@ if (mode === 'server') {
     portValue = '0',
   ] = arguments_
   const colors = { review: '#123456', brain: '#345612', tts: '#561234' }
-  const server = createServer((_request, response) => {
+  const allowedHosts =
+    service === 'review'
+      ? new Set([`${host}:${portValue}`, `localhost:${portValue}`])
+      : new Set([`${host}:${portValue}`])
+  const allowedOrigins = new Set([`http://localhost:${portValue}`, `http://${host}:${portValue}`])
+  const server = createServer((request, response) => {
+    const requestHost = request.headers.host?.toLowerCase() ?? ''
+    const origin = request.headers.origin
+    if (!allowedHosts.has(requestHost)) {
+      response.writeHead(421).end('host rejected')
+      return
+    }
+    if (service !== 'review' && (origin || request.headers['sec-fetch-site'])) {
+      response.writeHead(403).end('browser origin rejected')
+      return
+    }
+    if (service === 'review' && origin && !allowedOrigins.has(origin)) {
+      response.writeHead(403).end('origin rejected')
+      return
+    }
+    if (service === 'review' && origin) {
+      response.setHeader('access-control-allow-origin', origin)
+      response.setHeader('vary', 'Origin')
+    }
+    if (request.method === 'OPTIONS') {
+      response.setHeader('access-control-allow-methods', 'GET, POST')
+      response.setHeader('access-control-allow-headers', 'content-type, x-csrf-token')
+      response.writeHead(204).end()
+      return
+    }
+    if (
+      service === 'review' &&
+      request.method !== 'GET' &&
+      (!origin || request.headers['x-csrf-token'] !== ownerToken)
+    ) {
+      response.writeHead(403).end('csrf rejected')
+      return
+    }
     response.setHeader('content-type', 'text/html; charset=utf-8')
     response.setHeader('x-topology-owner-token', ownerToken)
     response.end(

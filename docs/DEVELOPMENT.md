@@ -69,11 +69,15 @@ pnpm build
 `pnpm dev` binds the review app directly to `127.0.0.1:3000`; open
 `http://localhost:3000` in the Windows browser. Startup fails if port 3000 is occupied rather
 than selecting another port. The planned brain and TTS defaults are `127.0.0.1:8080` and
-`127.0.0.1:8081`.
+`127.0.0.1:8081`. Keep the exact configured Host/Origin allowlists and anti-CSRF protection for
+review state changes; model endpoints must reject browser-origin requests and expose no CORS
+permission.
 
 The WSL2 topology integration checks can also be run directly with `pnpm test:topology`.
 `pnpm probe:topology` captures repeatable filesystem, SQLite, fixed-port networking, process,
-and resource evidence; see
+and resource evidence. A host-acceptance run requires `TOPOLOGY_WINDOWS_BROWSER`; a default run
+without Windows browser/LAN proof exits nonzero. `--skip-network` is CI-only synthetic behavior
+and is not acceptance. See
 [`docs/adr/0001-wsl2-runtime-topology.md`](adr/0001-wsl2-runtime-topology.md).
 
 `pnpm check` runs the environment preflight, Biome formatting/lint/import checks, verifies that

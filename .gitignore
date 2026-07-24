@@ -6,6 +6,8 @@ dist/
 coverage/
 *.tsbuildinfo
 .topology-probe-*/
+.topology-browser-*/
+sqlite-topology-*/
 
 # Tool caches
 .tanstack/

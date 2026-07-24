@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
-import { open, rename } from 'node:fs/promises'
+import { open, rename, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path'
 
 function sha256(value) {
@@ -16,6 +16,7 @@ export function canonicalWorkspacePath(value) {
     value.includes('\\') ||
     value.includes('\0') ||
     isAbsolute(value) ||
+    /^[a-z]:/i.test(value) ||
     value.split('/').includes('..')
   ) {
     throw new Error('workspace asset path must be a relative POSIX path without traversal')
@@ -138,15 +139,20 @@ export async function durableRename(source, destination) {
 }
 
 export async function atomicWriteJson(path, value) {
-  const temporaryPath = `${path}.tmp-${process.pid}`
-  const handle = await open(temporaryPath, 'wx', 0o600)
+  const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`
   try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
+    const handle = await open(temporaryPath, 'wx', 0o600)
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await durableRename(temporaryPath, path)
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+    throw error
   }
-  await durableRename(temporaryPath, path)
 }
 
 export function readProcessIdentity(pid) {

@@ -28,6 +28,8 @@ Ports are configurable, but startup never silently substitutes another port. The
 
 The review app displays `http://localhost:3000` because Windows-to-WSL localhost forwarding makes that the convenient browser form. Service-to-service configuration uses explicit `127.0.0.1` URLs.
 
+The review boundary accepts only the exact configured `Host` and `Origin` values. CORS echoes only an allowed origin, never `*`, does not allow credentials, and exposes only required methods/headers. Every state-changing request requires both an allowed origin and a per-launch anti-CSRF token. Brain and TTS endpoints accept only their exact `127.0.0.1:<port>` Host, reject requests carrying browser `Origin` or fetch-metadata headers, and emit no CORS permission. Loopback binding alone is not treated as browser-request authorization.
+
 Portless, previously considered as a named local routing proxy, is deferred. It may be reconsidered after the launcher and core runtime work reliably, but it is not a dependency, script, process, or acceptance requirement for this milestone.
 
 ### Process ownership and runtime manifest
@@ -54,7 +56,7 @@ The launcher holds an exclusive `flock`. Every process record contains:
 
 A child must echo its owner token over startup IPC and a loopback health-response header before it is accepted. Stop or cleanup may signal a process only when all recorded process identity fields still match. A mismatch is stale state and must not be killed. Graceful stop sends `SIGTERM`, waits a bounded time, and uses `SIGKILL` only for the same still-owned process.
 
-After startup and every restart, the launcher atomically writes one runtime manifest using write, fsync, rename, and parent-directory fsync. It records the configured/effective endpoints and full runtime process identities. The probe reads the completed manifest back, verifies generation advancement after restart, and proves the review service reclaims the same configured port.
+After startup and every restart, the launcher atomically writes one runtime manifest using a randomized same-directory temporary name, write, fsync, rename, and parent-directory fsync. Failed writes remove their temporary file. It records the configured/effective endpoints and full runtime process identities. The probe reads the completed manifest back, verifies generation advancement after restart, and proves the review service reclaims the same configured port.
 
 ### Filesystem placement
 
@@ -112,11 +114,14 @@ The repeatable direct-network probe:
 
 1. binds the configured fixed ports and verifies owner-token health responses;
 2. attempts a second bind and requires fail-closed `EADDRINUSE` behavior;
-3. atomically records and reads back the effective endpoints;
-4. gracefully stops and restarts the review process on the same port;
-5. reruns `ss` checks against the final processes and proves every listener is `127.0.0.1` only;
-6. attempts every final port through the WSL LAN address and requires all attempts to fail;
-7. invokes Windows Chrome directly, without PowerShell, CMD, or another shell wrapper, and verifies `http://localhost:3000` renders the expected service response.
+3. atomically records and reads back the effective endpoints, including adversarial serialization/concurrency cleanup checks;
+4. injects startup and manifest failures and proves all immediately created children are reaped;
+5. gracefully stops and restarts the review process on the same port;
+6. reruns `ss` checks against the final processes and proves every listener is `127.0.0.1` only;
+7. attempts every final port through the WSL LAN address and requires all attempts to fail;
+8. proves exact Host/Origin, restrictive CORS, anti-CSRF, and model-browser isolation behavior;
+9. invokes Windows Chrome directly, without PowerShell, CMD, or another shell wrapper, and verifies `http://localhost:3000` renders the expected service response;
+10. invokes Windows `ipconfig.exe` and `curl.exe` directly, proves Windows `localhost` succeeds, and requires every non-loopback Windows IPv4 address reported by `ipconfig.exe` to fail. Only redacted counts/status are committed.
 
 Committed evidence is redacted: no user paths, host-specific/LAN IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. The configured `127.0.0.1` endpoints are intentionally retained. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
 
@@ -130,7 +135,7 @@ TOPOLOGY_WINDOWS_BROWSER='/mnt/c/Program Files/Google/Chrome/Application/chrome.
   pnpm probe:topology --output docs/evidence/issue-2-topology-wsl2.json
 ```
 
-The host probe fails rather than changing ports when 3000, 8080, or 8081 is occupied.
+The default host probe exits nonzero if Windows browser/LAN proof is unavailable or any acceptance check fails. `--skip-network` exists only for CI synthetic checks, is explicitly labeled non-acceptance, and may exit successfully without changing the committed host evidence. The host probe also fails rather than changing ports when 3000, 8080, or 8081 is occupied.
 
 ## Effective machine constraints
 

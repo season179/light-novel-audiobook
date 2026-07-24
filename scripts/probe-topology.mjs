@@ -2,8 +2,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync, fork, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statfsSync,
+} from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { request } from 'node:http'
 import { homedir, networkInterfaces, totalmem } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +30,8 @@ import {
 } from './topology/core.mjs'
 import { probeSqliteLocation } from './topology/sqlite-probe.mjs'
 
-export const TOPOLOGY_PROBE_VERSION = 3
+export const TOPOLOGY_PROBE_VERSION = 4
+export const TOPOLOGY_EVIDENCE_SCHEMA_VERSION = 4
 export const DEFAULT_ENDPOINTS = Object.freeze({
   review: Object.freeze({
     service: 'review',
@@ -87,7 +97,7 @@ function commandOutput(command, arguments_, options = {}) {
   return execFileSync(command, arguments_, { encoding: 'utf8', ...options }).trim()
 }
 
-function probeSourceHash() {
+export function currentProbeSourceHash() {
   const hash = createHash('sha256')
   for (const relativePath of [...probeSourceFiles].sort()) {
     hash.update(relativePath)
@@ -144,7 +154,7 @@ function waitForExit(child, timeoutMilliseconds = 5_000) {
   })
 }
 
-async function startService(endpoint, ownerToken, runtimeDirectory) {
+export async function startFixtureService(endpoint, ownerToken, runtimeDirectory) {
   const child = fork(
     fixturePath,
     ['server', endpoint.service, ownerToken, endpoint.host, String(endpoint.port)],
@@ -155,32 +165,34 @@ async function startService(endpoint, ownerToken, runtimeDirectory) {
   child.stderr.on('data', (chunk) => {
     standardError += chunk
   })
-  let ready
   try {
-    ready = await waitForStartup(child)
+    const ready = await waitForStartup(child)
+    assert.equal(ready.ownerToken, ownerToken)
+    assert.equal(ready.host, endpoint.host)
+    assert.equal(ready.port, endpoint.port)
+    const identity = readProcessIdentity(ready.pid)
+    assert.ok(identity)
+    const record = {
+      service: endpoint.service,
+      ownerToken,
+      ...identity,
+      host: ready.host,
+      port: ready.port,
+      listenUrl: endpoint.listenUrl,
+      browserUrl: endpoint.browserUrl,
+      baseUrl: endpoint.baseUrl,
+    }
+    await atomicWriteJson(join(runtimeDirectory, `${endpoint.service}.json`), record)
+    assert.equal(processRecordIsOwned(record), true)
+    return { child, endpoint, record }
   } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
     await waitForExit(child).catch(() => child.kill('SIGKILL'))
     if (error.code === 'EADDRINUSE') throw error
-    throw new Error(`${error.message}; stderr=${standardError}`)
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; stderr=${standardError}`,
+    )
   }
-  assert.equal(ready.ownerToken, ownerToken)
-  assert.equal(ready.host, endpoint.host)
-  assert.equal(ready.port, endpoint.port)
-  const identity = readProcessIdentity(ready.pid)
-  assert.ok(identity)
-  const record = {
-    service: endpoint.service,
-    ownerToken,
-    ...identity,
-    host: ready.host,
-    port: ready.port,
-    listenUrl: endpoint.listenUrl,
-    browserUrl: endpoint.browserUrl,
-    baseUrl: endpoint.baseUrl,
-  }
-  await atomicWriteJson(join(runtimeDirectory, `${endpoint.service}.json`), record)
-  assert.equal(processRecordIsOwned(record), true)
-  return { child, endpoint, record }
 }
 
 async function stopService(service) {
@@ -228,6 +240,80 @@ async function assertReachable(service, ownerToken) {
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('x-topology-owner-token'), ownerToken)
   assert.ok((await response.text()).includes(`topology-service:${service.endpoint.service}`))
+}
+
+function requestEndpoint(endpoint, { method = 'GET', host, origin, csrfToken, fetchSite } = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const headers = { host: host ?? `127.0.0.1:${endpoint.port}` }
+    if (origin) headers.origin = origin
+    if (csrfToken) headers['x-csrf-token'] = csrfToken
+    if (fetchSite) headers['sec-fetch-site'] = fetchSite
+    const outgoing = request(
+      {
+        hostname: '127.0.0.1',
+        port: endpoint.port,
+        path: method === 'GET' ? '/' : '/state',
+        method,
+        headers,
+      },
+      (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () => {
+          resolvePromise({
+            status: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
+        })
+      },
+    )
+    outgoing.once('error', reject)
+    outgoing.end()
+  })
+}
+
+async function assertHttpBoundarySecurity(endpoints, ownerToken) {
+  const allowedBrowserOrigin = endpoints.review.browserUrl
+  const badHost = await requestEndpoint(endpoints.review, { host: 'attacker.invalid' })
+  assert.equal(badHost.status, 421)
+  const badOrigin = await requestEndpoint(endpoints.review, {
+    origin: 'http://attacker.invalid',
+  })
+  assert.equal(badOrigin.status, 403)
+  const missingCsrf = await requestEndpoint(endpoints.review, {
+    method: 'POST',
+    origin: allowedBrowserOrigin,
+  })
+  assert.equal(missingCsrf.status, 403)
+  const acceptedStateChange = await requestEndpoint(endpoints.review, {
+    method: 'POST',
+    origin: allowedBrowserOrigin,
+    csrfToken: ownerToken,
+  })
+  assert.equal(acceptedStateChange.status, 200)
+  assert.equal(acceptedStateChange.headers['access-control-allow-origin'], allowedBrowserOrigin)
+  assert.notEqual(acceptedStateChange.headers['access-control-allow-origin'], '*')
+
+  for (const endpoint of [endpoints.brain, endpoints.tts]) {
+    const browserOrigin = await requestEndpoint(endpoint, { origin: allowedBrowserOrigin })
+    assert.equal(browserOrigin.status, 403)
+    assert.equal(browserOrigin.headers['access-control-allow-origin'], undefined)
+    const browserFetchMetadata = await requestEndpoint(endpoint, { fetchSite: 'cross-site' })
+    assert.equal(browserFetchMetadata.status, 403)
+    const modelHostAlias = await requestEndpoint(endpoint, {
+      host: `localhost:${endpoint.port}`,
+    })
+    assert.equal(modelHostAlias.status, 421)
+  }
+  return {
+    exactHostAllowlist: 'pass',
+    exactOriginAllowlist: 'pass',
+    wildcardCorsAbsent: 'pass',
+    csrfRequiredForStateChanges: 'pass',
+    modelBrowserOriginsRejected: 'pass',
+    modelCorsAbsent: 'pass',
+  }
 }
 
 function globalIpv4Addresses() {
@@ -361,6 +447,64 @@ function browserVersionFromInstall(browserPath) {
   return versions.at(-1) ?? 'installed-version-undiscovered'
 }
 
+function probeWindowsHostForwarding(reviewEndpoint, ownerToken) {
+  const ipconfigPath = '/mnt/c/Windows/System32/ipconfig.exe'
+  const curlPath = '/mnt/c/Windows/System32/curl.exe'
+  assert.ok(existsSync(ipconfigPath), 'Windows ipconfig.exe was not found')
+  assert.ok(existsSync(curlPath), 'Windows curl.exe was not found')
+  const ipconfig = spawnSync(ipconfigPath, [], { encoding: 'utf8', timeout: 15_000 })
+  assert.equal(ipconfig.status, 0, ipconfig.error?.message ?? ipconfig.stderr)
+  const addresses = [
+    ...new Set(
+      [...ipconfig.stdout.matchAll(/IPv4 Address[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})/gi)]
+        .map((match) => match[1])
+        .filter((address) => address && !address.startsWith('127.')),
+    ),
+  ]
+  assert.ok(addresses.length > 0, 'ipconfig.exe reported no non-loopback Windows IPv4 addresses')
+
+  const curlArguments = [
+    '--silent',
+    '--show-error',
+    '--noproxy',
+    '*',
+    '--connect-timeout',
+    '1',
+    '--max-time',
+    '3',
+  ]
+  const localhost = spawnSync(curlPath, [...curlArguments, reviewEndpoint.browserUrl], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  })
+  assert.equal(localhost.status, 0, localhost.error?.message ?? localhost.stderr)
+  assert.ok(localhost.stdout.includes('topology-service:review'))
+
+  for (const address of addresses) {
+    const lanAttempt = spawnSync(
+      curlPath,
+      [...curlArguments, `http://${address}:${reviewEndpoint.port}`],
+      { encoding: 'utf8', timeout: 10_000 },
+    )
+    assert.notEqual(
+      lanAttempt.status,
+      0,
+      'review endpoint was reachable through a Windows LAN IPv4',
+    )
+  }
+  const version = spawnSync(curlPath, ['--version'], { encoding: 'utf8', timeout: 10_000 })
+  return {
+    status: 'pass',
+    toolsInvokedDirectlyWithoutShellWrapper: true,
+    localhostSucceeded: true,
+    nonLoopbackAddressCount: addresses.length,
+    failedLanAddressCount: addresses.length,
+    allWindowsLanAddressesUnavailable: true,
+    windowsCurlVersion: version.stdout.split('\n')[0]?.trim() ?? 'unknown',
+    ownerTokenObservedOnlyInRuntime: Boolean(ownerToken),
+  }
+}
+
 function probeWindowsBrowser(browserPath, browserUrl) {
   if (!browserPath) {
     return {
@@ -370,8 +514,10 @@ function probeWindowsBrowser(browserPath, browserUrl) {
     }
   }
   assert.ok(existsSync(browserPath), 'configured Windows browser does not exist')
-  const browserDirectory = join(repositoryRoot, `.topology-browser-${process.pid}`)
-  mkdirSync(browserDirectory, { recursive: true })
+  const windowsTempRoot = process.env.TOPOLOGY_WINDOWS_TEMP_ROOT ?? '/mnt/c/Temp'
+  mkdirSync(windowsTempRoot, { recursive: true })
+  assertMountedWindowsRoot(windowsTempRoot)
+  const browserDirectory = mkdtempSync(join(windowsTempRoot, 'audiobook-topology-browser-'))
   const screenshotPath = join(browserDirectory, 'review.png')
   const profilePath = join(browserDirectory, 'profile')
   try {
@@ -416,10 +562,15 @@ export function configuredEndpointCheck() {
   assert.match(config, /browser_url = "http:\/\/localhost:3000"/)
   assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:8080\/v1"/)
   assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:8081"/)
+  assert.match(config, /require_csrf_for_state_changes = true/)
+  assert.match(config, /allow_browser_origins_on_model_endpoints = false/)
   assert.match(webPackage.scripts.dev, /--host 127\.0\.0\.1 --port 3000 --strictPort/)
   assert.match(viteConfig, /host: '127\.0\.0\.1'/)
   assert.match(viteConfig, /port: 3000/)
   assert.match(viteConfig, /strictPort: true/)
+  assert.match(viteConfig, /allowedHosts: \['localhost', '127\.0\.0\.1'\]/)
+  assert.match(viteConfig, /origin: \['http:\/\/localhost:3000', 'http:\/\/127\.0\.0\.1:3000'\]/)
+  assert.match(viteConfig, /credentials: false/)
   return {
     status: 'pass',
     reviewListenUrl: DEFAULT_ENDPOINTS.review.listenUrl,
@@ -430,7 +581,11 @@ export function configuredEndpointCheck() {
   }
 }
 
-export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, browserPath } = {}) {
+export async function probeDirectEndpoints({
+  endpoints = DEFAULT_ENDPOINTS,
+  browserPath,
+  manifestWriter = writeRuntimeManifest,
+} = {}) {
   const endpointList = Object.values(endpoints)
   assert.equal(new Set(endpointList.map(({ port }) => port)).size, endpointList.length)
   assert.ok(endpointList.every(({ host }) => host === '127.0.0.1'))
@@ -442,15 +597,15 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
 
   try {
     for (const endpoint of endpointList) {
-      const started = await startService(endpoint, ownerToken, runtimeDirectory)
+      const started = await startFixtureService(endpoint, ownerToken, runtimeDirectory)
       services.set(endpoint.service, started)
     }
     for (const service of services.values()) await assertReachable(service, ownerToken)
-    const initialManifest = await writeRuntimeManifest(runtimeDirectory, ownerToken, services, 1)
+    const initialManifest = await manifestWriter(runtimeDirectory, ownerToken, services, 1)
 
     let collisionFailedClosed = false
     try {
-      await startService(endpoints.review, ownerToken, runtimeDirectory)
+      await startFixtureService(endpoints.review, ownerToken, runtimeDirectory)
     } catch (error) {
       assert.equal(error.code, 'EADDRINUSE')
       collisionFailedClosed = true
@@ -462,10 +617,14 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
     assert.equal(processRecordIsOwned({ ...initialReview.record, executableInode: '0' }), false)
     await stopService(initialReview)
     assert.equal(processRecordIsOwned(initialReview.record), false)
-    const restartedReview = await startService(endpoints.review, ownerToken, runtimeDirectory)
+    const restartedReview = await startFixtureService(
+      endpoints.review,
+      ownerToken,
+      runtimeDirectory,
+    )
     services.set('review', restartedReview)
     await assertReachable(restartedReview, ownerToken)
-    const finalManifest = await writeRuntimeManifest(runtimeDirectory, ownerToken, services, 2)
+    const finalManifest = await manifestWriter(runtimeDirectory, ownerToken, services, 2)
 
     const finalListeners = assertFinalLoopbackListeners(endpointList)
     const finalLan = await assertFinalLanIsolation(endpointList)
@@ -473,6 +632,7 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
       assert.equal(processRecordIsOwned(service.record), true)
       await assertReachable(service, ownerToken)
     }
+    const httpBoundarySecurity = await assertHttpBoundarySecurity(endpoints, ownerToken)
 
     const readBack = JSON.parse(await readFile(finalManifest.manifestPath, 'utf8'))
     assert.deepEqual(readBack, finalManifest.manifest)
@@ -487,8 +647,18 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
     assert.notEqual(initialManifest.manifest.endpoints[0]?.pid, readBack.endpoints[0]?.pid)
 
     const browser = probeWindowsBrowser(browserPath, endpoints.review.browserUrl)
+    const windowsHostNetwork = browserPath
+      ? probeWindowsHostForwarding(endpoints.review, ownerToken)
+      : {
+          status: 'not-run',
+          reason: 'Windows host checks run only during the explicit browser host probe.',
+        }
     return {
-      status: browser.status === 'pass' || !browserPath ? 'pass' : 'blocked',
+      status:
+        !browserPath || (browser.status === 'pass' && windowsHostNetwork.status === 'pass')
+          ? 'pass'
+          : 'blocked',
+      mode: browserPath ? 'host-acceptance' : 'synthetic-test',
       configuredEndpoints: endpointList.map(({ service, listenUrl, browserUrl, baseUrl }) => ({
         service,
         listenUrl,
@@ -507,6 +677,7 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
         ownerTokenRecordedAtRuntimeOnly: true,
         processIdentityRecorded: true,
       },
+      httpBoundarySecurity,
       processOwnership: {
         ownerTokenSignaledByIpcAndHttp: true,
         pidStartExecutableAndCommandIdentityRecorded: true,
@@ -515,6 +686,7 @@ export async function probeDirectEndpoints({ endpoints = DEFAULT_ENDPOINTS, brow
         staleRecordRejected: true,
       },
       browser,
+      windowsHostNetwork,
     }
   } finally {
     await stopAllServices(services)
@@ -633,6 +805,10 @@ function parseArguments(arguments_) {
   return options
 }
 
+export function topologyProbeExitCode(evidence, options = {}) {
+  return evidence.acceptanceStatus === 'pass' || options.skipNetwork ? 0 : 1
+}
+
 function publicSqliteEvidence(result, filesystem) {
   return {
     label: result.label,
@@ -657,8 +833,7 @@ export async function runTopologyProbe(options = {}) {
   const ext4Result = await probeSqliteLocation({ label: 'wsl-ext4', root: ext4Root })
 
   const configuredMountedRoot = process.env.TOPOLOGY_MNT_C_ROOT
-  const repositoryIsMounted = /^\/mnt\/[a-z](?:\/|$)/i.test(repositoryRoot)
-  const mountedRoot = configuredMountedRoot ?? (repositoryIsMounted ? repositoryRoot : undefined)
+  const mountedRoot = configuredMountedRoot ?? (existsSync('/mnt/c') ? '/mnt/c/Temp' : undefined)
   let mountedWindows
   if (!mountedRoot) {
     mountedWindows = {
@@ -666,6 +841,7 @@ export async function runTopologyProbe(options = {}) {
       blocker: 'Set TOPOLOGY_MNT_C_ROOT to an explicit existing /mnt/<drive> directory.',
     }
   } else {
+    await mkdir(mountedRoot, { recursive: true })
     const mountedFilesystem = assertMountedWindowsRoot(mountedRoot)
     const mountedResult = await probeSqliteLocation({
       label: 'mounted-windows-volume',
@@ -679,20 +855,26 @@ export async function runTopologyProbe(options = {}) {
 
   const configured = configuredEndpointCheck()
   const network = options.skipNetwork
-    ? { status: 'skipped', browser: { status: 'not-run', browserInvoked: false } }
+    ? {
+        status: 'skipped-non-acceptance',
+        mode: 'ci-synthetic-skip',
+        browser: { status: 'not-run', browserInvoked: false },
+        windowsHostNetwork: { status: 'not-run' },
+      }
     : await probeDirectEndpoints({ browserPath: process.env.TOPOLOGY_WINDOWS_BROWSER })
   const accepted =
     mountedWindows.status === 'pass' &&
     network.status === 'pass' &&
-    (network.browser.status === 'pass' || options.skipNetwork)
+    network.browser.status === 'pass' &&
+    network.windowsHostNetwork.status === 'pass'
 
   return {
-    evidenceSchemaVersion: 3,
+    evidenceSchemaVersion: TOPOLOGY_EVIDENCE_SCHEMA_VERSION,
     probeVersion: TOPOLOGY_PROBE_VERSION,
     capturedAt: new Date().toISOString(),
     provenance: {
       generatedFromCommit: commandOutput('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot }),
-      probeSourceSha256: probeSourceHash(),
+      probeSourceSha256: currentProbeSourceHash(),
       nativeToolchain: {
         node: process.version,
         platform: process.platform,
@@ -704,7 +886,11 @@ export async function runTopologyProbe(options = {}) {
         `TOPOLOGY_WINDOWS_BROWSER='<mounted-windows-chrome.exe>' pnpm probe:topology ` +
         `--output ${evidencePath}`,
     },
-    acceptanceStatus: accepted ? 'pass' : options.skipNetwork ? 'test-only-skip' : 'blocked',
+    acceptanceStatus: accepted
+      ? 'pass'
+      : options.skipNetwork
+        ? 'non-acceptance-ci-synthetic-skip'
+        : 'blocked',
     configuredEndpoints: configured,
     resources: probeResources(),
     canonicalPaths: await canonicalPathChecks(),
@@ -744,4 +930,5 @@ if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
   } else {
     process.stdout.write(serialized)
   }
+  process.exitCode = topologyProbeExitCode(evidence, options)
 }

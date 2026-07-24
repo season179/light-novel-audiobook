@@ -72,7 +72,7 @@ Use the **TanStack ecosystem** at the application boundaries while keeping the c
 - A custom HTTP adapter for VoxCPM2 because its llama.cpp-omni TTS API is separate from the director model API
 - Direct unprivileged HTTP loopback endpoints for the current milestone: review app `127.0.0.1:3000`, brain `127.0.0.1:8080`, and TTS `127.0.0.1:8081`
 
-The launcher binds only to `127.0.0.1`, fails closed if a configured port is occupied, and atomically records the effective endpoints in its runtime manifest. It displays `http://localhost:3000` for the Windows browser while service-to-service configuration uses explicit `127.0.0.1` URLs. Ports remain configurable, but their stable defaults are not silently replaced with dynamic ports. Portless is deferred and may be reconsidered after the core runtime and launcher work reliably; it is not a current dependency or acceptance requirement.
+The launcher binds only to `127.0.0.1`, fails closed if a configured port is occupied, and atomically records the effective endpoints in its runtime manifest. It displays `http://localhost:3000` for the Windows browser while service-to-service configuration uses explicit `127.0.0.1` URLs. Ports remain configurable, but their stable defaults are not silently replaced with dynamic ports. The review server accepts only the exact configured `Host` and `Origin` values, uses restrictive non-wildcard CORS, and requires an anti-CSRF token for every state-changing request. Model endpoints reject browser `Origin`/fetch metadata and emit no browser CORS permission. Portless is deferred and may be reconsidered after the core runtime and launcher work reliably; it is not a current dependency or acceptance requirement.
 
 ### Storage and background jobs
 
@@ -81,7 +81,7 @@ The launcher binds only to `127.0.0.1`, fails closed if a configured port is occ
 - Large files such as EPUBs, reference voices, and audio stay in the workspace; SQLite stores their paths, hashes, and metadata.
 - Use versioned database migrations and create a backup before each migration.
 - The web app and CLI submit jobs to SQLite. A separate Node.js worker claims them using leases and heartbeats, retries safely, and resumes abandoned jobs after a crash.
-- The launcher starts and stops all Windows and WSL2 components together. Graceful stop checkpoints active work so the next start can resume it safely.
+- The launcher starts and stops all WSL2 runtime components together. The Windows browser is an unmanaged client. Graceful stop checkpoints active work so the next start can resume it safely.
 - The worker loads only the model needed for the current stage, unloading the director before bulk TTS to avoid VRAM contention.
 - Jobs and outputs use stable IDs and input hashes. A changed approved script, voice, model, or render setting marks dependent audio as stale instead of silently reusing it.
 
@@ -196,6 +196,7 @@ Example segment:
 - The launcher manages both runtimes, but they remain isolated by directory, process, and port.
 - Run brain preprocessing first, unload it, and then perform TTS rendering. This avoids VRAM contention and makes the workflow reproducible.
 - Bind the web app, worker control endpoints, and model servers to `127.0.0.1` only. Refuse startup rather than selecting another port when a configured port is occupied.
+- Enforce exact Host/Origin allowlists and anti-CSRF checks at the review HTTP boundary. Do not grant model endpoints CORS access; reject requests carrying browser Origin or fetch-metadata headers.
 
 ## Director-brain model decision (locked 2026-07-24)
 
