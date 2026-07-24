@@ -1,0 +1,31 @@
+{
+  "evidence_schema": 1,
+  "observed_on": "2026-07-24",
+  "fixture": "tests/fixtures/epub/synthetic-complex.epub",
+  "candidates": {
+    "@lingo-reader/epub-parser@0.4.6": {
+      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
+      "toc_ids": ["chapter-2", "chapter-1"],
+      "source_access": "transformed-body-only",
+      "body_markup_exact": false,
+      "malformed_xhtml": "accepted",
+      "repeated_summary_identical": true
+    },
+    "epub2@3.0.2": {
+      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
+      "toc_ids": ["chapter-2", "chapter-1"],
+      "source_access": "raw-xhtml",
+      "raw_xhtml_exact": true,
+      "malformed_xhtml": "rejected: File not found \"broken\"",
+      "repeated_summary_identical": true
+    },
+    "fflate@0.8.3+saxes@6.0.0+rules@1": {
+      "spine_ids": ["chapter-1", "chapter-2", "notes", "image-page", "low-text", "side-story"],
+      "toc_paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml", "EPUB/side-story.xhtml"],
+      "source_access": "strict-decoded-text-nodes-with-ledger",
+      "extraction_sha256": "f5c273df2e60dcae19052dcfc9ab74f016962a1972cbcece363fc22b548ecde0",
+      "malformed_xhtml": "rejected: EPUB/broken.xhtml: malformed XML: 2:121: unexpected close tag.",
+      "repeated_summary_identical": true
+    }
+  }
+}
