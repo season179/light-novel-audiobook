@@ -12,6 +12,65 @@ Updated: 2026-07-24
 - Casting target: narrator plus persistent character voices
 - Unknown speakers: use a fallback dialogue voice and flag for review
 - Preserve the source text: the LLM may classify/direct text, but must not rewrite or invent it
+- Implement the application in strict TypeScript with object-oriented programming and pragmatic domain-driven design (DDD)
+- Use the TanStack ecosystem for AI integration and the local review application
+- Use Portless for stable, named local-development URLs
+- Use Biome for TypeScript formatting, linting, and import organization
+- Provide a local-only TanStack Start web app for importing books, reviewing scripts and voices, approving work, and monitoring generation
+- Use SQLite as the source of truth for project state, review decisions, and jobs
+- Require no user-provided voice recordings; create synthetic voice candidates locally
+- Start, stop, and inspect the complete local system through one launcher command
+- Run a preflight estimate before generation and warn about large disk use or insufficient free space
+- Save numbered output versions and never overwrite an existing audiobook automatically
+- Require no login and bind all services to the local machine only
+- Keep the business rules independent from model servers, file formats, databases, and user-interface frameworks
+
+## Software design and framework strategy
+
+The application will be a **modular TypeScript monolith** on Node.js 24 or newer, not a collection of microservices. It will use strict TypeScript, object-oriented domain models, and pragmatic DDD so audiobook rules remain understandable, testable, and independent of infrastructure.
+
+Planned domain areas (bounded contexts):
+
+- **Book ingestion**: EPUB, chapters, source passages, normalization, and provenance
+- **Direction**: scenes, segments, speaker attribution, delivery notes, and uncertainty
+- **Casting**: characters, aliases, voices, pronunciations, and the story bible
+- **Rendering**: render jobs, model parameters, retries, and generated clips
+- **Quality and review**: validation findings, review decisions, and approvals
+- **Assembly**: chapter audio, mastering, metadata, and final audiobook export
+
+Use entities and value objects for concepts such as `Book`, `Chapter`, `SourcePassage`, `Segment`, `Character`, `VoiceProfile`, and `RenderJob`. Domain services will enforce cross-object rules, especially exact source-text coverage, stable character voices, and resumable rendering. Repository interfaces will keep SQLite and filesystem details out of the domain.
+
+Infrastructure will connect through explicit adapters for EPUB parsing, the director LLM, VoxCPM2, the filesystem, and FFmpeg. The domain layer must not import those adapters. Application services will coordinate use cases such as importing a book, directing a chapter, approving a script, rendering pending segments, and assembling an audiobook.
+
+### Framework decision
+
+Use the **TanStack ecosystem** at the application boundaries while keeping the core domain framework-independent:
+
+- **TanStack AI** with its OpenAI-compatible adapter for structured calls to the local llama.cpp director server
+- **TanStack Start** for the local-only browser-based review application
+- **TanStack Query, Form, Table, and Virtual** where useful for review queues, script editing, and large chapter manifests
+- **Zod / JSON Schema** for input, output, and LLM-response validation; domain objects should remain plain TypeScript classes where practical
+- **Vitest** for unit, fidelity, integration, and resume/restart tests
+- **Biome** as the standard formatter, linter, and import organizer, enforced locally and in CI
+- A dedicated CLI/background worker for long-running processing and rendering; these jobs must not depend on a web-request lifetime
+- One launcher CLI with `start`, `stop`, and `status` actions for Portless, the web app, worker, llama.cpp router, and llama.cpp-omni TTS server
+- A custom HTTP adapter for VoxCPM2 because its llama.cpp-omni TTS API is separate from the director model API
+- **Portless** as development tooling so the review app and local services have memorable `.localhost` URLs instead of user-facing port numbers
+
+Portless is for local routing only; the brain and TTS runtimes must remain isolated processes on separate underlying ports. Suggested names are `audiobook.localhost`, `brain.audiobook.localhost`, and `tts.audiobook.localhost`. Direct port URLs must remain available as a fallback for scripts and troubleshooting.
+
+### Storage and background jobs
+
+- SQLite is the source of truth for books, passages, scripts, cast data, reviews, approvals, and job state.
+- JSONL is an export/import and inspection format, not the primary database.
+- Large files such as EPUBs, reference voices, and audio stay in the workspace; SQLite stores their paths, hashes, and metadata.
+- Use versioned database migrations and create a backup before each migration.
+- The web app and CLI submit jobs to SQLite. A separate Node.js worker claims them using leases and heartbeats, retries safely, and resumes abandoned jobs after a crash.
+- The launcher starts and stops all Windows and WSL2 components together. Graceful stop checkpoints active work so the next start can resume it safely.
+- The worker loads only the model needed for the current stage, unloading the director before bulk TTS to avoid VRAM contention.
+- Jobs and outputs use stable IDs and input hashes. A changed approved script, voice, model, or render setting marks dependent audio as stale instead of silently reusing it.
+
+First prove that TanStack AI correctly passes llama.cpp JSON-schema constraints, model IDs, errors, and cancellation through the local router. Do not put business rules inside TanStack AI, TanStack Start, React components, Zod schemas, EPUB adapters, or inference clients. Add a larger orchestration framework only if the manifest-based resumable workflow proves insufficient.
 
 ## System architecture
 
@@ -21,11 +80,17 @@ The book is processed in two separate stages so a mistake does not require regen
 
 1. **Deterministic EPUB extraction**
    - Read spine order, chapters, titles, paragraphs, cover, and metadata.
-   - Remove navigation, duplicated headings, page furniture, formatting debris, and irrelevant footnotes.
+   - Detect unusual structure such as missing or conflicting navigation, repeated chapters, side stories, image-heavy pages, low-text sections, and ambiguous footnotes.
+   - Classify obvious navigation, duplicated headings, page furniture, formatting debris, and irrelevant footnotes as non-story content.
+   - Ask the director LLM to classify genuinely ambiguous sections using book context, while preserving the exact extracted content and reporting uncertainty.
+   - Never let the LLM silently discard, reorder, or rewrite content. Uncertain structural decisions go to review.
+   - Record every exclusion's location, exact text/hash, classification, reason, and decision source in an audit log.
    - Preserve italics/emphasis as annotations where useful.
 
 2. **Text normalization**
-   - Normalize smart punctuation, ellipses, dashes, abbreviations, numbers, and whitespace.
+   - Store immutable `source_text` exactly as extracted for every source passage.
+   - Create separate, derived `render_text` and pronunciation annotations for deterministic speech-friendly handling of punctuation, abbreviations, numbers, and names.
+   - Record every transformation and keep a mapping back to `source_text`; never overwrite it.
    - Maintain a pronunciation dictionary for character/place names.
    - Never silently alter story meaning.
 
@@ -42,11 +107,14 @@ The book is processed in two separate stages so a mistake does not require regen
    - Map each character to one stable voice ID.
    - Never automatically merge similarly named characters without evidence.
 
-5. **Deterministic validation**
-   - Verify every source passage is represented exactly once.
-   - Reject malformed JSON, missing text, duplicated text, or invented text.
-   - Flag low-confidence dialogue for human review.
-   - Produce editable per-chapter JSONL manifests.
+5. **Deterministic validation and review**
+   - Verify every immutable `source_text` passage is represented exactly once.
+   - Reject malformed JSON, missing text, duplicated text, invented text, or untracked render-text changes.
+   - Fidelity errors always block approval and rendering.
+   - Low-confidence or unresolved speakers require a human choice: assign a speaker or explicitly approve the fallback voice.
+   - Use chapter states: `draft`, `needs_review`, `approved`, `rendering`, and `rendered`.
+   - Record the approved script hash and reviewer decision. Any later upstream change invalidates approval and marks dependent audio as stale.
+   - Export editable per-chapter JSONL manifests when needed.
 
 Example segment:
 
@@ -73,12 +141,18 @@ Example segment:
    - Keep this installation isolated from the standard llama.cpp router used by the brain.
 
 7. **Voice creation and consistency**
-   - Create or select one narrator voice.
-   - Create a stable synthetic reference clip and exact transcript for every recurring character.
+   - Require no user-provided recordings.
+   - Generate local synthetic voice candidates for the narrator and recurring characters from the approved cast/story-bible information.
+   - Let the user preview the recommended candidates and approve or regenerate them before bulk rendering.
+   - Save one stable reference clip and exact transcript for every approved voice.
    - Reuse the same reference assets for every line by that character.
-   - Use a generic fallback voice for unresolved speakers.
+   - Use a generic fallback voice only when the user explicitly approves an unresolved speaker.
 
-8. **Segment rendering**
+8. **Generation preflight and segment rendering**
+   - Before rendering, show estimated audiobook duration, segment count, generation time range, temporary storage, final storage, and remaining free disk space.
+   - Include headroom for retries and intermediate WAV/FLAC files in the estimate.
+   - Block generation when the estimate cannot fit while preserving a safety reserve.
+   - Warn and require confirmation when generation is expected to consume over 20% of currently free space or leave less than 20 GB or 10% of the volume free, whichever reserve is larger.
    - Split at natural sentence/paragraph boundaries into short clips.
    - Keep the TTS server loaded across all requests.
    - Store each WAV by stable segment ID.
@@ -94,14 +168,19 @@ Example segment:
 10. **Assembly and mastering**
     - Trim excessive silence and insert script-defined pauses.
     - Apply conservative loudness normalization without flattening expression.
-    - Join segments into chapters.
-    - Export chapter files plus final M4B with chapter markers, cover, title, and author metadata.
+    - Join segments into 48 kHz, 24-bit FLAC chapter masters.
+    - Export the final M4B as mono AAC-LC at 64 kbps, targeting -18 LUFS integrated loudness and no more than -3 dB true peak.
+    - Never overwrite an export. Use names such as `<title>-v001.m4b` and `<title>-v001-ch01.flac`, incrementing the version for each changed approved script, cast, model, or render configuration.
+    - Include a version manifest containing the exact input and parameter hashes.
+    - Include chapter markers, cover, title, author, and other available book metadata.
 
 ## Runtime separation
 
 - Standard `llama.cpp` router for the director brain: suggested port `8080`.
 - `llama.cpp-omni` VoxCPM2 TTS server: suggested port `8090`.
-- Prefer running brain preprocessing first, unloading it, then performing TTS rendering. This avoids VRAM contention and makes the workflow reproducible.
+- The launcher manages both runtimes, but they remain isolated by directory, process, and port.
+- Run brain preprocessing first, unload it, and then perform TTS rendering. This avoids VRAM contention and makes the workflow reproducible.
+- Bind the web app, worker control endpoints, model servers, and Portless proxy to loopback only. Do not enable Portless LAN, Tailscale, Funnel, or ngrok modes.
 
 ## Director-brain model decision (locked 2026-07-24)
 
@@ -144,27 +223,27 @@ The dense Gemma 4 31B variants are not planned fallbacks: they require substanti
 
 ### Primary-model acceptance test
 
-The choice is locked, but the primary model must still pass a representative-chapter acceptance test before bulk processing. Measure:
+The choice is locked, but the primary model must still pass a representative-chapter acceptance test before bulk processing. Initial passing thresholds are:
 
-- Dialogue-speaker accuracy against a manually labeled set
-- Character alias/coreference accuracy
-- Thought-versus-spoken-dialogue classification
-- Exact source-text preservation
-- JSON-schema validity and semantic correctness
-- Appropriate uncertainty reporting
-- Refusal rate on representative mature passages, if present
-- Speed, RAM/VRAM use, and consistency across repeated runs
+- 100% exact source-text coverage and valid final schemas
+- At least 95% dialogue-speaker and character alias/coreference accuracy
+- At least 98% thought-versus-spoken-dialogue classification accuracy
+- At least 90% of incorrect speaker assignments flagged for review
+- 0% refusal on legitimate representative passages
+- At least 95% agreement on speaker and segment kind across three repeated runs
+- No crashes or out-of-memory failures; remain within 15.5 GB VRAM and 60 GB system RAM
+- Complete direction of the representative chapter within 60 minutes at the initial 32K context setting
 
 Use llama.cpp JSON-schema/grammar enforcement for syntax, then deterministic validation for semantic and source fidelity. Move through the ordered fallbacks only if the primary misses an acceptance threshold or its measured performance is impractical.
 
 ## Implementation order
 
-1. Validate the selected Gemma 4 26B-A4B director brain on a manually labeled representative chapter.
-2. Define JSON schemas and fidelity checks.
-3. Build EPUB extraction and normalization.
-4. Build story-bible, speaker attribution, and review workflow.
+1. Validate TanStack AI's OpenAI-compatible adapter with llama.cpp, then test the selected Gemma 4 26B-A4B director brain on a manually labeled representative chapter.
+2. Define the domain model, bounded-context boundaries, repository interfaces, JSON schemas, and fidelity checks.
+3. Build EPUB extraction and normalization behind infrastructure adapters.
+4. Build story-bible, speaker attribution, and review workflow as application/domain services.
 5. Process and approve one representative chapter.
-6. Build/test `llama.cpp-omni` and VoxCPM2.
+6. Build/test `llama.cpp-omni` and VoxCPM2 adapters.
 7. Create narrator and character voice references.
 8. Render and master the approved sample chapter.
 9. Adjust based on listening review.
@@ -172,8 +251,5 @@ Use llama.cpp JSON-schema/grammar enforcement for syntax, then deterministic val
 
 ## Decisions still needed
 
-- Director-brain acceptance thresholds and maximum practical context/offload settings
-- Narrator voice design/reference
-- Character voice-generation policy
-- Review interface: JSON/editor, spreadsheet, or lightweight local web UI
-- Final audio codec/bitrate and target loudness
+- Maximum practical director context and GPU-offload settings after benchmarking
+- Exact visual layout of the local TanStack Start review UI
