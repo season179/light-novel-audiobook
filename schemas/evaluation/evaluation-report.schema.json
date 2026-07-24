@@ -1,11 +1,11 @@
 {
-  "$id": "https://local.invalid/light-novel-audiobook/evaluation/evaluation-report@1",
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/evaluation-report@2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "evaluation-report@1"
+      "const": "evaluation-report@2"
     },
     "overall_passed": {
       "type": "boolean"
@@ -67,7 +67,7 @@
         },
         "ambiguity_policy": {
           "type": "string",
-          "const": "exclude-speaker-accuracy-require-review@1"
+          "const": "exclude-speaker-accuracy-require-review@2"
         },
         "criteria_counts": {
           "type": "object",
@@ -160,7 +160,10 @@
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
           },
-          "schema_valid": {
+          "schema_conformant": {
+            "type": "boolean"
+          },
+          "source_corpus_identity_valid": {
             "type": "boolean"
           },
           "elapsed_ms": {
@@ -224,7 +227,8 @@
           "run_index",
           "input_sha256",
           "configuration_sha256",
-          "schema_valid",
+          "schema_conformant",
+          "source_corpus_identity_valid",
           "elapsed_ms",
           "peak_vram_mib",
           "peak_ram_mib",
@@ -237,7 +241,190 @@
     "metrics": {
       "type": "object",
       "properties": {
+        "run_set_integrity": {
+          "type": "object",
+          "properties": {
+            "numerator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "observed_denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rate": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]{6}$"
+            },
+            "threshold": {
+              "type": "object",
+              "properties": {
+                "operator": {
+                  "type": "string",
+                  "enum": [">=", "<=", "="]
+                },
+                "numerator": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "denominator": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["operator", "numerator", "denominator", "label"],
+              "additionalProperties": false
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "numerator",
+            "denominator",
+            "observed_denominator",
+            "rate",
+            "threshold",
+            "passed"
+          ],
+          "additionalProperties": false
+        },
         "schema_validity": {
+          "type": "object",
+          "properties": {
+            "numerator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "observed_denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rate": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]{6}$"
+            },
+            "threshold": {
+              "type": "object",
+              "properties": {
+                "operator": {
+                  "type": "string",
+                  "enum": [">=", "<=", "="]
+                },
+                "numerator": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "denominator": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["operator", "numerator", "denominator", "label"],
+              "additionalProperties": false
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "numerator",
+            "denominator",
+            "observed_denominator",
+            "rate",
+            "threshold",
+            "passed"
+          ],
+          "additionalProperties": false
+        },
+        "source_corpus_identity": {
+          "type": "object",
+          "properties": {
+            "numerator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "observed_denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rate": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]{6}$"
+            },
+            "threshold": {
+              "type": "object",
+              "properties": {
+                "operator": {
+                  "type": "string",
+                  "enum": [">=", "<=", "="]
+                },
+                "numerator": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "denominator": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["operator", "numerator", "denominator", "label"],
+              "additionalProperties": false
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "numerator",
+            "denominator",
+            "observed_denominator",
+            "rate",
+            "threshold",
+            "passed"
+          ],
+          "additionalProperties": false
+        },
+        "prediction_order_integrity": {
           "type": "object",
           "properties": {
             "numerator": {
@@ -1151,10 +1338,74 @@
             "passed"
           ],
           "additionalProperties": false
+        },
+        "structural_ambiguity_review_coverage": {
+          "type": "object",
+          "properties": {
+            "numerator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "observed_denominator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rate": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]{6}$"
+            },
+            "threshold": {
+              "type": "object",
+              "properties": {
+                "operator": {
+                  "type": "string",
+                  "enum": [">=", "<=", "="]
+                },
+                "numerator": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "denominator": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["operator", "numerator", "denominator", "label"],
+              "additionalProperties": false
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "numerator",
+            "denominator",
+            "observed_denominator",
+            "rate",
+            "threshold",
+            "passed"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
+        "run_set_integrity",
         "schema_validity",
+        "source_corpus_identity",
+        "prediction_order_integrity",
         "exact_source_coverage",
         "dialogue_speaker_accuracy",
         "alias_coreference_accuracy",
@@ -1168,7 +1419,8 @@
         "operational_success",
         "context_size_configuration",
         "repeated_run_configuration",
-        "ambiguity_review_coverage"
+        "ambiguity_review_coverage",
+        "structural_ambiguity_review_coverage"
       ],
       "additionalProperties": false
     },
@@ -1192,7 +1444,7 @@
           },
           "path": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^(?:\\$|(?:[a-z_]+|\\[\\]|<key>)(?:\\.(?:[a-z_]+|\\[\\]|<key>))*)$"
           }
         },
         "required": ["code"],

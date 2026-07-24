@@ -1,5 +1,5 @@
 {
-  "schema_version": "evaluation-run@1",
+  "schema_version": "evaluation-run@2",
   "run_index": 1,
   "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
   "corpus_sha256": "e8af15d4867b8ad450cc253e03ad9c74f5fb2997f6b0964d8740a37aaef938c0",
@@ -11,6 +11,7 @@
     "prompt_version": "synthetic-prompt@1",
     "prompt_sha256": "a22d46319bc8433360517a62306b26befdc30ac1a738e2f7ebd7c9148c93e6d7",
     "output_schema_version": "director-output@1",
+    "output_schema_sha256": "9f04c23ae4d805254eb4d525301b9505a067751f409c37864879c55760f4637d",
     "seed": 42,
     "context_size": 32768,
     "parameters": {
@@ -19,6 +20,13 @@
     }
   },
   "operational": {
+    "resource_measurement": {
+      "method_version": "resource-measurement@1",
+      "collector_id": "synthetic-resource-collector",
+      "collector_version": "1.0.0",
+      "elapsed_scope": "complete-direction-run",
+      "memory_unit": "mebibyte"
+    },
     "elapsed_ms": 3600000,
     "peak_vram_mib": 15872,
     "peak_ram_mib": 61440,
@@ -534,7 +542,7 @@
       "text": "Original synthetic benchmark line 051.",
       "kind": "narration",
       "speaker": "narrator",
-      "review_required": false
+      "review_required": true
     },
     {
       "source_ref": "source-ref-051",

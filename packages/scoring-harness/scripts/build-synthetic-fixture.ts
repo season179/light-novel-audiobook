@@ -98,9 +98,9 @@ const corpus: RepresentativeCorpus = {
 }
 const corpusHash = canonicalSha256(corpus)
 const annotations: GoldAnnotations = {
-  schema_version: 'gold-annotations@1',
-  annotation_version: 'synthetic-gold@1',
-  annotation_policy_version: 'gold-annotation-policy@1',
+  schema_version: 'gold-annotations@2',
+  annotation_version: 'synthetic-gold@2',
+  annotation_policy_version: 'gold-annotation-policy@2',
   source_sha256: sourceHash,
   corpus_sha256: corpusHash,
   cases: cases.map((item, index) => {
@@ -137,7 +137,7 @@ const annotations: GoldAnnotations = {
 
 function buildRun(runIndex: number): EvaluationRun {
   return {
-    schema_version: 'evaluation-run@1',
+    schema_version: 'evaluation-run@2',
     run_index: runIndex,
     source_sha256: sourceHash,
     corpus_sha256: corpusHash,
@@ -149,11 +149,19 @@ function buildRun(runIndex: number): EvaluationRun {
       prompt_version: 'synthetic-prompt@1',
       prompt_sha256: sha256('synthetic-prompt'),
       output_schema_version: 'director-output@1',
+      output_schema_sha256: sha256('synthetic-director-output-schema@1'),
       seed: 42,
       context_size: 32_768,
       parameters: { temperature: 0, top_p: 1 },
     },
     operational: {
+      resource_measurement: {
+        method_version: 'resource-measurement@1',
+        collector_id: 'synthetic-resource-collector',
+        collector_version: '1.0.0',
+        elapsed_scope: 'complete-direction-run',
+        memory_unit: 'mebibyte',
+      },
       elapsed_ms: 3_600_000,
       peak_vram_mib: 15_872,
       peak_ram_mib: 61_440,
@@ -191,7 +199,7 @@ function buildRun(runIndex: number): EvaluationRun {
               : caseNumber <= 20
                 ? expectedSpeaker
                 : 'narrator',
-        review_required: caseNumber === 1 || caseNumber === 21,
+        review_required: caseNumber === 1 || caseNumber === 21 || caseNumber === 51,
       }
     }),
   }

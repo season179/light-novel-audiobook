@@ -1,11 +1,11 @@
 {
-  "$id": "https://local.invalid/light-novel-audiobook/evaluation/gold-annotations@1",
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/gold-annotations@2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "gold-annotations@1"
+      "const": "gold-annotations@2"
     },
     "annotation_version": {
       "type": "string",
@@ -71,7 +71,6 @@
                     "enum": ["ambiguous", "unresolved"]
                   },
                   "accepted_character_ids": {
-                    "maxItems": 2,
                     "type": "array",
                     "items": {
                       "type": "string",

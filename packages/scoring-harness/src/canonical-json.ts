@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject
 export type JsonObject = { readonly [key: string]: JsonValue }
 
 /** RFC-8785-like canonical JSON for this harness's integer/string/boolean input domain. */
@@ -12,11 +12,13 @@ export function canonicalJson(value: JsonValue): string {
     if (!Number.isFinite(value)) throw new Error('Canonical JSON cannot contain non-finite numbers')
     return JSON.stringify(value)
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (Array.isArray(value))
+    return `[${(value as readonly JsonValue[]).map(canonicalJson).join(',')}]`
 
-  return `{${Object.keys(value)
+  const object = value as JsonObject
+  return `{${Object.keys(object)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] as JsonValue)}`)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key] as JsonValue)}`)
     .join(',')}}`
 }
 

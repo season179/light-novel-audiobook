@@ -12,9 +12,7 @@ interface Arguments {
 }
 
 function usage(): never {
-  throw new Error(
-    'Usage: score --source <json> --corpus <json> --annotations <json> --runs <run1> <run2> <run3> --output <report.json>',
-  )
+  throw new Error('invalid-arguments')
 }
 
 function parseArguments(values: readonly string[]): Arguments {
@@ -58,17 +56,22 @@ async function readJson(path: string): Promise<unknown> {
 
 async function main(): Promise<void> {
   const args = parseArguments(process.argv.slice(2))
-  const [source, corpus, annotations, ...runs] = await Promise.all([
-    readJson(args.source),
-    readJson(args.corpus),
-    readJson(args.annotations),
-    ...args.runs.map(readJson),
-  ])
+  const source = await readJson(args.source)
+  const corpus = await readJson(args.corpus)
+  const annotations = await readJson(args.annotations)
+  const runs: unknown[] = []
+  for (const runPath of args.runs) runs.push(await readJson(runPath))
+
   const report = new RepresentativeCorpusScorer().score({ source, corpus, annotations, runs })
   const outputPath = invocationPath(args.output)
   await writeFile(outputPath, `${canonicalJson(report as JsonValue)}\n`, { flag: 'wx' })
-  process.stdout.write(`${report.overall_passed ? 'PASS' : 'FAIL'} ${outputPath}\n`)
+  process.stdout.write(`${report.overall_passed ? 'PASS' : 'FAIL'}\n`)
   if (!report.overall_passed) process.exitCode = 1
 }
 
-await main()
+try {
+  await main()
+} catch {
+  process.stderr.write('Evaluation scoring failed.\n')
+  process.exitCode = 2
+}

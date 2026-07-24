@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { canonicalJson, type JsonValue } from '../src/canonical-json.js'
+import { canonicalJson, canonicalSha256, type JsonValue, sha256 } from '../src/canonical-json.js'
 import { evaluationReportSchema } from '../src/schemas.js'
 import {
   GovernanceValidationError,
   RepresentativeCorpusScorer,
   type ScoringInputs,
 } from '../src/scorer.js'
+import { REQUIRED_CRITERIA, SCORER_POLICY, SCORER_SHA256 } from '../src/scorer-policy.js'
 
 const fixtureRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
@@ -54,6 +55,14 @@ function score(inputs: ScoringInputs) {
 }
 
 describe('representative corpus scorer', () => {
+  it('hashes the complete acceptance policy including required criteria', () => {
+    expect(SCORER_POLICY.required_criteria).toEqual(REQUIRED_CRITERIA)
+    expect(SCORER_SHA256).toBe(canonicalSha256(SCORER_POLICY))
+    expect(SCORER_POLICY.source.prediction_order).toBeDefined()
+    expect(SCORER_POLICY.annotation.structurally_ambiguous).toBe('require-review')
+    expect(SCORER_POLICY.metrics.structural_ambiguity_review_coverage).toBeDefined()
+  })
+
   it('reproduces the committed report and records all locked boundary metrics', async () => {
     const inputs = await fixture()
     const first = score(inputs)
@@ -79,6 +88,86 @@ describe('representative corpus scorer', () => {
     for (const passage of source.passages) {
       expect(serializedReport).not.toContain(passage.source_text)
       expect(serializedReport).not.toContain(passage.locator)
+    }
+  })
+
+  it('sanitizes arbitrary schema paths without leaking private parameter keys', async () => {
+    const inputs = await fixture()
+    const runs = mutableRuns(inputs)
+    const privateKey = 'private-story-key-The-brass-bell-rang'
+    const model = runAt(runs, 0).model as { parameters: Record<string, unknown> }
+    model.parameters[privateKey] = undefined
+    model.parameters.source_text = undefined
+
+    const report = score({ ...inputs, runs })
+    const serialized = JSON.stringify(report)
+    expect(report.metrics.schema_validity.passed).toBe(false)
+    expect(report.findings.some((finding) => finding.path === 'run.model.parameters.<key>')).toBe(
+      true,
+    )
+    expect(serialized).not.toContain(privateKey)
+    expect(serialized).not.toContain('The-brass-bell-rang')
+    expect(serialized).not.toContain('source_text')
+    expect(evaluationReportSchema.safeParse(report).success).toBe(true)
+  })
+
+  it('requires exactly one run for each index without overwriting summaries', async () => {
+    const inputs = await fixture()
+    const baseline = score(inputs)
+
+    const missing = score({ ...inputs, runs: inputs.runs.slice(0, 2) })
+    expect(missing.overall_passed).toBe(false)
+    expect(missing.metrics.run_set_integrity.passed).toBe(false)
+    expect(missing.run_summaries).toHaveLength(3)
+    expect(missing.run_summaries[2]?.schema_conformant).toBe(false)
+
+    const extraRuns = [...inputs.runs, clone(inputs.runs[2])]
+    const extra = score({ ...inputs, runs: extraRuns })
+    expect(extra.overall_passed).toBe(false)
+    expect(extra.metrics.run_set_integrity.passed).toBe(false)
+    expect(extra.metrics.schema_validity.passed).toBe(true)
+    expect(extra.run_summaries).toEqual(baseline.run_summaries)
+
+    const duplicateRuns = mutableRuns(inputs)
+    runAt(duplicateRuns, 1).run_index = 1
+    const firstRunHash = canonicalSha256(inputs.runs[0] as JsonValue)
+    const duplicate = score({ ...inputs, runs: duplicateRuns })
+    expect(duplicate.overall_passed).toBe(false)
+    expect(duplicate.metrics.run_set_integrity.passed).toBe(false)
+    expect(duplicate.metrics.schema_validity.passed).toBe(true)
+    expect(duplicate.run_summaries[0]?.input_sha256).toBe(firstRunHash)
+    expect(duplicate.run_summaries[1]?.schema_conformant).toBe(false)
+  })
+
+  it('reports schema, source/corpus, and configuration identity separately', async () => {
+    const inputs = await fixture()
+    const identityRuns = mutableRuns(inputs)
+    runAt(identityRuns, 0).source_sha256 = '0'.repeat(64)
+    const identity = score({ ...inputs, runs: identityRuns })
+    expect(identity.metrics.schema_validity.passed).toBe(true)
+    expect(identity.metrics.source_corpus_identity.passed).toBe(false)
+    expect(identity.run_summaries[0]?.schema_conformant).toBe(true)
+    expect(identity.run_summaries[0]?.source_corpus_identity_valid).toBe(false)
+
+    for (const mutate of [
+      (run: Record<string, unknown>) => {
+        const model = run.model as Record<string, unknown>
+        model.output_schema_sha256 = sha256('different-output-schema')
+      },
+      (run: Record<string, unknown>) => {
+        const operational = run.operational as {
+          resource_measurement: Record<string, unknown>
+        }
+        operational.resource_measurement.collector_version = '2.0.0'
+      },
+    ]) {
+      const configurationRuns = mutableRuns(inputs)
+      mutate(runAt(configurationRuns, 0))
+      const report = score({ ...inputs, runs: configurationRuns })
+      expect(report.metrics.schema_validity.passed).toBe(true)
+      expect(report.metrics.source_corpus_identity.passed).toBe(true)
+      expect(report.metrics.repeated_run_configuration.passed).toBe(false)
+      expect(report.metrics.three_run_agreement.passed).toBe(false)
     }
   })
 
@@ -144,6 +233,25 @@ describe('representative corpus scorer', () => {
     const below = score({ ...inputs, runs: belowBoundary })
     expect(below.metrics.three_run_agreement?.rate).toBe('0.933333')
     expect(below.metrics.three_run_agreement?.passed).toBe(false)
+  })
+
+  it('rejects reordered predictions instead of sorting them back into source order', async () => {
+    const inputs = await fixture()
+    const runs = mutableRuns(inputs)
+    const outputs = predictions(runAt(runs, 0))
+    const first = outputs[0]
+    const second = outputs[1]
+    if (!first || !second) throw new Error('Missing reorder test predictions')
+    outputs[0] = second
+    outputs[1] = first
+
+    const report = score({ ...inputs, runs })
+    expect(report.overall_passed).toBe(false)
+    expect(report.metrics.prediction_order_integrity.passed).toBe(false)
+    expect(report.metrics.exact_source_coverage.passed).toBe(false)
+    expect(report.findings.some((finding) => finding.code === 'prediction-order-invalid')).toBe(
+      true,
+    )
   })
 
   it('does not deduplicate repeated text or two source spans from one passage', async () => {
@@ -233,9 +341,33 @@ describe('representative corpus scorer', () => {
 
     const ambiguityRuns = mutableRuns(inputs)
     predictionAt(runAt(ambiguityRuns, 0), 20).review_required = false
+    expect(score({ ...inputs, runs: ambiguityRuns }).metrics.ambiguity_review_coverage.passed).toBe(
+      false,
+    )
+
+    const structuralRuns = mutableRuns(inputs)
+    predictionAt(runAt(structuralRuns, 0), 50).review_required = false
     expect(
-      score({ ...inputs, runs: ambiguityRuns }).metrics.ambiguity_review_coverage?.passed,
+      score({ ...inputs, runs: structuralRuns }).metrics.structural_ambiguity_review_coverage
+        .passed,
     ).toBe(false)
+  })
+
+  it('allows any number of accepted candidates on excluded ambiguous speaker gold', async () => {
+    const inputs = await fixture()
+    const annotations = clone(inputs.annotations) as {
+      cases: { speaker: { status: string; accepted_character_ids: string[] } }[]
+    }
+    const ambiguous = annotations.cases[20]
+    if (ambiguous?.speaker.status !== 'ambiguous') {
+      throw new Error('Missing ambiguous fixture annotation')
+    }
+    ambiguous.speaker.accepted_character_ids = [
+      'possible-character-a',
+      'possible-character-b',
+      'possible-character-c',
+    ]
+    expect(score({ ...inputs, annotations }).overall_passed).toBe(true)
   })
 
   it('rejects tampered governance and unsafe committed-private classification', async () => {

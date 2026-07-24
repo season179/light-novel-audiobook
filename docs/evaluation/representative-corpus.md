@@ -20,16 +20,19 @@ examples. The corpus must include at least one case tagged for every dimension b
 - multiple scored spans that refer to one source passage.
 
 Record the rationale before observing model results. Keep all legitimate mature-content passages in
-the refusal denominator. Cases partition every selected source passage exactly: no gap, overlap,
-normalization, synthetic separator, or text-based deduplication is allowed. Selection should be
+the refusal denominator. Cases remain in source-passage and scalar-offset order and partition every
+selected source passage exactly: no gap, overlap, normalization, synthetic separator, or text-based
+deduplication is allowed. Selection should be
 reviewed for a mix of short and long turns, scene transitions, recurring and one-off characters,
 and both explicit and distant attribution. The synthetic analogue is only a scorer contract; it is
 not evidence that a real chapter is representative.
 
-Gold annotation uses `gold-annotation-policy@1`. A second reader should adjudicate disagreements
+Gold annotation uses `gold-annotation-policy@2`. A second reader should adjudicate disagreements
 without seeing model output. Exact speaker labels contain one canonical character ID. Alias and
 coreference evidence are marked separately. If the source does not justify one speaker, label the
-case `ambiguous` or `unresolved`; never force a convenient gold answer.
+case `ambiguous` or `unresolved`; never force a convenient gold answer. An ambiguous label may
+record any number of plausible canonical IDs because that list is evidence, not a point-accuracy
+answer. Every ambiguous/unresolved speaker and every structurally ambiguous case requires review.
 
 ## Data governance
 
@@ -60,22 +63,26 @@ The authoritative JSON Schemas are in `schemas/evaluation/`:
 | --- | --- | --- |
 | source | `evaluation-source@1` | Exact selected passage text, ADR extraction identity, provenance, source references, and per-passage hashes |
 | corpus | `representative-corpus@1` | Predeclared selection rationale, source spans, legitimacy, and required coverage tags |
-| annotations | `gold-annotations@1` | Kind, canonical speaker, evidence class, and ambiguity adjudication |
-| run | `evaluation-run@1` | One run's model/prompt/schema identity, parameters, predictions, time, memory, and failure outcome |
-| report | `evaluation-report@1` | Text-free identities, counts, metric decisions, resource summaries, and sanitized findings |
+| annotations | `gold-annotations@2` | Kind, canonical speaker, evidence class, and unbounded ambiguity-candidate adjudication |
+| run | `evaluation-run@2` | One run's model/prompt/output-schema identities, parameters, versioned resource-measurement method, ordered predictions, time, memory, and failure outcome |
+| report | `evaluation-report@2` | Text-free identities, separate conformance/identity decisions, counts, resource summaries, and sanitized findings |
 
 All SHA-256 document identities use UTF-8 canonical JSON with recursively sorted object keys and
 preserved array order. Whitespace and object insertion order do not affect a hash; array order and
 all values do. `source_sha256` hashes the complete validated source document, including exact text
 and extraction identity. The corpus locks that source hash. Annotations lock both source and corpus
-hashes. Runs lock source and corpus hashes. The report records source, corpus, annotation, input-run,
-and configuration hashes.
+hashes. Runs lock source and corpus hashes and record both output-schema version and SHA-256. The
+report records source, corpus, annotation, input-run, and configuration hashes. A configuration
+hash includes the complete model identity/parameters, output-schema hash, and the versioned
+resource-measurement method identity, but excludes observed time and memory values.
 
 `scorer_sha256` hashes the canonical `SCORER_POLICY` object in
 `packages/scoring-harness/src/scorer-policy.ts`; `scorer_version` identifies the implementation
-contract. A policy or semantic scoring change requires a new scorer version and regenerated gold
-report. Source, corpus, annotation, extraction-rule, prompt, output-schema, adapter, and model
-versions are independent and must not be conflated.
+contract. Its preimage includes `REQUIRED_CRITERIA`, every threshold, denominator/observability
+rule, ordering and identity rule, ambiguity/review rule, arithmetic rule, and operational unit that
+affects acceptance. A policy or semantic scoring change requires a new scorer version and
+regenerated gold report. Source, corpus, annotation, extraction-rule, prompt, output-schema,
+resource-measurement, adapter, and model versions are independent and must not be conflated.
 
 Offsets are zero-based, half-open Unicode scalar values as defined by ADR 0001. Accuracy joins use
 `(source_ref, source_start, source_end)`, never story text. This is why identical sentences and
@@ -83,7 +90,7 @@ repeated references remain separate observations.
 
 ## Ambiguity and denominator policy
 
-`exclude-speaker-accuracy-require-review@1` applies:
+`exclude-speaker-accuracy-require-review@2` applies:
 
 - exact, adjudicated dialogue speakers are eligible for speaker accuracy;
 - exact dialogue cases whose evidence is `alias` or `coreference` are also eligible for the
@@ -91,6 +98,7 @@ repeated references remain separate observations.
 - ambiguous/unresolved speakers are excluded from both point-accuracy denominators because no
   single answer is known, but every run must flag them for review;
 - ambiguity remains in refusal, exact coverage, schema, and three-run-agreement denominators;
+- structurally ambiguous cases are independently required to have `review_required: true`;
 - incorrect-speaker review recall includes only demonstrably wrong predictions on exact speaker
   gold; ambiguous cases cannot be called incorrect;
 - when there are no incorrect exact-speaker predictions, recall is reported as `0/0`, rate
@@ -103,8 +111,11 @@ wrong-corpus observations do not shrink fixed denominators; incomplete observabi
 
 | Report metric | Numerator / denominator | Locked threshold |
 | --- | --- | --- |
-| `schema_validity` | valid expected run slots / 3 | 100% |
-| `exact_source_coverage` | passage-runs partitioned once with exact scalar slices / selected passages × 3 | 100% |
+| `run_set_integrity` | exactly one run at each index 1, 2, and 3 / required run set | 100% |
+| `schema_validity` | schema-conforming documents among the first three inputs / 3 | 100% |
+| `source_corpus_identity` | indexed schema-conforming runs locking the scored source/corpus hashes / 3 | 100% |
+| `prediction_order_integrity` | identity-valid runs whose outputs exactly follow corpus-case order / 3 | 100% |
+| `exact_source_coverage` | in-order passage-runs partitioned once with exact scalar slices / selected passages × 3 | 100% |
 | `dialogue_speaker_accuracy` | exact canonical speakers / exact-speaker dialogue cases × 3 | at least 95% |
 | `alias_coreference_accuracy` | exact canonical speakers / alias-or-coreference exact dialogue cases × 3 | at least 95% |
 | `thought_vs_spoken_accuracy` | exact kind / gold dialogue-or-thought cases × 3 | at least 98% |
@@ -116,12 +127,17 @@ wrong-corpus observations do not shrink fixed denominators; incomplete observabi
 | `ram_within_limit` | runs at or below 61,440 MiB (60 GiB) / 3 | 100% |
 | `operational_success` | runs with neither crash nor OOM / 3 | 100% |
 | `context_size_configuration` | runs at the initial 32,768-token context / 3 | 100% |
+| `repeated_run_configuration` | runs sharing one complete configuration identity / 3 | 100% |
+| `ambiguity_review_coverage` | ambiguous/unresolved speaker outputs flagged / such cases × 3 | 100% |
+| `structural_ambiguity_review_coverage` | structurally ambiguous outputs flagged / such cases × 3 | 100% |
 
-The harness additionally requires identical recorded model, adapter, prompt, output schema, seed,
-context, and parameter configurations across exactly three runs, plus 100% review flags on
-ambiguous/unresolved speakers. Peak memory values must come from the same documented measurement
-method for every run. MiB means 1,048,576 bytes. Elapsed time covers complete chapter direction,
-not setup omitted selectively between runs.
+Schema conformance does not imply identity validity: the report and each run summary show them
+separately. Extra, missing, or duplicate run indexes fail `run_set_integrity`; extra/duplicate data
+never replaces the first summary for an expected index. The harness requires identical recorded
+model, adapter, prompt, output-schema version/hash, seed, context, parameters, and
+resource-measurement identity across exactly three runs. Peak memory values must come from that
+same versioned method. MiB means 1,048,576 bytes. Elapsed time covers the complete chapter
+direction run, not setup omitted selectively between runs.
 
 ## Run the synthetic analogue
 
@@ -145,7 +161,13 @@ pnpm --filter @light-novel-audiobook/scoring-harness score -- \
   --output /tmp/synthetic-evaluation-report.json
 ```
 
+The CLI reads inputs in the displayed order and emits only `PASS`, `FAIL`, or the generic
+`Evaluation scoring failed.` error; read/parse/validation/write failures never print a path, JSON
+snippet, exception message, or stack.
+
 Reports contain hashes, aggregate counts, numeric resource measurements, opaque 16-hex unit keys,
-and sanitized error paths only. They never contain source text, locators, gold character IDs,
-predicted text, refusal explanations, or input paths. Treat a private report as private anyway:
-hashes and aggregate behavior may still be sensitive.
+and sanitized error paths only. A path contains known schema-property tokens, `[]` for an array
+position, and `<key>` for every arbitrary object key. Reports never contain source text, locators,
+gold character IDs, predicted text, refusal explanations, arbitrary parameter keys, or input
+paths. Treat a private report as private anyway: hashes and aggregate behavior may still be
+sensitive.

@@ -18,9 +18,9 @@ const schemaRoot = path.resolve(
 const schemas = [
   ['evaluation-source.schema.json', evaluationSourceSchema, 'evaluation-source@1'],
   ['representative-corpus.schema.json', representativeCorpusSchema, 'representative-corpus@1'],
-  ['gold-annotations.schema.json', goldAnnotationsSchema, 'gold-annotations@1'],
-  ['evaluation-run.schema.json', evaluationRunSchema, 'evaluation-run@1'],
-  ['evaluation-report.schema.json', evaluationReportSchema, 'evaluation-report@1'],
+  ['gold-annotations.schema.json', goldAnnotationsSchema, 'gold-annotations@2'],
+  ['evaluation-run.schema.json', evaluationRunSchema, 'evaluation-run@2'],
+  ['evaluation-report.schema.json', evaluationReportSchema, 'evaluation-report@2'],
 ] as const
 
 describe('published evaluation schemas', () => {

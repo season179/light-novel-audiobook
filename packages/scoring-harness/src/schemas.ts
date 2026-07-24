@@ -85,7 +85,7 @@ const exactSpeakerSchema = z.strictObject({
 })
 const ambiguousSpeakerSchema = z.strictObject({
   status: z.enum(['ambiguous', 'unresolved']),
-  accepted_character_ids: z.array(nonEmptySchema).max(2),
+  accepted_character_ids: z.array(nonEmptySchema),
   evidence: z.literal('ambiguous'),
 })
 const notApplicableSpeakerSchema = z.strictObject({
@@ -95,7 +95,7 @@ const notApplicableSpeakerSchema = z.strictObject({
 })
 
 export const goldAnnotationsSchema = z.strictObject({
-  schema_version: z.literal('gold-annotations@1'),
+  schema_version: z.literal('gold-annotations@2'),
   annotation_version: versionSchema,
   annotation_policy_version: versionSchema,
   source_sha256: sha256Schema,
@@ -147,7 +147,7 @@ const refusedSegmentSchema = z.strictObject({
 })
 
 export const evaluationRunSchema = z.strictObject({
-  schema_version: z.literal('evaluation-run@1'),
+  schema_version: z.literal('evaluation-run@2'),
   run_index: z.int().min(1).max(3),
   source_sha256: sha256Schema,
   corpus_sha256: sha256Schema,
@@ -159,11 +159,19 @@ export const evaluationRunSchema = z.strictObject({
     prompt_version: versionSchema,
     prompt_sha256: sha256Schema,
     output_schema_version: versionSchema,
+    output_schema_sha256: sha256Schema,
     seed: z.int(),
     context_size: z.int().positive(),
     parameters: z.record(z.string(), jsonValueSchema),
   }),
   operational: z.strictObject({
+    resource_measurement: z.strictObject({
+      method_version: versionSchema,
+      collector_id: nonEmptySchema,
+      collector_version: nonEmptySchema,
+      elapsed_scope: z.literal('complete-direction-run'),
+      memory_unit: z.literal('mebibyte'),
+    }),
     elapsed_ms: z.int().min(0),
     peak_vram_mib: z.int().min(0),
     peak_ram_mib: z.int().min(0),
@@ -192,7 +200,10 @@ export const metricResultSchema = z.strictObject({
 })
 
 const reportMetricsSchema = z.strictObject({
+  run_set_integrity: metricResultSchema,
   schema_validity: metricResultSchema,
+  source_corpus_identity: metricResultSchema,
+  prediction_order_integrity: metricResultSchema,
   exact_source_coverage: metricResultSchema,
   dialogue_speaker_accuracy: metricResultSchema,
   alias_coreference_accuracy: metricResultSchema,
@@ -207,6 +218,7 @@ const reportMetricsSchema = z.strictObject({
   context_size_configuration: metricResultSchema,
   repeated_run_configuration: metricResultSchema,
   ambiguity_review_coverage: metricResultSchema,
+  structural_ambiguity_review_coverage: metricResultSchema,
 })
 
 const criteriaCountsSchema = z.strictObject({
@@ -222,7 +234,7 @@ const criteriaCountsSchema = z.strictObject({
 })
 
 export const evaluationReportSchema = z.strictObject({
-  schema_version: z.literal('evaluation-report@1'),
+  schema_version: z.literal('evaluation-report@2'),
   overall_passed: z.boolean(),
   identities: z.strictObject({
     source_version: nonEmptySchema,
@@ -236,7 +248,7 @@ export const evaluationReportSchema = z.strictObject({
   }),
   governance: z.strictObject({
     storage_class: z.enum(['committed_synthetic', 'workspace_private']),
-    ambiguity_policy: z.literal('exclude-speaker-accuracy-require-review@1'),
+    ambiguity_policy: z.literal('exclude-speaker-accuracy-require-review@2'),
     criteria_counts: criteriaCountsSchema,
     ambiguous_case_count: z.int().min(0),
   }),
@@ -246,7 +258,8 @@ export const evaluationReportSchema = z.strictObject({
         run_index: z.int().min(1).max(3),
         input_sha256: sha256Schema,
         configuration_sha256: sha256Schema,
-        schema_valid: z.boolean(),
+        schema_conformant: z.boolean(),
+        source_corpus_identity_valid: z.boolean(),
         elapsed_ms: z.int().min(0).nullable(),
         peak_vram_mib: z.int().min(0).nullable(),
         peak_ram_mib: z.int().min(0).nullable(),
@@ -264,7 +277,10 @@ export const evaluationReportSchema = z.strictObject({
         .string()
         .regex(/^[a-f0-9]{16}$/)
         .optional(),
-      path: z.string().min(1).optional(),
+      path: z
+        .string()
+        .regex(/^(?:\$|(?:[a-z_]+|\[\]|<key>)(?:\.(?:[a-z_]+|\[\]|<key>))*)$/)
+        .optional(),
     }),
   ),
 })

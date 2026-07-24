@@ -14,16 +14,18 @@ import {
 import {
   AMBIGUITY_POLICY,
   REQUIRED_CRITERIA,
+  SCORER_POLICY,
   SCORER_SHA256,
   SCORER_VERSION,
 } from './scorer-policy.js'
 
-const RUN_COUNT = 3
+const RUN_COUNT = SCORER_POLICY.run_set.required_count
 const PERCENT = 100
-const ELAPSED_LIMIT_MS = 3_600_000
-const VRAM_LIMIT_MIB = 15_872
-const RAM_LIMIT_MIB = 61_440
-const CONTEXT_SIZE = 32_768
+const ELAPSED_LIMIT_MS = SCORER_POLICY.metrics.elapsed_time.milliseconds
+const VRAM_LIMIT_MIB = SCORER_POLICY.metrics.peak_vram.mebibytes
+const RAM_LIMIT_MIB = SCORER_POLICY.metrics.peak_ram.mebibytes
+const CONTEXT_SIZE = SCORER_POLICY.metrics.context_size.tokens
+const REQUIRED_COMPLETE_RATE = SCORER_POLICY.arithmetic.required_complete_rate_percent
 
 type Finding = EvaluationReport['findings'][number]
 
@@ -114,18 +116,118 @@ function unitKey(caseId: string): string {
   return sha256(`evaluation-unit-key@1\0${caseId}`).slice(0, 16)
 }
 
+const SAFE_SCHEMA_PATH_TOKENS = new Set([
+  'accepted_character_ids',
+  'adapter_id',
+  'adapter_version',
+  'annotation_policy_version',
+  'annotation_version',
+  'annotations',
+  'archive_parser',
+  'case_id',
+  'cases',
+  'collector_id',
+  'collector_version',
+  'contains_personal_data',
+  'context_size',
+  'corpus',
+  'corpus_id',
+  'corpus_sha256',
+  'corpus_version',
+  'crashed',
+  'criteria',
+  'elapsed_ms',
+  'elapsed_scope',
+  'evidence',
+  'extraction_identity',
+  'extraction_rules',
+  'extraction_sha256',
+  'kind',
+  'legitimate',
+  'license',
+  'locator',
+  'memory_unit',
+  'method_version',
+  'model',
+  'model_id',
+  'model_sha256',
+  'operational',
+  'origin',
+  'out_of_memory',
+  'output_schema_sha256',
+  'output_schema_version',
+  'parameters',
+  'passages',
+  'peak_ram_mib',
+  'peak_vram_mib',
+  'predictions',
+  'prompt_sha256',
+  'prompt_version',
+  'provenance',
+  'publication_content_sha256',
+  'redistribution',
+  'refusal_code',
+  'resource_measurement',
+  'review_required',
+  'run',
+  'run_index',
+  'schema_version',
+  'seed',
+  'selection_policy_version',
+  'selection_rationale',
+  'source',
+  'source_end',
+  'source_id',
+  'source_ref',
+  'source_sha256',
+  'source_start',
+  'source_text',
+  'source_text_sha256',
+  'source_version',
+  'speaker',
+  'status',
+  'storage_class',
+  'text',
+  'xml_parser',
+])
+
+function safeIssuePath(
+  prefix: 'source' | 'corpus' | 'annotations' | 'run',
+  path: PropertyKey[],
+): string {
+  const tokens: string[] = [prefix]
+  let insideArbitraryParameters = false
+  for (const part of path) {
+    if (typeof part === 'number') {
+      tokens.push('[]')
+      continue
+    }
+    if (insideArbitraryParameters) {
+      tokens.push('<key>')
+      continue
+    }
+    if (typeof part === 'string' && SAFE_SCHEMA_PATH_TOKENS.has(part)) {
+      tokens.push(part)
+      if (part === 'parameters') insideArbitraryParameters = true
+      continue
+    }
+    tokens.push('<key>')
+  }
+  return tokens.join('.')
+}
+
 function safeIssues(
-  prefix: string,
+  prefix: 'source' | 'corpus' | 'annotations' | 'run',
   issues: readonly { path: PropertyKey[]; code: string }[],
-): string[] {
-  return issues.map((issue) => `${prefix}:${issue.code}:${issue.path.map(String).join('.') || '$'}`)
+): { code: string; path: string }[] {
+  return issues.map((issue) => ({ code: issue.code, path: safeIssuePath(prefix, issue.path) }))
 }
 
 function unknownInputHash(input: unknown, inputIndex: number): string {
   try {
     return canonicalSha256(input as JsonValue)
   } catch {
-    return sha256(`non-json-evaluation-run@1\0${inputIndex}`)
+    return sha256(`non-json-evaluation-run@2\0${inputIndex}`)
   }
 }
 
@@ -134,7 +236,10 @@ function assertUnique(values: readonly string[], code: string, codes: string[]):
 }
 
 function configurationIdentity(run: EvaluationRun): JsonValue {
-  return run.model as JsonValue
+  return {
+    model: run.model,
+    resource_measurement: run.operational.resource_measurement,
+  } as JsonValue
 }
 
 function predictionIndex(run: EvaluationRun): ReadonlyMap<string, readonly EvaluationPrediction[]> {
@@ -167,12 +272,9 @@ function exactCoverage(
   }
 
   for (const passage of passages) {
-    const predictions = run.predictions
-      .filter((prediction) => prediction.source_ref === passage.source_ref)
-      .sort(
-        (left, right) =>
-          left.source_start - right.source_start || left.source_end - right.source_end,
-      )
+    const predictions = run.predictions.filter(
+      (prediction) => prediction.source_ref === passage.source_ref,
+    )
     let cursor = 0
     let exact = predictions.length > 0
     for (const prediction of predictions) {
@@ -208,7 +310,7 @@ function validateGovernance(sourceInput: unknown, corpusInput: unknown, annotati
     ...(sourceResult.success ? [] : safeIssues('source', sourceResult.error.issues)),
     ...(corpusResult.success ? [] : safeIssues('corpus', corpusResult.error.issues)),
     ...(annotationResult.success ? [] : safeIssues('annotations', annotationResult.error.issues)),
-  ]
+  ].map((issue) => `schema:${issue.code}:${issue.path}`)
   if (!sourceResult.success || !corpusResult.success || !annotationResult.success) {
     throw new GovernanceValidationError(schemaCodes)
   }
@@ -260,9 +362,7 @@ function validateGovernance(sourceInput: unknown, corpusInput: unknown, annotati
     if (passage.source_text_sha256 !== sha256(passage.source_text)) {
       codes.push('source-passage-hash-mismatch')
     }
-    const cases = corpus.cases
-      .filter((item) => item.source_ref === passage.source_ref)
-      .sort((left, right) => left.source_start - right.source_start)
+    const cases = corpus.cases.filter((item) => item.source_ref === passage.source_ref)
     let cursor = 0
     for (const item of cases) {
       if (item.source_start !== cursor || item.source_end > scalarLength(passage.source_text)) {
@@ -276,6 +376,14 @@ function validateGovernance(sourceInput: unknown, corpusInput: unknown, annotati
   }
   for (const item of corpus.cases) {
     if (!passageByReference.has(item.source_ref)) codes.push('corpus-source-reference-missing')
+  }
+  const sourceOrderedCaseIds = source.passages.flatMap((passage) =>
+    corpus.cases
+      .filter((item) => item.source_ref === passage.source_ref)
+      .map((item) => item.case_id),
+  )
+  if (sourceOrderedCaseIds.some((caseId, index) => corpus.cases[index]?.case_id !== caseId)) {
+    codes.push('corpus-case-order-mismatch')
   }
 
   const corpusCaseIds = new Set(corpus.cases.map((item) => item.case_id))
@@ -369,46 +477,56 @@ export class RepresentativeCorpusScorer {
     )
     const annotationHash = canonicalSha256(annotations as JsonValue)
     const findings: Finding[] = []
-    const validRuns = new Map<number, EvaluationRun>()
-    const inputHashes = new Map<number, string>()
+    const schemaRuns = new Map<number, EvaluationRun>()
+    const identityRuns = new Map<number, EvaluationRun>()
+    const indexedInputHashes = new Map<number, string>()
+    const positionalInputHashes = new Map<number, string>()
+    const duplicateIndexes = new Set<number>()
+    let schemaConformantCount = 0
 
-    for (const [inputIndex, input] of inputs.runs.entries()) {
-      const parsed = evaluationRunSchema.safeParse(input)
-      const inferredIndex = parsed.success
-        ? parsed.data.run_index
-        : Math.min(inputIndex + 1, RUN_COUNT)
+    for (const [inputIndex, input] of inputs.runs.slice(0, RUN_COUNT).entries()) {
       const hash = unknownInputHash(input, inputIndex)
+      positionalInputHashes.set(inputIndex + 1, hash)
+      const parsed = evaluationRunSchema.safeParse(input)
       if (!parsed.success) {
         findings.push(
-          ...safeIssues('run', parsed.error.issues).map((path) => ({
-            code: 'run-schema-invalid',
-            run_index: inferredIndex,
-            path,
+          ...safeIssues('run', parsed.error.issues).map((issue) => ({
+            code: `run-schema-invalid-${issue.code}`,
+            run_index: inputIndex + 1,
+            path: issue.path,
           })),
         )
-        inputHashes.set(inferredIndex, hash)
         continue
       }
+
+      schemaConformantCount += 1
       const run = parsed.data
-      inputHashes.set(run.run_index, hash)
-      if (validRuns.has(run.run_index)) {
-        validRuns.delete(run.run_index)
+      if (schemaRuns.has(run.run_index)) {
+        duplicateIndexes.add(run.run_index)
         findings.push({ code: 'duplicate-run-index', run_index: run.run_index })
         continue
       }
-      if (run.source_sha256 !== sourceHash || run.corpus_sha256 !== corpusHash) {
-        findings.push({ code: 'run-input-hash-mismatch', run_index: run.run_index })
-        continue
-      }
-      validRuns.set(run.run_index, run)
+      schemaRuns.set(run.run_index, run)
+      indexedInputHashes.set(run.run_index, hash)
     }
-    for (let runIndex = 1; runIndex <= RUN_COUNT; runIndex += 1) {
-      if (!inputHashes.has(runIndex)) {
-        inputHashes.set(runIndex, sha256(`missing-evaluation-run@1\0${runIndex}`))
-        findings.push({ code: 'run-missing', run_index: runIndex })
-      }
-    }
+
     if (inputs.runs.length > RUN_COUNT) findings.push({ code: 'unexpected-extra-run' })
+    for (let runIndex = 1; runIndex <= RUN_COUNT; runIndex += 1) {
+      if (!schemaRuns.has(runIndex)) findings.push({ code: 'run-missing', run_index: runIndex })
+    }
+
+    const runSetValid =
+      inputs.runs.length === RUN_COUNT &&
+      schemaRuns.size === RUN_COUNT &&
+      duplicateIndexes.size === 0
+
+    for (const [runIndex, run] of schemaRuns) {
+      if (run.source_sha256 === sourceHash && run.corpus_sha256 === corpusHash) {
+        identityRuns.set(runIndex, run)
+      } else {
+        findings.push({ code: 'run-source-corpus-identity-mismatch', run_index: runIndex })
+      }
+    }
 
     const goldByCase = new Map(annotations.cases.map((item) => [item.case_id, item]))
     const expectedSpeakerCases = annotations.cases.filter(
@@ -423,7 +541,11 @@ export class RepresentativeCorpusScorer {
     const ambiguousCases = annotations.cases.filter(
       (item) => item.speaker.status === 'ambiguous' || item.speaker.status === 'unresolved',
     )
+    const structuralCases = corpus.cases.filter((item) =>
+      item.criteria.includes('structurally_ambiguous'),
+    )
 
+    let predictionOrderCorrect = 0
     let coverageCorrect = 0
     let speakerCorrect = 0
     let speakerObserved = 0
@@ -437,12 +559,23 @@ export class RepresentativeCorpusScorer {
     let refusalObserved = 0
     let ambiguityReviewed = 0
     let ambiguityObserved = 0
+    let structuralAmbiguityReviewed = 0
+    let structuralAmbiguityObserved = 0
 
     const runPredictionIndexes = new Map<
       number,
       ReadonlyMap<string, readonly EvaluationPrediction[]>
     >()
-    for (const run of validRuns.values()) {
+    for (const run of identityRuns.values()) {
+      const predictionsInCorpusOrder =
+        run.predictions.length === corpus.cases.length &&
+        run.predictions.every((prediction, index) => {
+          const corpusCase = corpus.cases[index]
+          return corpusCase !== undefined && spanKey(prediction) === spanKey(corpusCase)
+        })
+      if (predictionsInCorpusOrder) predictionOrderCorrect += 1
+      else findings.push({ code: 'prediction-order-invalid', run_index: run.run_index })
+
       coverageCorrect += exactCoverage(run, source.passages, findings)
       const index = predictionIndex(run)
       runPredictionIndexes.set(run.run_index, index)
@@ -459,12 +592,20 @@ export class RepresentativeCorpusScorer {
         const prediction = predictions[0]
         if (!prediction) continue
         refusalObserved += 1
+        const gold = goldByCase.get(corpusCase.case_id)
+        if (!gold) continue
+        if (gold.speaker.status === 'ambiguous' || gold.speaker.status === 'unresolved') {
+          ambiguityObserved += 1
+          if (prediction.review_required) ambiguityReviewed += 1
+        }
+        if (corpusCase.criteria.includes('structurally_ambiguous')) {
+          structuralAmbiguityObserved += 1
+          if (prediction.review_required) structuralAmbiguityReviewed += 1
+        }
         if (prediction.status === 'refused') {
           refusals += 1
           continue
         }
-        const gold = goldByCase.get(corpusCase.case_id)
-        if (!gold) continue
         if (gold.kind === 'dialogue' || gold.kind === 'thought') {
           thoughtSpokenObserved += 1
           if (prediction.kind === gold.kind) thoughtSpokenCorrect += 1
@@ -481,10 +622,6 @@ export class RepresentativeCorpusScorer {
             aliasObserved += 1
             if (correct) aliasCorrect += 1
           }
-        }
-        if (gold.speaker.status === 'ambiguous' || gold.speaker.status === 'unresolved') {
-          ambiguityObserved += 1
-          if (prediction.review_required) ambiguityReviewed += 1
         }
       }
     }
@@ -506,114 +643,182 @@ export class RepresentativeCorpusScorer {
       }
     }
 
-    const configurationHashes = [...validRuns.values()].map((run) =>
+    const configurationHashes = [...identityRuns.values()].map((run) =>
       canonicalSha256(configurationIdentity(run)),
     )
     const configurationConsistent =
-      configurationHashes.length === RUN_COUNT && new Set(configurationHashes).size === 1
+      runSetValid &&
+      configurationHashes.length === RUN_COUNT &&
+      new Set(configurationHashes).size === 1
 
     const expectedSpeaker = expectedSpeakerCases.length * RUN_COUNT
     const expectedAlias = aliasCases.length * RUN_COUNT
     const expectedThoughtSpoken = thoughtSpokenCases.length * RUN_COUNT
     const expectedRefusals = corpus.cases.length * RUN_COUNT
     const expectedAmbiguous = ambiguousCases.length * RUN_COUNT
+    const expectedStructural = structuralCases.length * RUN_COUNT
     const expectedCoverage = source.passages.length * RUN_COUNT
-    const runs = [...validRuns.values()]
-    const completeRuns = runs.length === RUN_COUNT
+    const runs = [...identityRuns.values()]
+    const completeRuns = runSetValid && runs.length === RUN_COUNT
 
     const metrics: EvaluationReport['metrics'] = {
+      run_set_integrity: metric(
+        runSetValid ? RUN_COUNT : 0,
+        RUN_COUNT,
+        Math.min(inputs.runs.length, RUN_COUNT),
+        atLeast(
+          SCORER_POLICY.metrics.run_set_integrity.numerator,
+          'exactly one run for each index 1, 2, and 3',
+        ),
+        runSetValid,
+      ),
       schema_validity: metric(
-        validRuns.size,
+        schemaConformantCount,
         RUN_COUNT,
+        Math.min(inputs.runs.length, RUN_COUNT),
+        atLeast(
+          SCORER_POLICY.metrics.schema_validity.numerator,
+          '100% schema conformance across the first three run documents',
+        ),
+      ),
+      source_corpus_identity: metric(
+        identityRuns.size,
         RUN_COUNT,
-        atLeast(100, '100% valid final run schemas'),
+        schemaRuns.size,
+        atLeast(
+          SCORER_POLICY.metrics.source_corpus_identity.numerator,
+          'all indexed runs lock the scored source and corpus hashes',
+        ),
+      ),
+      prediction_order_integrity: metric(
+        predictionOrderCorrect,
+        RUN_COUNT,
+        identityRuns.size,
+        atLeast(
+          SCORER_POLICY.metrics.prediction_order_integrity.numerator,
+          'all runs preserve exact corpus-case order',
+        ),
       ),
       exact_source_coverage: metric(
         coverageCorrect,
         expectedCoverage,
-        validRuns.size * source.passages.length,
-        atLeast(100, '100% passage-run exact coverage'),
+        identityRuns.size * source.passages.length,
+        atLeast(
+          SCORER_POLICY.metrics.exact_source_coverage.numerator,
+          '100% passage-run exact coverage',
+        ),
       ),
       dialogue_speaker_accuracy: metric(
         speakerCorrect,
         expectedSpeaker,
         speakerObserved,
-        atLeast(95, 'at least 95% exact canonical speaker accuracy'),
+        atLeast(
+          SCORER_POLICY.metrics.dialogue_speaker_accuracy.numerator,
+          'at least 95% exact canonical speaker accuracy',
+        ),
       ),
       alias_coreference_accuracy: metric(
         aliasCorrect,
         expectedAlias,
         aliasObserved,
-        atLeast(95, 'at least 95% alias/coreference accuracy'),
+        atLeast(
+          SCORER_POLICY.metrics.alias_coreference_accuracy.numerator,
+          'at least 95% alias/coreference accuracy',
+        ),
       ),
       thought_vs_spoken_accuracy: metric(
         thoughtSpokenCorrect,
         expectedThoughtSpoken,
         thoughtSpokenObserved,
-        atLeast(98, 'at least 98% thought-versus-spoken accuracy'),
+        atLeast(
+          SCORER_POLICY.metrics.thought_vs_spoken_accuracy.numerator,
+          'at least 98% thought-versus-spoken accuracy',
+        ),
       ),
       incorrect_speaker_review_recall: metric(
         reviewedIncorrectSpeakers,
         incorrectSpeakers,
         incorrectSpeakers,
-        atLeast(90, 'at least 90% of known incorrect speakers flagged'),
+        atLeast(
+          SCORER_POLICY.metrics.incorrect_speaker_review_recall.numerator,
+          'at least 90% of known incorrect speakers flagged',
+        ),
         speakerObserved === expectedSpeaker,
       ),
       refusal_rate: metric(
         refusals,
         expectedRefusals,
         refusalObserved,
-        atMost(0, 100, '0% refusal on legitimate cases'),
+        atMost(
+          SCORER_POLICY.metrics.refusal_rate.numerator,
+          SCORER_POLICY.metrics.refusal_rate.denominator,
+          '0% refusal on legitimate cases',
+        ),
       ),
       three_run_agreement: metric(
         agreementCorrect,
         corpus.cases.length,
         agreementObserved,
-        atLeast(95, 'at least 95% joint speaker-and-kind three-run agreement'),
+        atLeast(
+          SCORER_POLICY.metrics.three_run_agreement.numerator,
+          'at least 95% joint speaker-and-kind three-run agreement',
+        ),
         configurationConsistent && agreementObserved === corpus.cases.length,
       ),
       elapsed_time_within_limit: metric(
         runs.filter((run) => run.operational.elapsed_ms <= ELAPSED_LIMIT_MS).length,
         RUN_COUNT,
         runs.length,
-        atLeast(100, 'every run at or below 3600000 ms'),
+        atLeast(REQUIRED_COMPLETE_RATE, 'every run at or below 3600000 ms'),
       ),
       vram_within_limit: metric(
         runs.filter((run) => run.operational.peak_vram_mib <= VRAM_LIMIT_MIB).length,
         RUN_COUNT,
         runs.length,
-        atLeast(100, 'every run at or below 15872 MiB VRAM'),
+        atLeast(REQUIRED_COMPLETE_RATE, 'every run at or below 15872 MiB VRAM'),
       ),
       ram_within_limit: metric(
         runs.filter((run) => run.operational.peak_ram_mib <= RAM_LIMIT_MIB).length,
         RUN_COUNT,
         runs.length,
-        atLeast(100, 'every run at or below 61440 MiB RAM'),
+        atLeast(REQUIRED_COMPLETE_RATE, 'every run at or below 61440 MiB RAM'),
       ),
       operational_success: metric(
         runs.filter((run) => !run.operational.crashed && !run.operational.out_of_memory).length,
         RUN_COUNT,
         runs.length,
-        atLeast(100, 'zero crashes and zero out-of-memory outcomes'),
+        atLeast(REQUIRED_COMPLETE_RATE, 'zero crashes and zero out-of-memory outcomes'),
       ),
       context_size_configuration: metric(
         runs.filter((run) => run.model.context_size === CONTEXT_SIZE).length,
         RUN_COUNT,
         runs.length,
-        exactly(100, 100, 'all runs use the initial 32768-token context'),
+        exactly(REQUIRED_COMPLETE_RATE, PERCENT, 'all runs use the initial 32768-token context'),
       ),
       repeated_run_configuration: metric(
         configurationConsistent ? RUN_COUNT : 0,
         RUN_COUNT,
         runs.length,
-        atLeast(100, 'three identical recorded run configurations'),
+        atLeast(REQUIRED_COMPLETE_RATE, 'three identical recorded run configurations'),
         completeRuns,
       ),
       ambiguity_review_coverage: metric(
         ambiguityReviewed,
         expectedAmbiguous,
         ambiguityObserved,
-        atLeast(100, 'all ambiguous/unresolved speakers flagged for review'),
+        atLeast(
+          SCORER_POLICY.metrics.ambiguity_review_coverage.numerator,
+          'all ambiguous/unresolved speakers flagged for review',
+        ),
+      ),
+      structural_ambiguity_review_coverage: metric(
+        structuralAmbiguityReviewed,
+        expectedStructural,
+        structuralAmbiguityObserved,
+        atLeast(
+          SCORER_POLICY.metrics.structural_ambiguity_review_coverage.numerator,
+          'all structurally ambiguous cases flagged for review',
+        ),
       ),
     }
 
@@ -626,14 +831,18 @@ export class RepresentativeCorpusScorer {
 
     const runSummaries = Array.from({ length: RUN_COUNT }, (_, offset) => {
       const runIndex = offset + 1
-      const run = validRuns.get(runIndex)
+      const run = schemaRuns.get(runIndex)
       return {
         run_index: runIndex,
-        input_sha256: inputHashes.get(runIndex) as string,
+        input_sha256:
+          indexedInputHashes.get(runIndex) ??
+          positionalInputHashes.get(runIndex) ??
+          sha256(`missing-evaluation-run@2\0${runIndex}`),
         configuration_sha256: run
           ? canonicalSha256(configurationIdentity(run))
-          : sha256(`invalid-evaluation-run-configuration@1\0${runIndex}`),
-        schema_valid: run !== undefined,
+          : sha256(`invalid-evaluation-run-configuration@2\0${runIndex}`),
+        schema_conformant: run !== undefined,
+        source_corpus_identity_valid: identityRuns.has(runIndex),
         elapsed_ms: run?.operational.elapsed_ms ?? null,
         peak_vram_mib: run?.operational.peak_vram_mib ?? null,
         peak_ram_mib: run?.operational.peak_ram_mib ?? null,
@@ -643,7 +852,7 @@ export class RepresentativeCorpusScorer {
     })
 
     const report: EvaluationReport = {
-      schema_version: 'evaluation-report@1',
+      schema_version: 'evaluation-report@2',
       overall_passed: Object.values(metrics).every((item) => item.passed),
       identities: {
         source_version: source.source_version,

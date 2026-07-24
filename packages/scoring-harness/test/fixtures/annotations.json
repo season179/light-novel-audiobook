@@ -1,7 +1,7 @@
 {
-  "schema_version": "gold-annotations@1",
-  "annotation_version": "synthetic-gold@1",
-  "annotation_policy_version": "gold-annotation-policy@1",
+  "schema_version": "gold-annotations@2",
+  "annotation_version": "synthetic-gold@2",
+  "annotation_policy_version": "gold-annotation-policy@2",
   "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
   "corpus_sha256": "e8af15d4867b8ad450cc253e03ad9c74f5fb2997f6b0964d8740a37aaef938c0",
   "cases": [
