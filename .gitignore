@@ -5,6 +5,10 @@ dist/
 .output/
 coverage/
 *.tsbuildinfo
+.topology-probe-*/
+.topology-browser-*/
+audiobook-topology-browser-*/
+sqlite-topology-*/
 
 # Tool caches
 .tanstack/

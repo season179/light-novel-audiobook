@@ -16,7 +16,7 @@ Architecture foundation and model evaluation. See [`docs/PLAN.md`](docs/PLAN.md)
 - TanStack Start review app
 - TanStack AI director integration
 - Vitest, Zod, and Biome
-- Portless local development URLs
+- Direct loopback-only local runtime endpoints
 
 ## Development
 
@@ -31,12 +31,16 @@ pnpm build
 pnpm dev
 ```
 
-The review app is available at `https://audiobook.localhost`. The current worker is only a
-scaffold; model-server lifecycle management will be added with the processing pipeline.
+The review app listens at `http://127.0.0.1:3000`; open `http://localhost:3000` in the browser.
+The current worker is only a scaffold; model-server lifecycle management will be added with the
+processing pipeline. See the [WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the
+storage, process, and direct-loopback boundaries.
 
 ## Repository boundaries
 
 - Source code, prompts, schemas, tests, and documentation belong here.
-- Books, SQLite workspaces, reference voices, and generated audio belong outside Git. From
-  WSL2, use an explicit Linux path such as `/mnt/c/Users/WINDOWS 11/Audiobooks`.
-- Model weights and inference engines belong in WSL under `/home/windows_11/models/audiobook` and `/home/windows_11/src`.
+- SQLite and runtime state belong on WSL ext4 outside Git. Large book workspaces, reference
+  voices, and generated audio may use an explicit Linux-mounted path such as
+  `/mnt/c/Users/<windows-user>/Audiobooks` after replacing the placeholder.
+- Model weights and inference engines belong on WSL ext4 under paths such as
+  `/home/<wsl-user>/models/audiobook` and `/home/<wsl-user>/src`, again replacing the placeholder.

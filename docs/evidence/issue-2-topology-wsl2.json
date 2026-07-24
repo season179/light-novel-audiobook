@@ -1,0 +1,256 @@
+{
+  "evidenceSchemaVersion": 5,
+  "probeVersion": 5,
+  "capturedAt": "2026-07-24T23:47:37.379Z",
+  "provenance": {
+    "generatedFromCommit": "59374534c9e2465b4d75e9084ba196900b17e5ad",
+    "probeSourceSha256": "bde3ccd410cb38ead61e878c57d6a290e3550bef73aad6673bf4ac3d3aeb35b8",
+    "nativeToolchain": {
+      "node": "v24.18.0",
+      "platform": "linux",
+      "architecture": "x64"
+    }
+  },
+  "reproduction": {
+    "evidenceCommand": "TOPOLOGY_WINDOWS_BROWSER='<mounted-windows-chrome.exe>' pnpm probe:topology --output docs/evidence/issue-2-topology-wsl2.json"
+  },
+  "acceptanceStatus": "pass",
+  "configuredEndpoints": {
+    "status": "pass",
+    "reviewListenUrl": "http://127.0.0.1:3000",
+    "reviewBrowserUrl": "http://localhost:3000",
+    "brainBaseUrl": "http://127.0.0.1:8080/v1",
+    "ttsBaseUrl": "http://127.0.0.1:8081",
+    "occupiedPortPolicy": "fail-closed"
+  },
+  "resources": {
+    "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux",
+    "distro": "Ubuntu",
+    "effectiveMemory": "57587864 kB",
+    "nodeVisibleMemoryBytes": 58969972736,
+    "effectiveSwap": "16777216 kB",
+    "cpuCount": 16,
+    "cgroupMemoryMax": "not-set",
+    "cgroupSwapMax": "not-set",
+    "gpu": {
+      "status": "visible",
+      "query": "NVIDIA GeForce RTX 5070 Ti, 16303 MiB, 610.74",
+      "dxg": true
+    },
+    "wslConfig": {
+      "detected": true,
+      "configuredMemory": "56GB",
+      "configuredSwap": "16GB"
+    },
+    "workspaceFilesystem": {
+      "fstype": "9p",
+      "freeBytes": 1697712017408
+    },
+    "ext4HomeFilesystem": {
+      "fstype": "ext4",
+      "freeBytes": 1009793945600
+    }
+  },
+  "canonicalPaths": {
+    "absoluteLinuxConfigurationPaths": "pass",
+    "relativePosixDatabaseAssetPaths": "pass",
+    "traversalRejected": "pass",
+    "windowsSyntaxRejected": "pass",
+    "canonicalRootResolved": "pass",
+    "symlinkEscapeRejected": "pass",
+    "nonexistentAssetAncestorContained": "pass"
+  },
+  "sqlite": {
+    "ext4": {
+      "label": "wsl-ext4",
+      "filesystem": {
+        "expectedPlacement": "WSL ext4",
+        "verifiedFstype": "ext4"
+      },
+      "journalMode": "wal",
+      "rollbackJournalMode": "delete",
+      "walJournalMode": "wal",
+      "busyWaitMilliseconds": 326,
+      "durationMilliseconds": 600,
+      "checks": {
+        "locking": "pass",
+        "journalPersistence": "pass",
+        "busyTimeout": "pass",
+        "onlineBackupWithIntegrityCheck": "pass",
+        "closedDatabaseAtomicReplacement": "pass",
+        "uncommittedRollbackJournalCrash": "pass",
+        "committedWalCrashRecovery": "pass",
+        "integrityChecks": "pass"
+      }
+    },
+    "mountedWindows": {
+      "status": "pass",
+      "result": {
+        "label": "mounted-windows-volume",
+        "filesystem": {
+          "expectedPlacement": "mounted Windows DrvFS",
+          "verifiedFstype": "9p"
+        },
+        "journalMode": "wal",
+        "rollbackJournalMode": "delete",
+        "walJournalMode": "wal",
+        "busyWaitMilliseconds": 316,
+        "durationMilliseconds": 787,
+        "checks": {
+          "locking": "pass",
+          "journalPersistence": "pass",
+          "busyTimeout": "pass",
+          "onlineBackupWithIntegrityCheck": "pass",
+          "closedDatabaseAtomicReplacement": "pass",
+          "uncommittedRollbackJournalCrash": "pass",
+          "committedWalCrashRecovery": "pass",
+          "integrityChecks": "pass"
+        }
+      }
+    }
+  },
+  "directLoopback": {
+    "status": "pass",
+    "mode": "host-acceptance",
+    "configuredEndpoints": [
+      {
+        "service": "review",
+        "listenUrl": "http://127.0.0.1:3000",
+        "browserUrl": "http://localhost:3000"
+      },
+      {
+        "service": "brain",
+        "listenUrl": "http://127.0.0.1:8080",
+        "baseUrl": "http://127.0.0.1:8080/v1"
+      },
+      {
+        "service": "tts",
+        "listenUrl": "http://127.0.0.1:8081",
+        "baseUrl": "http://127.0.0.1:8081"
+      }
+    ],
+    "fixedPorts": true,
+    "collisionFailedClosed": true,
+    "restartReusedConfiguredReviewPort": true,
+    "finalListeners": [
+      {
+        "service": "review",
+        "listenUrl": "http://127.0.0.1:3000",
+        "loopbackOnly": true
+      },
+      {
+        "service": "brain",
+        "listenUrl": "http://127.0.0.1:8080",
+        "loopbackOnly": true
+      },
+      {
+        "service": "tts",
+        "listenUrl": "http://127.0.0.1:8081",
+        "loopbackOnly": true
+      }
+    ],
+    "finalLan": {
+      "addressCount": 1,
+      "services": [
+        "review",
+        "brain",
+        "tts"
+      ],
+      "attempts": 3,
+      "allUnavailable": true
+    },
+    "runtimeManifest": {
+      "atomicReadBack": "pass",
+      "generationAdvancedOnRestart": true,
+      "effectiveEndpointsRecorded": true,
+      "ownerTokenRecordedAtRuntimeOnly": true,
+      "processIdentityRecorded": true
+    },
+    "httpBoundarySecurity": {
+      "exactHostAllowlist": "pass",
+      "exactOriginAllowlist": "pass",
+      "wildcardCorsAbsent": "pass",
+      "csrfRequiredForStateChanges": "pass",
+      "modelBrowserOriginsRejected": "pass",
+      "modelCorsAbsent": "pass"
+    },
+    "processOwnership": {
+      "ownerTokenSignaledByIpcAndHttp": true,
+      "pidStartExecutableAndCommandIdentityRecorded": true,
+      "executableMismatchRejected": true,
+      "gracefulStop": "pass",
+      "staleRecordRejected": true
+    },
+    "browser": {
+      "status": "pass",
+      "browserInvoked": true,
+      "browserVersion": "150.0.7871.186",
+      "browserUrl": "http://localhost:3000",
+      "method": "direct Windows Chrome headless screenshot; no shell wrapper"
+    },
+    "windowsHostNetwork": {
+      "status": "pass",
+      "toolsInvokedDirectlyWithoutShellWrapper": true,
+      "allConfiguredServicesLocalhostSucceeded": true,
+      "configuredServiceCount": 3,
+      "localhostSucceededServiceCount": 3,
+      "addressFamilies": {
+        "ipv4": {
+          "status": "tested",
+          "nonLoopbackAddressCount": 2
+        },
+        "ipv6": {
+          "status": "tested",
+          "routableNonLoopbackAddressCount": 3
+        }
+      },
+      "serviceMatrix": [
+        {
+          "service": "review",
+          "configuredPort": 3000,
+          "ipv4AddressCount": 2,
+          "ipv4FailedAttemptCount": 2,
+          "ipv6AddressCount": 3,
+          "ipv6FailedAttemptCount": 3,
+          "allAddressAttemptsUnavailable": true
+        },
+        {
+          "service": "brain",
+          "configuredPort": 8080,
+          "ipv4AddressCount": 2,
+          "ipv4FailedAttemptCount": 2,
+          "ipv6AddressCount": 3,
+          "ipv6FailedAttemptCount": 3,
+          "allAddressAttemptsUnavailable": true
+        },
+        {
+          "service": "tts",
+          "configuredPort": 8081,
+          "ipv4AddressCount": 2,
+          "ipv4FailedAttemptCount": 2,
+          "ipv6AddressCount": 3,
+          "ipv6FailedAttemptCount": 3,
+          "allAddressAttemptsUnavailable": true
+        }
+      ],
+      "totalMatrixAttemptCount": 15,
+      "failedMatrixAttemptCount": 15,
+      "allConfiguredServicesUnavailableOnAllWindowsHostAddresses": true,
+      "windowsCurlVersion": "curl 8.20.0 (Windows) libcurl/8.20.0 Schannel zlib/1.3.1 WinIDN WinLDAP",
+      "ownerTokenObservedOnlyInRuntime": true
+    }
+  },
+  "deferredOption": {
+    "note": "Portless may be reconsidered after the core runtime is stable.",
+    "currentDependency": false,
+    "currentAcceptanceRequirement": false
+  },
+  "redaction": {
+    "userPaths": "redacted",
+    "hostSpecificIpAddresses": "redacted; configured loopback endpoints retained",
+    "processIds": "redacted",
+    "ownerTokens": "redacted",
+    "temporaryPaths": "redacted",
+    "fullWslConfig": "redacted"
+  }
+}
