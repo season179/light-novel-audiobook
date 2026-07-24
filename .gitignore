@@ -5,6 +5,7 @@ dist/
 .output/
 coverage/
 *.tsbuildinfo
+.topology-probe-*/
 
 # Tool caches
 .tanstack/

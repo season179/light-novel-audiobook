@@ -66,6 +66,10 @@ pnpm check
 pnpm build
 ```
 
+The WSL2 topology integration checks can also be run directly with `pnpm test:topology`.
+`pnpm probe:topology` captures repeatable filesystem, SQLite, networking, process, and resource
+evidence; see [`docs/adr/0001-wsl2-runtime-topology.md`](adr/0001-wsl2-runtime-topology.md).
+
 `pnpm check` runs the environment preflight, Biome formatting/lint/import checks, verifies that
 the normal `tsc` command is TypeScript 7, checks the strict compiler options, typechecks every
 workspace package, and runs the test suite. CI repeats these commands on native Linux with Node

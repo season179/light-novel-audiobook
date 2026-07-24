@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-24T13:35:42.169Z",
+  "command": "pnpm probe:topology",
+  "nativeToolchain": {
+    "node": "v24.18.0",
+    "executable": "/home/windows_11/.local/share/light-novel-audiobook/toolchain/node-v24.18.0-linux-x64/bin/node",
+    "platform": "linux",
+    "architecture": "x64"
+  },
+  "resources": {
+    "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux",
+    "distro": "Ubuntu",
+    "effectiveMemory": "57587864 kB",
+    "nodeVisibleMemoryBytes": 58969972736,
+    "effectiveSwap": "16777216 kB",
+    "cpuCount": 16,
+    "cgroupMemoryMax": "not-set",
+    "cgroupSwapMax": "not-set",
+    "gpu": {
+      "status": "visible",
+      "query": "NVIDIA GeForce RTX 5070 Ti, 16303 MiB, 610.74",
+      "dxg": true
+    },
+    "wslConfig": {
+      "path": "/mnt/c/Users/WINDOWS 11/.wslconfig",
+      "content": "[wsl2]\nmemory=56GB\nswap=16GB"
+    },
+    "workspace": {
+      "path": "/mnt/c/Users/WINDOWS 11/Projects/light-novel-audiobook-issue-2",
+      "mount": "/mnt/c C:\\    9p     rw,noatime,aname=drvfs;path=C:\\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client,msize=65536,trans=fd,rfd=13,wfd=13",
+      "disk": "C:\\            9p    1.9T  276G  1.6T  15% /mnt/c"
+    },
+    "ext4Home": {
+      "path": "/home/windows_11",
+      "mount": "/      /dev/sdd ext4   rw,relatime,discard,errors=remount-ro,data=ordered",
+      "disk": "/dev/sdd       ext4 1007G   16G  941G   2% /"
+    }
+  },
+  "canonicalPaths": {
+    "absoluteLinuxConfigurationPaths": "pass",
+    "relativePosixDatabaseAssetPaths": "pass",
+    "traversalRejected": "pass",
+    "WindowsSyntaxRejected": "pass"
+  },
+  "sqlite": [
+    {
+      "label": "wsl-ext4",
+      "root": "/home/windows_11/.cache/light-novel-audiobook/probes",
+      "journalMode": "wal",
+      "rollbackJournalMode": "delete",
+      "walJournalMode": "wal",
+      "busyWaitMilliseconds": 350,
+      "durationMilliseconds": 604,
+      "checks": {
+        "locking": "pass",
+        "journalPersistence": "pass",
+        "busyTimeout": "pass",
+        "onlineBackup": "pass",
+        "closedDatabaseAtomicReplacement": "pass",
+        "uncommittedRollbackJournalCrash": "pass",
+        "committedWalCrashRecovery": "pass",
+        "integrityChecks": "pass"
+      }
+    },
+    {
+      "label": "mounted-windows-volume",
+      "root": "/mnt/c/Users/WINDOWS 11/Projects/light-novel-audiobook-issue-2",
+      "journalMode": "wal",
+      "rollbackJournalMode": "delete",
+      "walJournalMode": "wal",
+      "busyWaitMilliseconds": 315,
+      "durationMilliseconds": 771,
+      "checks": {
+        "locking": "pass",
+        "journalPersistence": "pass",
+        "busyTimeout": "pass",
+        "onlineBackup": "pass",
+        "closedDatabaseAtomicReplacement": "pass",
+        "uncommittedRollbackJournalCrash": "pass",
+        "committedWalCrashRecovery": "pass",
+        "integrityChecks": "pass"
+      }
+    }
+  ],
+  "portless": {
+    "portlessVersion": "0.15.4",
+    "proxy": {
+      "pid": 43648,
+      "startTimeTicks": "1445977",
+      "port": 45667,
+      "tls": false,
+      "stateDirectory": "/home/windows_11/.cache/topology-portless-jnt4iZ/portless",
+      "listeners": [
+        "LISTEN 0      511         127.0.0.1:43793 0.0.0.0:* users:((\"MainThread\",pid=43657,fd=22))",
+        "LISTEN 0      511         127.0.0.1:44949 0.0.0.0:* users:((\"MainThread\",pid=43679,fd=22))",
+        "LISTEN 0      511         127.0.0.1:44817 0.0.0.0:* users:((\"MainThread\",pid=43702,fd=22))",
+        "LISTEN 0      511         127.0.0.1:45667 0.0.0.0:* users:((\"MainThread\",pid=43648,fd=23))",
+        "LISTEN 0      511             [::1]:45667    [::]:* users:((\"MainThread\",pid=43648,fd=22))"
+      ]
+    },
+    "routes": {
+      "audiobook": {
+        "service": "audiobook",
+        "ownerToken": "20eb4640-b7a4-43a1-8657-5e5cb55927a1",
+        "pid": 43730,
+        "startTimeTicks": "1446077",
+        "host": "127.0.0.1",
+        "port": 41743,
+        "directUrl": "http://127.0.0.1:41743",
+        "route": "http://audiobook.localhost:45667"
+      },
+      "brain": {
+        "service": "brain",
+        "ownerToken": "20eb4640-b7a4-43a1-8657-5e5cb55927a1",
+        "pid": 43679,
+        "startTimeTicks": "1446023",
+        "host": "127.0.0.1",
+        "port": 44949,
+        "directUrl": "http://127.0.0.1:44949",
+        "route": "http://brain.audiobook.localhost:45667"
+      },
+      "tts": {
+        "service": "tts",
+        "ownerToken": "20eb4640-b7a4-43a1-8657-5e5cb55927a1",
+        "pid": 43702,
+        "startTimeTicks": "1446043",
+        "host": "127.0.0.1",
+        "port": 44817,
+        "directUrl": "http://127.0.0.1:44817",
+        "route": "http://tts.audiobook.localhost:45667"
+      }
+    },
+    "routeListing": "Active routes:\n\n  http://brain.audiobook.localhost:45667  ->  localhost:44949  (alias)\n  http://tts.audiobook.localhost:45667  ->  localhost:44817  (alias)\n  http://audiobook.localhost:45667  ->  localhost:41743  (alias)",
+    "dynamicPortsDistinct": true,
+    "directAndRoutedReachability": "pass",
+    "loopbackOnly": "pass",
+    "lanChecks": [
+      {
+        "address": "172.27.141.239",
+        "port": 45667,
+        "unavailable": true
+      },
+      {
+        "address": "172.27.141.239",
+        "port": 43793,
+        "unavailable": true
+      },
+      {
+        "address": "172.27.141.239",
+        "port": 44949,
+        "unavailable": true
+      },
+      {
+        "address": "172.27.141.239",
+        "port": 44817,
+        "unavailable": true
+      }
+    ],
+    "processOwnership": {
+      "ownerTokenRecorded": true,
+      "pidAndStartTimeRecorded": true,
+      "mismatchedIdentityRejected": true,
+      "gracefulStop": "pass",
+      "staleRecordRejected": true,
+      "restartAndRouteReplacement": "pass"
+    },
+    "browser": {
+      "status": "pass",
+      "method": "headless screenshot color assertion",
+      "checks": [
+        {
+          "url": "http://audiobook.localhost:45667",
+          "status": "pass",
+          "executable": "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+          "centerPixel": [
+            18,
+            52,
+            86
+          ]
+        },
+        {
+          "url": "http://brain.audiobook.localhost:45667",
+          "status": "pass",
+          "executable": "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+          "centerPixel": [
+            52,
+            86,
+            18
+          ]
+        },
+        {
+          "url": "http://tts.audiobook.localhost:45667",
+          "status": "pass",
+          "executable": "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+          "centerPixel": [
+            86,
+            18,
+            52
+          ]
+        }
+      ]
+    }
+  }
+}

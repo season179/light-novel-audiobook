@@ -32,11 +32,15 @@ pnpm dev
 ```
 
 The review app is available at `https://audiobook.localhost`. The current worker is only a
-scaffold; model-server lifecycle management will be added with the processing pipeline.
+scaffold; model-server lifecycle management will be added with the processing pipeline. See the
+[WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the proven storage, process, and
+Portless boundaries.
 
 ## Repository boundaries
 
 - Source code, prompts, schemas, tests, and documentation belong here.
-- Books, SQLite workspaces, reference voices, and generated audio belong outside Git. From
-  WSL2, use an explicit Linux path such as `/mnt/c/Users/WINDOWS 11/Audiobooks`.
-- Model weights and inference engines belong in WSL under `/home/windows_11/models/audiobook` and `/home/windows_11/src`.
+- SQLite and runtime state belong on WSL ext4 outside Git. Large book workspaces, reference
+  voices, and generated audio may use an explicit Linux-mounted path such as
+  `/mnt/c/Users/WINDOWS 11/Audiobooks`.
+- Model weights and inference engines belong on WSL ext4 under paths such as
+  `/home/windows_11/models/audiobook` and `/home/windows_11/src`.
