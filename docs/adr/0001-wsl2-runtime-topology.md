@@ -118,7 +118,7 @@ The repeatable direct-network probe:
 6. attempts every final port through the WSL LAN address and requires all attempts to fail;
 7. invokes Windows Chrome directly, without PowerShell, CMD, or another shell wrapper, and verifies `http://localhost:3000` renders the expected service response.
 
-Committed evidence is redacted: no user paths, IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
+Committed evidence is redacted: no user paths, host-specific/LAN IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. The configured `127.0.0.1` endpoints are intentionally retained. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
 
 Run the integration tests and host probe with the issue #1 toolchain:
 

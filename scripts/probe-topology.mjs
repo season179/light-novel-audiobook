@@ -720,7 +720,7 @@ export async function runTopologyProbe(options = {}) {
     },
     redaction: {
       userPaths: 'redacted',
-      ipAddresses: 'redacted',
+      hostSpecificIpAddresses: 'redacted; configured loopback endpoints retained',
       processIds: 'redacted',
       ownerTokens: 'redacted',
       temporaryPaths: 'redacted',
