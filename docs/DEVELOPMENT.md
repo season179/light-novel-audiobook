@@ -20,9 +20,10 @@ pnpm build
 ```
 
 The installer downloads the Node version pinned in `.node-version` from nodejs.org, verifies
-its published SHA-256 checksum, and activates the pnpm version pinned by `packageManager`. It
-installs under the current WSL user's data directory; it does not modify Windows or shell
-startup files.
+its published SHA-256 checksum, and activates the pnpm version pinned by `packageManager`.
+Repeated runs validate the cached Node version, architecture, and binary integrity and replace
+an incomplete or stale target. The toolchain installs under the current WSL user's data
+directory; it does not modify Windows or shell startup files.
 
 Add the following line to the WSL shell profile if the toolchain should be selected in future
 shells:

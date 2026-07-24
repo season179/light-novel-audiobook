@@ -19,41 +19,62 @@ export function isMountedWindowsPath(value) {
   return /^\/mnt\/[a-z](?:\/|$)/i.test(value) || /^[a-z]:[\\/]/i.test(value)
 }
 
-export function expectedNativeMarkers(cpuArchitecture, libc = 'gnu') {
+function nativePackageFamilies(cpuArchitecture, libc = 'gnu') {
   const architectureNames = { arm64: 'arm64', x64: 'x64' }
   const packageArchitecture = architectureNames[cpuArchitecture]
   if (!packageArchitecture) return []
 
   return [
-    `@biomejs+cli-linux-${packageArchitecture}@`,
-    `@typescript+typescript-linux-${packageArchitecture}@`,
-    `@rolldown+binding-linux-${packageArchitecture}-${libc}@`,
+    {
+      family: '@biomejs/cli',
+      marker: `@biomejs+cli-linux-${packageArchitecture}${libc === 'musl' ? '-musl' : ''}@`,
+      matches: (entry) => entry.startsWith('@biomejs+cli-'),
+    },
+    {
+      family: '@typescript/typescript',
+      marker: `@typescript+typescript-linux-${packageArchitecture}@`,
+      matches: (entry) => entry.startsWith('@typescript+typescript-'),
+    },
+    {
+      family: '@rolldown/binding',
+      marker: `@rolldown+binding-linux-${packageArchitecture}-${libc}@`,
+      matches: (entry) => entry.startsWith('@rolldown+binding-'),
+    },
+    {
+      family: '@esbuild',
+      marker: `@esbuild+linux-${packageArchitecture}@`,
+      matches: (entry) => entry.startsWith('@esbuild+'),
+    },
+    {
+      family: 'lightningcss',
+      marker: `lightningcss-linux-${packageArchitecture}-${libc}@`,
+      matches: (entry) => entry.startsWith('lightningcss-'),
+    },
   ]
+}
+
+export function expectedNativeMarkers(cpuArchitecture, libc = 'gnu') {
+  return nativePackageFamilies(cpuArchitecture, libc).map(({ marker }) => marker)
 }
 
 export function dependencyTreeErrors(entries, cpuArchitecture, libc = 'gnu', required = true) {
   const errors = []
-  const expectedMarkers = expectedNativeMarkers(cpuArchitecture, libc)
+  const families = nativePackageFamilies(cpuArchitecture, libc)
 
-  if (expectedMarkers.length === 0) {
+  if (families.length === 0) {
     errors.push(`unsupported Linux CPU architecture: ${cpuArchitecture}`)
     return errors
   }
 
-  const windowsEntries = entries.filter((entry) =>
-    /(?:cli|typescript|binding)-win32-(?:arm64|x64)/.test(entry),
-  )
-  if (windowsEntries.length > 0) {
-    errors.push(
-      'node_modules contains Windows native packages; remove all workspace node_modules directories and reinstall from WSL2',
-    )
-  }
-
-  if (required) {
-    for (const marker of expectedMarkers) {
-      if (!entries.some((entry) => entry.startsWith(marker))) {
-        errors.push(`node_modules is missing the native Linux package matching ${marker}*`)
-      }
+  for (const { family, marker, matches } of families) {
+    const mismatches = entries.filter((entry) => matches(entry) && !entry.startsWith(marker))
+    if (mismatches.length > 0) {
+      errors.push(
+        `${family} contains native packages for another platform: ${mismatches.join(', ')}`,
+      )
+    }
+    if (required && !entries.some((entry) => entry.startsWith(marker))) {
+      errors.push(`node_modules is missing the native Linux package matching ${marker}*`)
     }
   }
 
@@ -107,12 +128,24 @@ export function inspectToolchain({ requireDependencies = false } = {}) {
   }
 
   const pnpmPath = findPnpm()
+  let pnpmRealPath = ''
   if (!pnpmPath) {
     errors.push('native Linux pnpm is not available on PATH')
-  } else if (isMountedWindowsPath(pnpmPath) || /\.(?:cmd|exe)$/i.test(pnpmPath)) {
-    errors.push(`pnpm resolves to a Windows tool instead of native WSL2 pnpm: ${pnpmPath}`)
-  } else if (packageManagerMatch) {
-    const result = spawnSync(pnpmPath, ['--version'], { encoding: 'utf8', env: process.env })
+  } else {
+    try {
+      pnpmRealPath = realpathSync(pnpmPath)
+    } catch (error) {
+      errors.push(`pnpm path cannot be resolved: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+
+  if (
+    pnpmRealPath &&
+    (isMountedWindowsPath(pnpmRealPath) || /\.(?:cmd|exe)$/i.test(pnpmRealPath))
+  ) {
+    errors.push(`pnpm resolves to a Windows tool instead of native WSL2 pnpm: ${pnpmRealPath}`)
+  } else if (pnpmRealPath && packageManagerMatch) {
+    const result = spawnSync(pnpmRealPath, ['--version'], { encoding: 'utf8', env: process.env })
     const actualVersion = result.status === 0 ? result.stdout.trim() : ''
     const expectedVersion = packageManagerMatch[1]
     if (actualVersion !== expectedVersion) {
@@ -133,7 +166,7 @@ export function inspectToolchain({ requireDependencies = false } = {}) {
     errors.push('node_modules is missing; run pnpm install --frozen-lockfile from WSL2')
   }
 
-  return { errors, isWsl, pnpmPath }
+  return { errors, isWsl, pnpmPath: pnpmRealPath || pnpmPath }
 }
 
 function main() {
