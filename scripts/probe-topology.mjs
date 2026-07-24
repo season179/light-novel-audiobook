@@ -8,13 +8,15 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statfsSync,
 } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
+import { isIP } from 'node:net'
 import { homedir, networkInterfaces, totalmem } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inflateSync } from 'node:zlib'
 import {
@@ -30,8 +32,8 @@ import {
 } from './topology/core.mjs'
 import { probeSqliteLocation } from './topology/sqlite-probe.mjs'
 
-export const TOPOLOGY_PROBE_VERSION = 4
-export const TOPOLOGY_EVIDENCE_SCHEMA_VERSION = 4
+export const TOPOLOGY_PROBE_VERSION = 5
+export const TOPOLOGY_EVIDENCE_SCHEMA_VERSION = 5
 export const DEFAULT_ENDPOINTS = Object.freeze({
   review: Object.freeze({
     service: 'review',
@@ -447,21 +449,50 @@ function browserVersionFromInstall(browserPath) {
   return versions.at(-1) ?? 'installed-version-undiscovered'
 }
 
-function probeWindowsHostForwarding(reviewEndpoint, ownerToken) {
+function routableWindowsAddress(address, family) {
+  if (family === 'ipv4') {
+    if (isIP(address) !== 4) return false
+    const [first] = address.split('.').map(Number)
+    return first !== 0 && first !== 127 && first < 224
+  }
+  if (isIP(address) !== 6) return false
+  const normalized = address.toLowerCase()
+  const firstGroup = Number.parseInt(normalized.split(':')[0] || '0', 16)
+  const linkLocal = firstGroup >= 0xfe80 && firstGroup <= 0xfebf
+  return normalized !== '::' && normalized !== '::1' && !linkLocal && !normalized.startsWith('ff')
+}
+
+export function parseWindowsHostAddresses(ipconfigOutput) {
+  const addresses = { ipv4: new Set(), ipv6: new Set() }
+  for (const line of ipconfigOutput.split(/\r?\n/)) {
+    const ipv4Match = line.match(/\bIPv4 Address\b[^:]*:\s*(\S+)/i)
+    const ipv6Match = line.match(/\bIPv6 Address\b[^:]*:\s*(\S+)/i)
+    for (const [family, match] of [
+      ['ipv4', ipv4Match],
+      ['ipv6', ipv6Match],
+    ]) {
+      const address = match?.[1]?.replace(/\(.*$/, '').replace(/%\d+$/, '')
+      if (address && routableWindowsAddress(address, family)) addresses[family].add(address)
+    }
+  }
+  return {
+    ipv4: [...addresses.ipv4],
+    ipv6: [...addresses.ipv6],
+  }
+}
+
+function probeWindowsHostForwarding(endpoints, ownerToken) {
   const ipconfigPath = '/mnt/c/Windows/System32/ipconfig.exe'
   const curlPath = '/mnt/c/Windows/System32/curl.exe'
   assert.ok(existsSync(ipconfigPath), 'Windows ipconfig.exe was not found')
   assert.ok(existsSync(curlPath), 'Windows curl.exe was not found')
   const ipconfig = spawnSync(ipconfigPath, [], { encoding: 'utf8', timeout: 15_000 })
   assert.equal(ipconfig.status, 0, ipconfig.error?.message ?? ipconfig.stderr)
-  const addresses = [
-    ...new Set(
-      [...ipconfig.stdout.matchAll(/IPv4 Address[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})/gi)]
-        .map((match) => match[1])
-        .filter((address) => address && !address.startsWith('127.')),
-    ),
-  ]
-  assert.ok(addresses.length > 0, 'ipconfig.exe reported no non-loopback Windows IPv4 addresses')
+  const addressesByFamily = parseWindowsHostAddresses(ipconfig.stdout)
+  assert.ok(
+    addressesByFamily.ipv4.length > 0,
+    'ipconfig.exe reported no non-loopback Windows IPv4 addresses',
+  )
 
   const curlArguments = [
     '--silent',
@@ -473,36 +504,120 @@ function probeWindowsHostForwarding(reviewEndpoint, ownerToken) {
     '--max-time',
     '3',
   ]
-  const localhost = spawnSync(curlPath, [...curlArguments, reviewEndpoint.browserUrl], {
-    encoding: 'utf8',
-    timeout: 10_000,
-  })
-  assert.equal(localhost.status, 0, localhost.error?.message ?? localhost.stderr)
-  assert.ok(localhost.stdout.includes('topology-service:review'))
-
-  for (const address of addresses) {
-    const lanAttempt = spawnSync(
-      curlPath,
-      [...curlArguments, `http://${address}:${reviewEndpoint.port}`],
-      { encoding: 'utf8', timeout: 10_000 },
-    )
-    assert.notEqual(
-      lanAttempt.status,
-      0,
-      'review endpoint was reachable through a Windows LAN IPv4',
-    )
+  const endpointList = Object.values(endpoints)
+  for (const endpoint of endpointList) {
+    const localhostUrl = endpoint.service === 'review' ? endpoint.browserUrl : endpoint.listenUrl
+    const localhost = spawnSync(curlPath, [...curlArguments, localhostUrl], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    assert.equal(localhost.status, 0, localhost.error?.message ?? localhost.stderr)
+    assert.ok(localhost.stdout.includes(`topology-service:${endpoint.service}`))
   }
+
+  const serviceMatrix = endpointList.map((endpoint) => ({
+    service: endpoint.service,
+    configuredPort: endpoint.port,
+    ipv4AddressCount: addressesByFamily.ipv4.length,
+    ipv4FailedAttemptCount: 0,
+    ipv6AddressCount: addressesByFamily.ipv6.length,
+    ipv6FailedAttemptCount: 0,
+    allAddressAttemptsUnavailable: false,
+  }))
+  for (const [family, addresses] of Object.entries(addressesByFamily)) {
+    for (const address of addresses) {
+      for (const [index, endpoint] of endpointList.entries()) {
+        const host = family === 'ipv6' ? `[${address}]` : address
+        const lanAttempt = spawnSync(
+          curlPath,
+          [...curlArguments, `http://${host}:${endpoint.port}/`],
+          { encoding: 'utf8', timeout: 10_000 },
+        )
+        assert.notEqual(
+          lanAttempt.status,
+          0,
+          `${endpoint.service} endpoint was reachable through a Windows ${family.toUpperCase()} address`,
+        )
+        serviceMatrix[index][`${family}FailedAttemptCount`] += 1
+      }
+    }
+  }
+  for (const row of serviceMatrix) {
+    row.allAddressAttemptsUnavailable =
+      row.ipv4FailedAttemptCount === row.ipv4AddressCount &&
+      row.ipv6FailedAttemptCount === row.ipv6AddressCount
+    assert.equal(row.allAddressAttemptsUnavailable, true)
+  }
+  const totalAddressCount = addressesByFamily.ipv4.length + addressesByFamily.ipv6.length
+  const totalMatrixAttemptCount = totalAddressCount * endpointList.length
+  const failedMatrixAttemptCount = serviceMatrix.reduce(
+    (total, row) => total + row.ipv4FailedAttemptCount + row.ipv6FailedAttemptCount,
+    0,
+  )
+  assert.equal(failedMatrixAttemptCount, totalMatrixAttemptCount)
+
   const version = spawnSync(curlPath, ['--version'], { encoding: 'utf8', timeout: 10_000 })
   return {
     status: 'pass',
     toolsInvokedDirectlyWithoutShellWrapper: true,
-    localhostSucceeded: true,
-    nonLoopbackAddressCount: addresses.length,
-    failedLanAddressCount: addresses.length,
-    allWindowsLanAddressesUnavailable: true,
+    allConfiguredServicesLocalhostSucceeded: true,
+    configuredServiceCount: endpointList.length,
+    localhostSucceededServiceCount: endpointList.length,
+    addressFamilies: {
+      ipv4: {
+        status: 'tested',
+        nonLoopbackAddressCount: addressesByFamily.ipv4.length,
+      },
+      ipv6:
+        addressesByFamily.ipv6.length > 0
+          ? {
+              status: 'tested',
+              routableNonLoopbackAddressCount: addressesByFamily.ipv6.length,
+            }
+          : {
+              status: 'unavailable',
+              routableNonLoopbackAddressCount: 0,
+              reason: 'ipconfig.exe reported no routable non-loopback IPv6 addresses.',
+            },
+    },
+    serviceMatrix,
+    totalMatrixAttemptCount,
+    failedMatrixAttemptCount,
+    allConfiguredServicesUnavailableOnAllWindowsHostAddresses: true,
     windowsCurlVersion: version.stdout.split('\n')[0]?.trim() ?? 'unknown',
     ownerTokenObservedOnlyInRuntime: Boolean(ownerToken),
   }
+}
+
+function pathIsInside(parent, candidate) {
+  const pathFromParent = relative(parent, candidate)
+  return pathFromParent === '' || (!pathFromParent.startsWith('..') && !isAbsolute(pathFromParent))
+}
+
+export function assertBrowserTempRootOutsideRepository(tempRoot, repositoryPath = repositoryRoot) {
+  const resolvedRepository = resolve(repositoryPath)
+  const resolvedTempRoot = resolve(tempRoot)
+  assert.equal(
+    pathIsInside(resolvedRepository, resolvedTempRoot),
+    false,
+    'Windows browser temp root must be outside the repository',
+  )
+  if (existsSync(repositoryPath)) {
+    let existingAncestor = resolvedTempRoot
+    while (!existsSync(existingAncestor) && dirname(existingAncestor) !== existingAncestor) {
+      existingAncestor = dirname(existingAncestor)
+    }
+    const resolvedThroughExistingAncestor = resolve(
+      realpathSync(existingAncestor),
+      relative(existingAncestor, resolvedTempRoot),
+    )
+    assert.equal(
+      pathIsInside(realpathSync(repositoryPath), resolvedThroughExistingAncestor),
+      false,
+      'Windows browser temp root must resolve outside the repository',
+    )
+  }
+  return resolvedTempRoot
 }
 
 function probeWindowsBrowser(browserPath, browserUrl) {
@@ -514,8 +629,10 @@ function probeWindowsBrowser(browserPath, browserUrl) {
     }
   }
   assert.ok(existsSync(browserPath), 'configured Windows browser does not exist')
-  const windowsTempRoot = process.env.TOPOLOGY_WINDOWS_TEMP_ROOT ?? '/mnt/c/Temp'
+  const configuredTempRoot = process.env.TOPOLOGY_WINDOWS_TEMP_ROOT ?? '/mnt/c/Temp'
+  const windowsTempRoot = assertBrowserTempRootOutsideRepository(configuredTempRoot)
   mkdirSync(windowsTempRoot, { recursive: true })
+  assertBrowserTempRootOutsideRepository(windowsTempRoot)
   assertMountedWindowsRoot(windowsTempRoot)
   const browserDirectory = mkdtempSync(join(windowsTempRoot, 'audiobook-topology-browser-'))
   const screenshotPath = join(browserDirectory, 'review.png')
@@ -648,7 +765,7 @@ export async function probeDirectEndpoints({
 
     const browser = probeWindowsBrowser(browserPath, endpoints.review.browserUrl)
     const windowsHostNetwork = browserPath
-      ? probeWindowsHostForwarding(endpoints.review, ownerToken)
+      ? probeWindowsHostForwarding(endpoints, ownerToken)
       : {
           status: 'not-run',
           reason: 'Windows host checks run only during the explicit browser host probe.',

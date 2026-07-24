@@ -7,9 +7,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  assertBrowserTempRootOutsideRepository,
   configuredEndpointCheck,
   currentProbeSourceHash,
   endpointSet,
+  parseWindowsHostAddresses,
   probeDirectEndpoints,
   runTopologyProbe,
   startFixtureService,
@@ -141,6 +143,40 @@ test('SQLite safety behavior passes only after mounted-Windows filesystem verifi
   assert.ok(Object.values(result.checks).every((status) => status === 'pass'))
 })
 
+test('Windows address parsing includes non-loopback IPv4 and routable IPv6 addresses', () => {
+  const addresses = parseWindowsHostAddresses(`
+    IPv4 Address. . . . . . . . . . . : 192.168.10.20(Preferred)
+    IPv4 Address. . . . . . . . . . . : 127.0.0.1(Preferred)
+    IPv4 Address. . . . . . . . . . . : 169.254.4.5(Preferred)
+    IPv6 Address. . . . . . . . . . . : 2001:db8::20(Preferred)
+    Temporary IPv6 Address. . . . . . : fd00::30(Preferred)
+    Link-local IPv6 Address . . . . . : fe80::1%12(Preferred)
+    IPv6 Address. . . . . . . . . . . : ::1(Preferred)
+  `)
+  assert.deepEqual(addresses.ipv4, ['192.168.10.20', '169.254.4.5'])
+  assert.deepEqual(addresses.ipv6, ['2001:db8::20', 'fd00::30'])
+})
+
+test('browser temp roots are external and the exact artifact prefix is ignored', async () => {
+  assert.throws(() =>
+    assertBrowserTempRootOutsideRepository(join(process.cwd(), 'browser-temp-test')),
+  )
+  assert.doesNotThrow(() => assertBrowserTempRootOutsideRepository(tmpdir()))
+  const externalRoot = await mkdtemp(join(tmpdir(), 'browser-temp-root-'))
+  try {
+    const linkIntoRepository = join(externalRoot, 'repository-link')
+    await symlink(process.cwd(), linkIntoRepository)
+    assert.throws(() =>
+      assertBrowserTempRootOutsideRepository(join(linkIntoRepository, 'not-created')),
+    )
+    assert.equal(existsSync(join(process.cwd(), 'not-created')), false)
+  } finally {
+    await rm(externalRoot, { recursive: true, force: true })
+  }
+  const gitignore = await readFile(join(process.cwd(), '.gitignore'), 'utf8')
+  assert.match(gitignore, /^audiobook-topology-browser-\*\/$/m)
+})
+
 test('configured defaults are direct, fixed, loopback-only, and strict-port', () => {
   const result = configuredEndpointCheck()
   assert.equal(result.status, 'pass')
@@ -227,14 +263,44 @@ test('committed host evidence is current, accepted, and redacted', async () => {
   assert.equal(evidence.acceptanceStatus, 'pass')
   assert.equal(evidence.directLoopback.browser.status, 'pass')
   assert.equal(evidence.directLoopback.browser.browserInvoked, true)
-  assert.equal(evidence.directLoopback.windowsHostNetwork.status, 'pass')
-  assert.equal(evidence.directLoopback.windowsHostNetwork.localhostSucceeded, true)
-  assert.equal(evidence.directLoopback.windowsHostNetwork.allWindowsLanAddressesUnavailable, true)
-  assert.ok(evidence.directLoopback.windowsHostNetwork.nonLoopbackAddressCount > 0)
-  assert.equal(
-    evidence.directLoopback.windowsHostNetwork.failedLanAddressCount,
-    evidence.directLoopback.windowsHostNetwork.nonLoopbackAddressCount,
+  const windowsNetwork = evidence.directLoopback.windowsHostNetwork
+  assert.equal(windowsNetwork.status, 'pass')
+  assert.equal(windowsNetwork.allConfiguredServicesLocalhostSucceeded, true)
+  assert.equal(windowsNetwork.configuredServiceCount, 3)
+  assert.equal(windowsNetwork.localhostSucceededServiceCount, 3)
+  assert.equal(windowsNetwork.allConfiguredServicesUnavailableOnAllWindowsHostAddresses, true)
+  assert.ok(windowsNetwork.addressFamilies.ipv4.nonLoopbackAddressCount > 0)
+  assert.match(windowsNetwork.addressFamilies.ipv6.status, /^(?:tested|unavailable)$/)
+  if (windowsNetwork.addressFamilies.ipv6.status === 'unavailable') {
+    assert.equal(windowsNetwork.addressFamilies.ipv6.routableNonLoopbackAddressCount, 0)
+    assert.match(windowsNetwork.addressFamilies.ipv6.reason, /no routable non-loopback IPv6/i)
+  }
+  assert.deepEqual(
+    windowsNetwork.serviceMatrix.map(({ service, configuredPort }) => ({
+      service,
+      configuredPort,
+    })),
+    [
+      { service: 'review', configuredPort: 3000 },
+      { service: 'brain', configuredPort: 8080 },
+      { service: 'tts', configuredPort: 8081 },
+    ],
   )
+  const totalAddressCount =
+    windowsNetwork.addressFamilies.ipv4.nonLoopbackAddressCount +
+    windowsNetwork.addressFamilies.ipv6.routableNonLoopbackAddressCount
+  assert.equal(windowsNetwork.totalMatrixAttemptCount, totalAddressCount * 3)
+  assert.equal(windowsNetwork.failedMatrixAttemptCount, windowsNetwork.totalMatrixAttemptCount)
+  for (const row of windowsNetwork.serviceMatrix) {
+    assert.equal(row.ipv4AddressCount, windowsNetwork.addressFamilies.ipv4.nonLoopbackAddressCount)
+    assert.equal(row.ipv4FailedAttemptCount, row.ipv4AddressCount)
+    assert.equal(
+      row.ipv6AddressCount,
+      windowsNetwork.addressFamilies.ipv6.routableNonLoopbackAddressCount,
+    )
+    assert.equal(row.ipv6FailedAttemptCount, row.ipv6AddressCount)
+    assert.equal(row.allAddressAttemptsUnavailable, true)
+  }
   assert.equal(evidence.redaction.userPaths, 'redacted')
   assert.doesNotMatch(serialized, /\/mnt\/[a-z]\/Users\//i)
   assert.doesNotMatch(serialized, /"(?:pid|ownerToken|runtimeDirectory|executablePath)"/)

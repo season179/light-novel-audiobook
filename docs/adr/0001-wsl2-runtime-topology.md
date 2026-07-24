@@ -121,9 +121,9 @@ The repeatable direct-network probe:
 7. attempts every final port through the WSL LAN address and requires all attempts to fail;
 8. proves exact Host/Origin, restrictive CORS, anti-CSRF, and model-browser isolation behavior;
 9. invokes Windows Chrome directly, without PowerShell, CMD, or another shell wrapper, and verifies `http://localhost:3000` renders the expected service response;
-10. invokes Windows `ipconfig.exe` and `curl.exe` directly, proves Windows `localhost` succeeds, and requires every non-loopback Windows IPv4 address reported by `ipconfig.exe` to fail. Only redacted counts/status are committed.
+10. invokes Windows `ipconfig.exe` and `curl.exe` directly, proves all three configured services succeed through Windows localhost forwarding, and requires every configured service port to fail at the connection level through every non-loopback Windows IPv4 address and every routable non-loopback Windows IPv6 address reported by `ipconfig.exe`. Evidence records only a redacted address-family/service matrix and counts. If `ipconfig.exe` reports no routable non-loopback IPv6 address, evidence explicitly records IPv6 as unavailable and why.
 
-Committed evidence is redacted: no user paths, host-specific/LAN IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. The configured `127.0.0.1` endpoints are intentionally retained. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
+Browser profiles and screenshots are created only under an external mounted-Windows temporary root; a root lexically inside or resolving inside the repository is rejected. The exact artifact prefix is also defensively ignored. Committed evidence is redacted: no user paths, host-specific/LAN IP addresses, PIDs, owner tokens, temporary paths, or full `.wslconfig` content. The configured `127.0.0.1` endpoints are intentionally retained. It retains the generating commit, probe source hash/version, browser version, configured endpoints, and reproducible command.
 
 Run the integration tests and host probe with the issue #1 toolchain:
 
