@@ -117,7 +117,7 @@ export async function probeSqliteLocation({ label, root }) {
     const backupPath = join(probeDirectory, 'backup.sqlite3')
     await backup(database, backupPath)
     const backupDatabase = openDatabase(backupPath)
-    assert.equal(scalar(backupDatabase, 'PRAGMA quick_check'), 'ok')
+    assert.equal(scalar(backupDatabase, 'PRAGMA integrity_check'), 'ok')
     assert.equal(scalar(backupDatabase, 'SELECT count(*) FROM events'), 3)
     backupDatabase.close()
     database.close()
@@ -171,7 +171,7 @@ export async function probeSqliteLocation({ label, root }) {
         locking: 'pass',
         journalPersistence: 'pass',
         busyTimeout: 'pass',
-        onlineBackup: 'pass',
+        onlineBackupWithIntegrityCheck: 'pass',
         closedDatabaseAtomicReplacement: 'pass',
         uncommittedRollbackJournalCrash: 'pass',
         committedWalCrashRecovery: 'pass',

@@ -10,24 +10,33 @@ function send(message) {
 }
 
 if (mode === 'server') {
-  const [service = 'unknown'] = arguments_
+  const [service = 'unknown', ownerToken = 'missing-owner-token'] = arguments_
   const colors = { audiobook: '#123456', brain: '#345612', tts: '#561234' }
   const server = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8')
+    response.setHeader('x-topology-owner-token', ownerToken)
     response.end(
-      `<!doctype html><html><body style="margin:0;background:${colors[service] ?? '#111111'};color:white"><h1>topology-service:${service}</h1><p>pid:${process.pid}</p></body></html>`,
+      `<!doctype html><html><body style="margin:0;background:${colors[service] ?? '#111111'};color:white"><h1>topology-service:${service}</h1></body></html>`,
     )
   })
   server.listen(0, '127.0.0.1', () => {
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('missing server address')
-    send({ type: 'ready', service, pid: process.pid, host: address.address, port: address.port })
+    send({
+      type: 'ready',
+      service,
+      ownerToken,
+      pid: process.pid,
+      host: address.address,
+      port: address.port,
+    })
   })
 
   let stopping = false
   const stop = () => {
     if (stopping) return
     stopping = true
+    send({ type: 'stopping', service, ownerToken, pid: process.pid })
     server.close(() => process.exit(0))
     setTimeout(() => process.exit(2), 2_000).unref()
   }

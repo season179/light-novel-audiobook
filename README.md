@@ -33,8 +33,8 @@ pnpm dev
 
 The review app is available at `https://audiobook.localhost`. The current worker is only a
 scaffold; model-server lifecycle management will be added with the processing pipeline. See the
-[WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the proven storage, process, and
-Portless boundaries.
+[WSL2 topology ADR](docs/adr/0001-wsl2-runtime-topology.md) for the verified storage/process
+boundaries and the remaining exact-HTTPS integration blocker.
 
 ## Repository boundaries
 

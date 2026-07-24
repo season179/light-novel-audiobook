@@ -1,29 +1,64 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync, fork, spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, networkInterfaces, totalmem } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inflateSync } from 'node:zlib'
 import {
+  assertMountedWindowsRoot,
+  assertWslExt4Root,
   atomicWriteJson,
   canonicalAbsoluteLinuxPath,
   canonicalWorkspacePath,
+  inspectFilesystem,
   processRecordIsOwned,
   readProcessIdentity,
+  resolveWorkspaceAsset,
 } from './topology/core.mjs'
 import { probeSqliteLocation } from './topology/sqlite-probe.mjs'
 
+export const TOPOLOGY_PROBE_VERSION = 2
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixturePath = join(repositoryRoot, 'scripts/topology/fixture-child.mjs')
 const portlessPath = join(repositoryRoot, 'node_modules/.bin/portless')
+const evidencePath = 'docs/evidence/issue-2-topology-wsl2.json'
+const exactHttpsUrls = [
+  'https://audiobook.localhost',
+  'https://brain.audiobook.localhost',
+  'https://tts.audiobook.localhost',
+]
+const serviceNames = ['audiobook', 'brain', 'tts']
+const routeNames = {
+  audiobook: 'audiobook',
+  brain: 'brain.audiobook',
+  tts: 'tts.audiobook',
+}
+const probeSourceFiles = [
+  'scripts/probe-topology.mjs',
+  'scripts/topology/core.mjs',
+  'scripts/topology/fixture-child.mjs',
+  'scripts/topology/sqlite-probe.mjs',
+  'scripts/test/topology.test.mjs',
+]
 
 function commandOutput(command, arguments_, options = {}) {
   return execFileSync(command, arguments_, { encoding: 'utf8', ...options }).trim()
+}
+
+function probeSourceHash() {
+  const hash = createHash('sha256')
+  for (const relativePath of [...probeSourceFiles].sort()) {
+    hash.update(relativePath)
+    hash.update('\0')
+    hash.update(readFileSync(join(repositoryRoot, relativePath)))
+    hash.update('\0')
+  }
+  return hash.digest('hex')
 }
 
 function waitForMessage(child, type, timeoutMilliseconds = 8_000) {
@@ -76,7 +111,7 @@ async function freeLoopbackPort() {
 }
 
 async function startService(service, ownerToken, runtimeDirectory) {
-  const child = fork(fixturePath, ['server', service], {
+  const child = fork(fixturePath, ['server', service, ownerToken], {
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     execArgv: [],
   })
@@ -88,13 +123,13 @@ async function startService(service, ownerToken, runtimeDirectory) {
   const ready = await waitForMessage(child, 'ready').catch((error) => {
     throw new Error(`${error.message}; stderr=${standardError}`)
   })
+  assert.equal(ready.ownerToken, ownerToken)
   const identity = readProcessIdentity(ready.pid)
   assert.ok(identity)
   const record = {
     service,
     ownerToken,
-    pid: ready.pid,
-    startTimeTicks: identity.startTimeTicks,
+    ...identity,
     host: ready.host,
     port: ready.port,
     directUrl: `http://127.0.0.1:${ready.port}`,
@@ -141,36 +176,40 @@ async function endpointIsUnavailable(url) {
   }
 }
 
-function requestThroughLoopback(url) {
+function curlRoute(url, { expectedOwnerToken, trustProxy = true } = {}) {
   const parsedUrl = new URL(url)
-  const result = spawnSync(
-    'curl',
-    [
-      '--silent',
-      '--show-error',
-      '--noproxy',
-      '*',
-      '--resolve',
-      `${parsedUrl.hostname}:${parsedUrl.port}:127.0.0.1`,
-      '--write-out',
-      '\\n%{http_code}',
-      url,
-    ],
-    { encoding: 'utf8', timeout: 5_000 },
-  )
-  assert.equal(result.status, 0, result.stderr || result.error?.message)
-  const separator = result.stdout.lastIndexOf('\n')
-  return {
-    status: Number(result.stdout.slice(separator + 1)),
-    text: result.stdout.slice(0, separator),
+  const port = parsedUrl.port || (parsedUrl.protocol === 'https:' ? '443' : '80')
+  const arguments_ = [
+    '--silent',
+    '--show-error',
+    '--noproxy',
+    '*',
+    '--resolve',
+    `${parsedUrl.hostname}:${port}:127.0.0.1`,
+    '--include',
+    '--write-out',
+    '\n%{http_code}',
+    url,
+  ]
+  if (!trustProxy) arguments_.splice(-2, 0, '--insecure')
+  const result = spawnSync('curl', arguments_, { encoding: 'utf8', timeout: 5_000 })
+  if (result.status !== 0) {
+    return { status: 0, text: '', error: result.stderr || result.error?.message }
   }
+  const separator = result.stdout.lastIndexOf('\n')
+  const text = result.stdout.slice(0, separator)
+  const status = Number(result.stdout.slice(separator + 1))
+  if (expectedOwnerToken && status === 200) {
+    assert.match(text.toLowerCase(), new RegExp(`x-topology-owner-token: ${expectedOwnerToken}`))
+  }
+  return { status, text }
 }
 
-async function waitForRoutedResponse(url, timeoutMilliseconds = 3_000) {
+async function waitForRoutedResponse(url, ownerToken, timeoutMilliseconds = 3_000) {
   const deadline = Date.now() + timeoutMilliseconds
   let response
   do {
-    response = requestThroughLoopback(url)
+    response = curlRoute(url, { expectedOwnerToken: ownerToken })
     if (response.status === 200) return response
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
   } while (Date.now() < deadline)
@@ -182,9 +221,50 @@ function listenerLinesForPorts(ports) {
   return output.split('\n').filter((line) => ports.some((port) => line.includes(`:${port} `)))
 }
 
+function assertFinalLoopbackListeners(endpoints) {
+  const ports = endpoints.map(({ port }) => port)
+  const listeners = listenerLinesForPorts(ports)
+  for (const port of ports) {
+    assert.ok(
+      listeners.some((line) => line.includes(`:${port} `)),
+      `missing listener for ${port}`,
+    )
+  }
+  const localAddresses = listeners.map((line) => line.trim().split(/\s+/)[3])
+  assert.ok(
+    localAddresses.every(
+      (address) => address?.startsWith('127.0.0.1:') || address?.startsWith('[::1]:'),
+    ),
+    `non-loopback listener found: ${localAddresses.join(', ')}`,
+  )
+  return listeners.map((line) => ({
+    endpoint: endpoints.find(({ port }) => line.includes(`:${port} `))?.name,
+    addressFamily: line.includes('[::1]:') ? 'ipv6' : 'ipv4',
+    loopback: true,
+  }))
+}
+
+async function assertFinalLanIsolation(endpoints) {
+  const addresses = globalIpv4Addresses()
+  assert.ok(addresses.length > 0, 'no WSL LAN address was available to test')
+  let attempts = 0
+  for (const address of addresses) {
+    for (const { port } of endpoints) {
+      const unavailable = await endpointIsUnavailable(`http://${address}:${port}`)
+      assert.equal(unavailable, true, 'a final service accepted a non-loopback connection')
+      attempts += 1
+    }
+  }
+  return {
+    addressCount: addresses.length,
+    finalEndpoints: endpoints.map(({ name }) => name),
+    attempts,
+  }
+}
+
 function windowsPathFromWsl(path) {
   const match = path.match(/^\/mnt\/([a-z])\/(.*)$/i)
-  assert.ok(match, `Windows browser evidence path must be on /mnt/<drive>: ${path}`)
+  assert.ok(match, 'Windows browser evidence path must be on /mnt/<drive>')
   return `${match[1].toUpperCase()}:\\${match[2].replaceAll('/', '\\')}`
 }
 
@@ -212,8 +292,7 @@ function pngPixel(path, x, y) {
     offset += length + 12
   }
   assert.ok(width && height && bytesPerPixel && x < width && y < height)
-  const compressed = Buffer.concat(imageData)
-  const filtered = inflateSync(compressed)
+  const filtered = inflateSync(Buffer.concat(imageData))
   const stride = width * bytesPerPixel
   const rows = []
   let inputOffset = 0
@@ -232,15 +311,12 @@ function pngPixel(path, x, y) {
       else if (filter === 3) row[column] = (row[column] + Math.floor((left + above) / 2)) & 0xff
       else if (filter === 4) {
         const prediction = left + above - upperLeft
-        const leftDistance = Math.abs(prediction - left)
-        const aboveDistance = Math.abs(prediction - above)
-        const upperLeftDistance = Math.abs(prediction - upperLeft)
-        const predictor =
-          leftDistance <= aboveDistance && leftDistance <= upperLeftDistance
-            ? left
-            : aboveDistance <= upperLeftDistance
-              ? above
-              : upperLeft
+        const distances = [
+          Math.abs(prediction - left),
+          Math.abs(prediction - above),
+          Math.abs(prediction - upperLeft),
+        ]
+        const predictor = [left, above, upperLeft][distances.indexOf(Math.min(...distances))]
         row[column] = (row[column] + predictor) & 0xff
       } else assert.equal(filter, 0)
     }
@@ -250,15 +326,17 @@ function pngPixel(path, x, y) {
   return [...rows[y].subarray(pixelOffset, pixelOffset + 3)]
 }
 
-function probeWindowsBrowser(browserPath, urls) {
-  if (!browserPath) {
-    return {
-      status: 'not-run',
-      reason:
-        'Set TOPOLOGY_WINDOWS_BROWSER to a Windows Chrome/Edge executable for this host-only check.',
-    }
-  }
+function browserVersionFromInstall(browserPath) {
+  if (!browserPath || !existsSync(browserPath)) return null
+  const versions = readdirSync(dirname(browserPath), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)+$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+  return versions.at(-1) ?? 'installed-version-undiscovered'
+}
 
+function runWindowsBrowserTrustCheck(browserPath, browserVersion, urls) {
+  assert.ok(browserPath && existsSync(browserPath))
   const browserDirectory = join(repositoryRoot, `.topology-browser-${process.pid}`)
   mkdirSync(browserDirectory, { recursive: true })
   const expectedColors = {
@@ -291,20 +369,37 @@ function probeWindowsBrowser(browserPath, urls) {
         Atomics.wait(waitBuffer, 0, 0, 50)
       }
       assert.equal(result.status, 0, result.error?.message ?? result.stderr)
-      assert.ok(existsSync(screenshotPath), `Windows browser did not write ${screenshotPath}`)
+      assert.ok(existsSync(screenshotPath), 'Windows browser did not write acceptance screenshot')
       const centerPixel = pngPixel(screenshotPath, 160, 100)
       assert.deepEqual(centerPixel, expectedColors[expectedService])
-      checks.push({ url, status: 'pass', executable: browserPath, centerPixel })
+      checks.push({ url, trustedAndReachedExpectedService: true })
     }
-    return { status: 'pass', method: 'headless screenshot color assertion', checks }
+    return {
+      status: 'pass',
+      browserVersion,
+      method: 'Windows Chrome headless screenshot without TLS bypass',
+      checks,
+    }
   } finally {
     rmSync(browserDirectory, { recursive: true, force: true })
   }
 }
 
-export async function probePortless({ browserPath } = {}) {
+async function stopAllServices(services) {
+  await Promise.all(
+    [...services.values()].map(async (service) => {
+      if (service.child.exitCode !== null || service.child.signalCode !== null) return
+      service.child.kill('SIGTERM')
+      await waitForExit(service.child, 2_000).catch(() => service.child.kill('SIGKILL'))
+    }),
+  )
+}
+
+export async function probePortless() {
   assert.ok(existsSync(portlessPath), 'run pnpm install before the Portless probe')
-  const temporaryRoot = await mkdtemp(join(homedir(), '.cache/topology-portless-'))
+  const cacheRoot = join(homedir(), '.cache')
+  await mkdir(cacheRoot, { recursive: true })
+  const temporaryRoot = await mkdtemp(join(cacheRoot, 'topology-portless-'))
   const stateDirectory = join(temporaryRoot, 'portless')
   const runtimeDirectory = join(temporaryRoot, 'run')
   await mkdir(runtimeDirectory, { recursive: true })
@@ -322,18 +417,13 @@ export async function probePortless({ browserPath } = {}) {
     PORTLESS_NGROK: '0',
   }
   const services = new Map()
-  const routeNames = {
-    audiobook: 'audiobook',
-    brain: 'brain.audiobook',
-    tts: 'tts.audiobook',
-  }
 
   try {
     runPortless(['proxy', 'start', '--no-tls', '-p', String(proxyPort)], environment)
     const proxyPid = Number(readFileSync(join(stateDirectory, 'proxy.pid'), 'utf8').trim())
     const proxyIdentity = readProcessIdentity(proxyPid)
     assert.ok(proxyIdentity, 'Portless proxy PID is not live')
-    for (const service of ['audiobook', 'brain', 'tts']) {
+    for (const service of serviceNames) {
       const started = await startService(service, ownerToken, runtimeDirectory)
       services.set(service, started)
       runPortless(['alias', routeNames[service], String(started.record.port)], environment)
@@ -344,45 +434,22 @@ export async function probePortless({ browserPath } = {}) {
       `http://brain.audiobook.localhost:${proxyPort}`,
       `http://tts.audiobook.localhost:${proxyPort}`,
     ]
-
     for (const [service, { record }] of services) {
       const directResponse = await fetch(record.directUrl)
       assert.equal(directResponse.status, 200)
+      assert.equal(directResponse.headers.get('x-topology-owner-token'), ownerToken)
       assert.ok((await directResponse.text()).includes(`topology-service:${service}`))
     }
     for (const [index, url] of aliasUrls.entries()) {
-      const response = await waitForRoutedResponse(url)
-      assert.equal(response.status, 200, response.text.slice(0, 500))
-      assert.ok(response.text.includes(`topology-service:${[...services.keys()][index]}`))
+      const response = await waitForRoutedResponse(url, ownerToken)
+      assert.equal(response.status, 200, response.error ?? response.text.slice(0, 500))
+      assert.ok(response.text.includes(`topology-service:${serviceNames[index]}`))
     }
-
-    const ports = [proxyPort, ...[...services.values()].map(({ record }) => record.port)]
-    assert.equal(new Set(ports).size, ports.length)
-    const listeners = listenerLinesForPorts(ports)
-    assert.ok(listeners.length >= ports.length)
-    const localAddresses = listeners.map((line) => line.trim().split(/\s+/)[3])
-    assert.ok(
-      localAddresses.every(
-        (address) => address?.startsWith('127.0.0.1:') || address?.startsWith('[::1]:'),
-      ),
-      `non-loopback listener found: ${localAddresses.join(', ')}`,
-    )
-    for (const service of services.values()) assert.ok(service.record.host === '127.0.0.1')
-
-    const lanChecks = []
-    for (const address of globalIpv4Addresses()) {
-      for (const port of ports) {
-        const unavailable = await endpointIsUnavailable(`http://${address}:${port}`)
-        assert.equal(unavailable, true, `${address}:${port} accepted a non-loopback connection`)
-        lanChecks.push({ address, port, unavailable })
-      }
-    }
-    assert.ok(lanChecks.length > 0, 'no WSL LAN address was available to test')
 
     const initialWeb = services.get('audiobook')
     assert.ok(initialWeb)
-    const mismatchedRecord = { ...initialWeb.record, startTimeTicks: '0' }
-    assert.equal(processRecordIsOwned(mismatchedRecord), false)
+    assert.equal(processRecordIsOwned({ ...initialWeb.record, executableInode: '0' }), false)
+    assert.equal(processRecordIsOwned({ ...initialWeb.record, startTimeTicks: '0' }), false)
     await stopService(initialWeb)
     assert.equal(processRecordIsOwned(initialWeb.record), false)
     const restartedWeb = await startService('audiobook', ownerToken, runtimeDirectory)
@@ -391,62 +458,184 @@ export async function probePortless({ browserPath } = {}) {
       ['alias', routeNames.audiobook, String(restartedWeb.record.port), '--force'],
       environment,
     )
-    const restartedResponse = await waitForRoutedResponse(aliasUrls[0])
-    assert.ok(restartedResponse.text.includes(`pid:${restartedWeb.record.pid}`))
+    const restartedResponse = await waitForRoutedResponse(aliasUrls[0], ownerToken)
+    assert.equal(restartedResponse.status, 200)
 
-    const routes = runPortless(['list'], environment)
-    for (const service of [
-      'audiobook.localhost',
-      'brain.audiobook.localhost',
-      'tts.audiobook.localhost',
-    ]) {
-      assert.ok(routes.includes(service), `Portless did not list ${service}`)
+    const finalEndpoints = [
+      { name: 'portless-proxy', port: proxyPort },
+      ...[...services].map(([service, { record }]) => ({
+        name: new URL(aliasUrls[serviceNames.indexOf(service)]).hostname,
+        port: record.port,
+      })),
+    ]
+    const finalPorts = finalEndpoints.map(({ port }) => port)
+    assert.equal(new Set(finalPorts).size, finalPorts.length)
+    const finalListeners = assertFinalLoopbackListeners(finalEndpoints)
+    const finalLan = await assertFinalLanIsolation(finalEndpoints)
+    for (const service of services.values()) {
+      assert.equal(service.record.host, '127.0.0.1')
+      assert.equal(processRecordIsOwned(service.record), true)
     }
 
-    const browser = probeWindowsBrowser(browserPath, aliasUrls)
+    const routes = runPortless(['list'], environment)
+    for (const hostname of exactHttpsUrls.map((url) => new URL(url).hostname)) {
+      assert.ok(routes.includes(hostname), `Portless did not list ${hostname}`)
+    }
+
     return {
       portlessVersion: runPortless(['--version'], environment),
-      proxy: {
-        pid: proxyPid,
-        startTimeTicks: proxyIdentity.startTimeTicks,
-        port: proxyPort,
-        tls: false,
-        stateDirectory,
-        listeners,
-      },
-      routes: Object.fromEntries(
-        [...services].map(([name, { record }]) => [
-          name,
-          { ...record, route: aliasUrls[['audiobook', 'brain', 'tts'].indexOf(name)] },
-        ]),
-      ),
-      routeListing: routes,
+      proxyIdentityVerified: processRecordIsOwned({ ...proxyIdentity }),
+      finalListeners,
+      finalLan,
+      finalServices: [...services.keys()],
       dynamicPortsDistinct: true,
       directAndRoutedReachability: 'pass',
-      loopbackOnly: 'pass',
-      lanChecks,
+      loopbackOnlyAfterRestart: 'pass',
       processOwnership: {
-        ownerTokenRecorded: true,
-        pidAndStartTimeRecorded: true,
-        mismatchedIdentityRejected: true,
+        ownerTokenSignaledByIpcAndHttp: true,
+        pidStartExecutableAndCommandIdentityRecorded: true,
+        executableMismatchRejected: true,
+        startTimeMismatchRejected: true,
         gracefulStop: 'pass',
         staleRecordRejected: true,
         restartAndRouteReplacement: 'pass',
       },
-      browser,
     }
   } finally {
     try {
       runPortless(['proxy', 'stop'], environment)
     } catch {}
-    await Promise.all(
-      [...services.values()].map(async (service) => {
-        if (service.child.exitCode !== null || service.child.signalCode !== null) return
-        service.child.kill('SIGTERM')
-        await waitForExit(service.child, 2_000).catch(() => service.child.kill('SIGKILL'))
-      }),
-    )
+    await stopAllServices(services)
     await rm(temporaryRoot, { recursive: true, force: true })
+  }
+}
+
+function port443LoopbackStatus() {
+  const result = spawnSync('ss', ['-H', '-ltn', 'sport = :443'], { encoding: 'utf8' })
+  const lines = result.status === 0 ? result.stdout.trim().split('\n').filter(Boolean) : []
+  const localAddresses = lines.map((line) => line.trim().split(/\s+/)[3])
+  return {
+    listening: localAddresses.length > 0,
+    loopbackOnly:
+      localAddresses.length > 0 &&
+      localAddresses.every(
+        (address) => address?.startsWith('127.0.0.1:') || address?.startsWith('[::1]:'),
+      ),
+  }
+}
+
+function exactHttpsConfigurationCheck() {
+  const config = readFileSync(join(repositoryRoot, 'config/default.example.toml'), 'utf8')
+  const portless = JSON.parse(readFileSync(join(repositoryRoot, 'portless.json'), 'utf8'))
+  assert.match(config, /https:\/\/brain\.audiobook\.localhost\/v1/)
+  assert.match(config, /https:\/\/tts\.audiobook\.localhost/)
+  assert.equal(portless.name, 'audiobook')
+  return { configuredUrls: exactHttpsUrls, status: 'pass' }
+}
+
+function defaultWindowsChromePath() {
+  const candidate = '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe'
+  return existsSync(candidate) ? candidate : null
+}
+
+export async function probeExactHttpsAcceptance({ requested, browserPath }) {
+  const configured = exactHttpsConfigurationCheck()
+  const chromePath = browserPath ?? defaultWindowsChromePath()
+  const browserVersion = browserVersionFromInstall(chromePath)
+  const port443 = port443LoopbackStatus()
+  const sudoAvailable = spawnSync('sudo', ['-n', 'true']).status === 0
+  const blockers = []
+  if (!requested) blockers.push('exact HTTPS acceptance was not explicitly requested')
+  if (!port443.listening) blockers.push('Portless HTTPS proxy is not listening on WSL port 443')
+  if (port443.listening && !port443.loopbackOnly) blockers.push('port 443 is not loopback-only')
+  if (!chromePath) blockers.push('Windows Chrome was not discovered or explicitly configured')
+  const browserVersionObservation =
+    'read from the installed Chrome version directory using native WSL filesystem access'
+  if (blockers.length > 0) {
+    return {
+      status: 'blocked',
+      configured,
+      port443,
+      nonInteractiveSudoAvailable: sudoAvailable,
+      browserVersion,
+      browserVersionObservation,
+      browserInvoked: false,
+      blockers,
+    }
+  }
+
+  const environment = {
+    ...process.env,
+    PORTLESS_LAN: '0',
+    PORTLESS_SYNC_HOSTS: '0',
+    PORTLESS_TAILSCALE: '0',
+    PORTLESS_FUNNEL: '0',
+    PORTLESS_NGROK: '0',
+  }
+  const existingRoutes = runPortless(['list'], environment)
+  if (exactHttpsUrls.some((url) => existingRoutes.includes(new URL(url).hostname))) {
+    return {
+      status: 'blocked',
+      configured,
+      port443,
+      nonInteractiveSudoAvailable: sudoAvailable,
+      browserVersion,
+      browserVersionObservation,
+      browserInvoked: false,
+      blockers: ['one or more exact acceptance aliases are already registered'],
+    }
+  }
+
+  const runtimeDirectory = await mkdtemp(join(homedir(), '.cache/topology-https-services-'))
+  const ownerToken = randomUUID()
+  const services = new Map()
+  let acceptanceStage = 'service and alias startup'
+  let browserInvoked = false
+  try {
+    try {
+      for (const service of serviceNames) {
+        const started = await startService(service, ownerToken, runtimeDirectory)
+        services.set(service, started)
+        runPortless(['alias', routeNames[service], String(started.record.port)], environment)
+      }
+      acceptanceStage = 'Linux HTTPS routing and CA trust'
+      for (const [index, url] of exactHttpsUrls.entries()) {
+        const response = await waitForRoutedResponse(url, ownerToken)
+        assert.equal(response.status, 200, response.error)
+        assert.ok(response.text.includes(`topology-service:${serviceNames[index]}`))
+      }
+      acceptanceStage = 'Windows Chrome HTTPS routing and CA trust'
+      browserInvoked = true
+      const browser = runWindowsBrowserTrustCheck(chromePath, browserVersion, exactHttpsUrls)
+      return {
+        status: 'pass',
+        configured,
+        port443,
+        nonInteractiveSudoAvailable: sudoAvailable,
+        browserVersionObservation,
+        browserInvoked,
+        browser,
+      }
+    } catch {
+      return {
+        status: 'blocked',
+        configured,
+        port443,
+        nonInteractiveSudoAvailable: sudoAvailable,
+        browserVersion,
+        browserVersionObservation,
+        browserInvoked,
+        blockers: [`${acceptanceStage} did not pass`],
+      }
+    }
+  } finally {
+    for (const service of serviceNames) {
+      try {
+        runPortless(['alias', '--remove', routeNames[service]], environment)
+      } catch {}
+    }
+    await stopAllServices(services)
+    await rm(runtimeDirectory, { recursive: true, force: true })
   }
 }
 
@@ -458,8 +647,25 @@ function readOptional(path) {
   }
 }
 
-function mountEvidence(path) {
-  return commandOutput('findmnt', ['-T', path, '-n', '-o', 'TARGET,SOURCE,FSTYPE,OPTIONS'])
+function parseWslConfig() {
+  const windowsUserMatch = repositoryRoot.match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)
+  const path = windowsUserMatch ? join(windowsUserMatch[1], '.wslconfig') : undefined
+  const content = path ? readOptional(path) : undefined
+  const setting = (name) => content?.match(new RegExp(`^${name}\\s*=\\s*(.+)$`, 'im'))?.[1].trim()
+  return {
+    detected: Boolean(content),
+    configuredMemory: setting('memory') ?? null,
+    configuredSwap: setting('swap') ?? null,
+  }
+}
+
+function filesystemCapacity(path) {
+  const filesystem = inspectFilesystem(path)
+  const stats = statfsSync(path, { bigint: true })
+  return {
+    fstype: filesystem.fstype,
+    freeBytes: Number(stats.bavail * stats.bsize),
+  }
 }
 
 export function probeResources() {
@@ -477,9 +683,6 @@ export function probeResources() {
     ['--query-gpu=name,memory.total,driver_version', '--format=csv,noheader'],
     { encoding: 'utf8' },
   )
-  const windowsUserMatch = repositoryRoot.match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)
-  const wslConfigPath = windowsUserMatch ? join(windowsUserMatch[1], '.wslconfig') : undefined
-
   return {
     kernel: commandOutput('uname', ['-srvmo']),
     distro: process.env.WSL_DISTRO_NAME ?? null,
@@ -492,24 +695,14 @@ export function probeResources() {
     gpu:
       gpuResult.status === 0
         ? { status: 'visible', query: gpuResult.stdout.trim(), dxg: existsSync('/dev/dxg') }
-        : { status: 'unavailable', error: gpuResult.stderr.trim(), dxg: existsSync('/dev/dxg') },
-    wslConfig: wslConfigPath
-      ? { path: wslConfigPath, content: readOptional(wslConfigPath) ?? 'missing' }
-      : { path: null, content: 'not-discovered' },
-    workspace: {
-      path: realpathSync(repositoryRoot),
-      mount: mountEvidence(repositoryRoot),
-      disk: commandOutput('df', ['-hT', repositoryRoot]).split('\n').at(-1),
-    },
-    ext4Home: {
-      path: realpathSync(homedir()),
-      mount: mountEvidence(homedir()),
-      disk: commandOutput('df', ['-hT', homedir()]).split('\n').at(-1),
-    },
+        : { status: 'unavailable', dxg: existsSync('/dev/dxg') },
+    wslConfig: parseWslConfig(),
+    workspaceFilesystem: filesystemCapacity(repositoryRoot),
+    ext4HomeFilesystem: filesystemCapacity(homedir()),
   }
 }
 
-export function canonicalPathChecks() {
+export async function canonicalPathChecks() {
   assert.equal(
     canonicalAbsoluteLinuxPath('/mnt/c/Users/example/Audiobooks'),
     '/mnt/c/Users/example/Audiobooks',
@@ -517,54 +710,153 @@ export function canonicalPathChecks() {
   assert.equal(canonicalWorkspacePath('books/book-1/source.epub'), 'books/book-1/source.epub')
   assert.throws(() => canonicalWorkspacePath('../escape'))
   assert.throws(() => canonicalWorkspacePath('C:\\Audiobooks\\book.epub'))
+
+  const temporaryRoot = await mkdtemp(join(homedir(), '.cache/topology-path-root-'))
+  const outsideRoot = await mkdtemp(join(homedir(), '.cache/topology-path-outside-'))
+  try {
+    await mkdir(join(temporaryRoot, 'books'), { recursive: true })
+    await symlink(outsideRoot, join(temporaryRoot, 'escape-link'))
+    assert.equal(
+      resolveWorkspaceAsset(temporaryRoot, 'books/future.epub'),
+      join(temporaryRoot, 'books/future.epub'),
+    )
+    assert.throws(() => resolveWorkspaceAsset(temporaryRoot, 'escape-link/escaped.epub'))
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true })
+    await rm(outsideRoot, { recursive: true, force: true })
+  }
   return {
     absoluteLinuxConfigurationPaths: 'pass',
     relativePosixDatabaseAssetPaths: 'pass',
     traversalRejected: 'pass',
     WindowsSyntaxRejected: 'pass',
+    canonicalRootResolved: 'pass',
+    symlinkEscapeRejected: 'pass',
+    nonexistentAssetAncestorContained: 'pass',
   }
 }
 
 function parseArguments(arguments_) {
-  const options = { output: undefined, skipPortless: false }
+  const options = { output: undefined, skipPortless: false, httpsAcceptance: false }
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]
-    if (argument === '--output') options.output = arguments_[index + 1]
-    if (argument === '--output') index += 1
-    else if (argument === '--skip-portless') options.skipPortless = true
+    if (argument === '--output') {
+      options.output = arguments_[index + 1]
+      index += 1
+    } else if (argument === '--skip-portless') options.skipPortless = true
+    else if (argument === '--https-acceptance') options.httpsAcceptance = true
     else if (argument?.startsWith('--')) throw new Error(`unknown option: ${argument}`)
   }
   return options
 }
 
+function publicSqliteEvidence(result, filesystem) {
+  return {
+    label: result.label,
+    filesystem: {
+      expectedPlacement: result.label === 'wsl-ext4' ? 'WSL ext4' : 'mounted Windows DrvFS',
+      verifiedFstype: filesystem.fstype,
+    },
+    journalMode: result.journalMode,
+    rollbackJournalMode: result.rollbackJournalMode,
+    walJournalMode: result.walJournalMode,
+    busyWaitMilliseconds: result.busyWaitMilliseconds,
+    durationMilliseconds: result.durationMilliseconds,
+    checks: result.checks,
+  }
+}
+
 export async function runTopologyProbe(options = {}) {
   const ext4Root =
     process.env.TOPOLOGY_EXT4_ROOT ?? join(homedir(), '.cache/light-novel-audiobook/probes')
-  const mountedWindowsRoot = process.env.TOPOLOGY_MNT_C_ROOT ?? repositoryRoot
   await mkdir(ext4Root, { recursive: true })
-  const sqlite = [await probeSqliteLocation({ label: 'wsl-ext4', root: ext4Root })]
-  if (existsSync('/mnt/c') && existsSync(mountedWindowsRoot)) {
-    sqlite.push(
-      await probeSqliteLocation({ label: 'mounted-windows-volume', root: mountedWindowsRoot }),
-    )
+  const ext4Filesystem = assertWslExt4Root(ext4Root)
+  const ext4Result = await probeSqliteLocation({ label: 'wsl-ext4', root: ext4Root })
+
+  let mountedWindows
+  const configuredMountedRoot = process.env.TOPOLOGY_MNT_C_ROOT
+  const repositoryIsMounted = /^\/mnt\/[a-z](?:\/|$)/i.test(repositoryRoot)
+  const mountedRoot = configuredMountedRoot ?? (repositoryIsMounted ? repositoryRoot : undefined)
+  if (!mountedRoot) {
+    mountedWindows = {
+      status: 'blocked',
+      blocker: 'Set TOPOLOGY_MNT_C_ROOT to an explicit existing /mnt/<drive> directory.',
+    }
+  } else {
+    const mountedFilesystem = assertMountedWindowsRoot(mountedRoot)
+    const mountedResult = await probeSqliteLocation({
+      label: 'mounted-windows-volume',
+      root: mountedRoot,
+    })
+    mountedWindows = {
+      status: 'pass',
+      result: publicSqliteEvidence(mountedResult, mountedFilesystem),
+    }
   }
 
+  const syntheticPortless = options.skipPortless ? { status: 'skipped' } : await probePortless()
+  const httpsAcceptanceRequested =
+    options.httpsAcceptance || process.env.TOPOLOGY_HTTPS_ACCEPTANCE === '1'
+  const exactHttps = await probeExactHttpsAcceptance({
+    requested: httpsAcceptanceRequested,
+    browserPath: process.env.TOPOLOGY_WINDOWS_BROWSER,
+  })
   return {
-    schemaVersion: 1,
+    evidenceSchemaVersion: 2,
+    probeVersion: TOPOLOGY_PROBE_VERSION,
     capturedAt: new Date().toISOString(),
-    command: 'pnpm probe:topology',
-    nativeToolchain: {
-      node: process.version,
-      executable: process.execPath,
-      platform: process.platform,
-      architecture: process.arch,
+    provenance: {
+      generatedFromCommit: commandOutput('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot }),
+      probeSourceSha256: probeSourceHash(),
+      nativeToolchain: {
+        node: process.version,
+        platform: process.platform,
+        architecture: process.arch,
+      },
     },
+    reproduction: {
+      evidenceCommand: httpsAcceptanceRequested
+        ? `pnpm probe:topology --https-acceptance --output ${evidencePath}`
+        : `pnpm probe:topology --output ${evidencePath}`,
+      exactHttpsAcceptanceCommand:
+        `TOPOLOGY_WINDOWS_BROWSER='<mounted-windows-chrome.exe>' pnpm probe:topology ` +
+        `--https-acceptance --output ${evidencePath}`,
+    },
+    acceptanceStatus: exactHttps.status === 'pass' ? 'pass' : 'blocked',
     resources: probeResources(),
-    canonicalPaths: canonicalPathChecks(),
-    sqlite,
-    portless: options.skipPortless
-      ? { status: 'skipped' }
-      : await probePortless({ browserPath: process.env.TOPOLOGY_WINDOWS_BROWSER }),
+    canonicalPaths: await canonicalPathChecks(),
+    sqlite: {
+      ext4: publicSqliteEvidence(ext4Result, ext4Filesystem),
+      mountedWindows,
+    },
+    portless: {
+      syntheticHttpHarness:
+        syntheticPortless.status === 'skipped'
+          ? syntheticPortless
+          : {
+              status: 'pass',
+              portlessVersion: syntheticPortless.portlessVersion,
+              finalRouteNames: exactHttpsUrls.map((url) => new URL(url).hostname),
+              dynamicPortsDistinct: syntheticPortless.dynamicPortsDistinct,
+              directAndRoutedReachability: syntheticPortless.directAndRoutedReachability,
+              loopbackOnlyAfterRestart: syntheticPortless.loopbackOnlyAfterRestart,
+              finalListeners: syntheticPortless.finalListeners,
+              finalLan: syntheticPortless.finalLan,
+              finalServices: syntheticPortless.finalServices,
+              proxyIdentityVerified: syntheticPortless.proxyIdentityVerified,
+              processOwnership: syntheticPortless.processOwnership,
+              windowsBrowserInvoked: false,
+            },
+      exactHttpsAcceptance: exactHttps,
+    },
+    redaction: {
+      userPaths: 'redacted',
+      ipAddresses: 'redacted',
+      processIds: 'redacted',
+      ownerTokens: 'redacted',
+      temporaryPaths: 'redacted',
+      fullWslConfig: 'redacted',
+    },
   }
 }
 
@@ -577,6 +869,9 @@ if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
     await mkdir(dirname(outputPath), { recursive: true })
     await writeFile(outputPath, serialized, 'utf8')
     console.log(`Topology evidence written to ${outputPath}`)
+    if (evidence.acceptanceStatus !== 'pass') {
+      console.log('Topology acceptance remains blocked; see exactHttpsAcceptance in the evidence.')
+    }
   } else {
     process.stdout.write(serialized)
   }
