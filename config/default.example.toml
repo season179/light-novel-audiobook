@@ -1,0 +1,25 @@
+[workspace]
+# Per-book workspace outside this repository.
+root = "C:/Users/WINDOWS 11/Audiobooks"
+
+[brain]
+base_url = "http://127.0.0.1:8080/v1"
+model = ""
+context_size = 32768
+temperature = 0.0
+
+[tts]
+base_url = "http://127.0.0.1:8090"
+model = "voxcpm"
+seed = 42
+cfg_value = 2.0
+inference_timesteps = 10
+
+[quality_control]
+minimum_speaker_confidence = 0.80
+transcription_check = false
+
+[audio]
+sample_rate = 48000
+chapter_format = "flac"
+final_format = "m4b"
