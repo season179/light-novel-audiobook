@@ -23,7 +23,16 @@
     },
     "speaker": { "type": "string", "minLength": 1 },
     "voice": { "type": "string", "minLength": 1 },
-    "text": { "type": "string", "minLength": 1 },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact immutable source text for this segment"
+    },
+    "render_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional deterministic speech-friendly text derived from text"
+    },
     "emotion": { "type": "string", "default": "neutral" },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "pause_after_ms": { "type": "integer", "minimum": 0, "maximum": 10000 },

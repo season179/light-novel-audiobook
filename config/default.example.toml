@@ -3,13 +3,13 @@
 root = "C:/Users/WINDOWS 11/Audiobooks"
 
 [brain]
-base_url = "http://127.0.0.1:8080/v1"
+base_url = "https://brain.audiobook.localhost/v1"
 model = ""
 context_size = 32768
 temperature = 0.0
 
 [tts]
-base_url = "http://127.0.0.1:8090"
+base_url = "https://tts.audiobook.localhost"
 model = "voxcpm"
 seed = 42
 cfg_value = 2.0

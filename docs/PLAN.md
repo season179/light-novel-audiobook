@@ -59,7 +59,7 @@ Use the **TanStack ecosystem** at the application boundaries while keeping the c
 - A custom HTTP adapter for VoxCPM2 because its llama.cpp-omni TTS API is separate from the director model API
 - **Portless** as development tooling so the review app and local services have memorable `.localhost` URLs instead of user-facing port numbers
 
-Portless is for local routing only; the brain and TTS runtimes must remain isolated processes on separate underlying ports. Suggested names are `audiobook.localhost`, `brain.audiobook.localhost`, and `tts.audiobook.localhost`. Direct port URLs must remain available as a fallback for scripts and troubleshooting.
+Portless is for local routing only; the brain and TTS runtimes must remain isolated processes on separate dynamically assigned underlying ports. Use `audiobook.localhost`, `brain.audiobook.localhost`, and `tts.audiobook.localhost` in application configuration. Do not hardcode development ports; the launcher records and displays direct runtime URLs for troubleshooting.
 
 ### Storage and background jobs
 
@@ -178,9 +178,9 @@ Example segment:
 
 ## Runtime separation
 
-- Standard `llama.cpp` router for the director brain: suggested port `8080`.
-- `llama.cpp-omni` VoxCPM2 TTS server: suggested port `8090`.
-- The launcher manages both runtimes, but they remain isolated by directory, process, and port.
+- Portless assigns separate dynamic ports to the standard `llama.cpp` director router and the `llama.cpp-omni` VoxCPM2 TTS server.
+- Application code uses their stable named `.localhost` URLs rather than port numbers.
+- The launcher manages both runtimes, but they remain isolated by directory, process, and assigned port.
 - Run brain preprocessing first, unload it, and then perform TTS rendering. This avoids VRAM contention and makes the workflow reproducible.
 - Bind the web app, worker control endpoints, model servers, and Portless proxy to loopback only. Do not enable Portless LAN, Tailscale, Funnel, or ngrok modes.
 

@@ -1,0 +1,17 @@
+{
+  "name": "@light-novel-audiobook/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@light-novel-audiobook/contracts": "workspace:*",
+    "@light-novel-audiobook/domain": "workspace:*",
+    "@tanstack/ai": "0.42.0",
+    "@tanstack/ai-openai": "0.17.1"
+  }
+}

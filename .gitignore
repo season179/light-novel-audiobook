@@ -1,13 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-.venv/
-venv/
+# Node.js and TypeScript
+node_modules/
+.pnpm-store/
+dist/
+.output/
+coverage/
+*.tsbuildinfo
+
+# Tool caches
+.tanstack/
+.vite/
 
 # Editors and OS
 .vscode/
@@ -21,6 +22,12 @@ desktop.ini
 .env.*
 !.env.example
 config/local.*
+
+# Local databases
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
 
 # Project work products and large assets
 /work/

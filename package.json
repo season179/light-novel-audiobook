@@ -1,0 +1,31 @@
+{
+  "name": "light-novel-audiobook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm dev:direct",
+    "dev:direct": "pnpm --parallel --filter @light-novel-audiobook/web --filter @light-novel-audiobook/worker dev",
+    "build": "pnpm --recursive --if-present build",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "biome check . && pnpm typecheck && vitest run"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "@types/node": "24.10.1",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "portless": "0.15.4",
+    "tsx": "4.21.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "4.1.10"
+  }
+}

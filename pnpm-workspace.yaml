@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - pnpm@11.17.0

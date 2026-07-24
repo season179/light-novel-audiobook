@@ -1,0 +1,12 @@
+{
+  "name": "audiobook",
+  "apps": {
+    "apps/web": {
+      "name": "audiobook"
+    },
+    "apps/worker": {
+      "name": "worker.audiobook",
+      "proxy": false
+    }
+  }
+}
