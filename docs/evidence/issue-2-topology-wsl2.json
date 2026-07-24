@@ -1,10 +1,10 @@
 {
-  "evidenceSchemaVersion": 2,
-  "probeVersion": 2,
-  "capturedAt": "2026-07-24T14:01:05.090Z",
+  "evidenceSchemaVersion": 3,
+  "probeVersion": 3,
+  "capturedAt": "2026-07-24T15:36:28.707Z",
   "provenance": {
-    "generatedFromCommit": "3dfeab90e8afb05e9f7acd47faab3a6210ef816c",
-    "probeSourceSha256": "c91019301191ca7269fdd70a4e4c4d1d336638871871de71ce8c29e78a5a9c00",
+    "generatedFromCommit": "e13b1816e5be1e01364f82a588603172e4edff96",
+    "probeSourceSha256": "9e041e8410f44e87836f0153dc9b3feb0b52ac907db0d5366b8aa7308083ef7a",
     "nativeToolchain": {
       "node": "v24.18.0",
       "platform": "linux",
@@ -12,10 +12,17 @@
     }
   },
   "reproduction": {
-    "evidenceCommand": "pnpm probe:topology --https-acceptance --output docs/evidence/issue-2-topology-wsl2.json",
-    "exactHttpsAcceptanceCommand": "TOPOLOGY_WINDOWS_BROWSER='<mounted-windows-chrome.exe>' pnpm probe:topology --https-acceptance --output docs/evidence/issue-2-topology-wsl2.json"
+    "evidenceCommand": "TOPOLOGY_WINDOWS_BROWSER='<mounted-windows-chrome.exe>' pnpm probe:topology --output docs/evidence/issue-2-topology-wsl2.json"
   },
-  "acceptanceStatus": "blocked",
+  "acceptanceStatus": "pass",
+  "configuredEndpoints": {
+    "status": "pass",
+    "reviewListenUrl": "http://127.0.0.1:3000",
+    "reviewBrowserUrl": "http://localhost:3000",
+    "brainBaseUrl": "http://127.0.0.1:8080/v1",
+    "ttsBaseUrl": "http://127.0.0.1:8081",
+    "occupiedPortPolicy": "fail-closed"
+  },
   "resources": {
     "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux",
     "distro": "Ubuntu",
@@ -37,18 +44,18 @@
     },
     "workspaceFilesystem": {
       "fstype": "9p",
-      "freeBytes": 1701701275648
+      "freeBytes": 1701084184576
     },
     "ext4HomeFilesystem": {
       "fstype": "ext4",
-      "freeBytes": 1009753616384
+      "freeBytes": 1009669496832
     }
   },
   "canonicalPaths": {
     "absoluteLinuxConfigurationPaths": "pass",
     "relativePosixDatabaseAssetPaths": "pass",
     "traversalRejected": "pass",
-    "WindowsSyntaxRejected": "pass",
+    "windowsSyntaxRejected": "pass",
     "canonicalRootResolved": "pass",
     "symlinkEscapeRejected": "pass",
     "nonexistentAssetAncestorContained": "pass"
@@ -63,8 +70,8 @@
       "journalMode": "wal",
       "rollbackJournalMode": "delete",
       "walJournalMode": "wal",
-      "busyWaitMilliseconds": 308,
-      "durationMilliseconds": 541,
+      "busyWaitMilliseconds": 309,
+      "durationMilliseconds": 562,
       "checks": {
         "locking": "pass",
         "journalPersistence": "pass",
@@ -87,8 +94,8 @@
         "journalMode": "wal",
         "rollbackJournalMode": "delete",
         "walJournalMode": "wal",
-        "busyWaitMilliseconds": 309,
-        "durationMilliseconds": 728,
+        "busyWaitMilliseconds": 316,
+        "durationMilliseconds": 774,
         "checks": {
           "locking": "pass",
           "journalPersistence": "pass",
@@ -102,98 +109,85 @@
       }
     }
   },
-  "portless": {
-    "syntheticHttpHarness": {
-      "status": "pass",
-      "portlessVersion": "0.15.4",
-      "finalRouteNames": [
-        "audiobook.localhost",
-        "brain.audiobook.localhost",
-        "tts.audiobook.localhost"
-      ],
-      "dynamicPortsDistinct": true,
-      "directAndRoutedReachability": "pass",
-      "loopbackOnlyAfterRestart": "pass",
-      "finalListeners": [
-        {
-          "endpoint": "audiobook.localhost",
-          "addressFamily": "ipv4",
-          "loopback": true
-        },
-        {
-          "endpoint": "tts.audiobook.localhost",
-          "addressFamily": "ipv4",
-          "loopback": true
-        },
-        {
-          "endpoint": "portless-proxy",
-          "addressFamily": "ipv4",
-          "loopback": true
-        },
-        {
-          "endpoint": "brain.audiobook.localhost",
-          "addressFamily": "ipv4",
-          "loopback": true
-        },
-        {
-          "endpoint": "portless-proxy",
-          "addressFamily": "ipv6",
-          "loopback": true
-        }
-      ],
-      "finalLan": {
-        "addressCount": 1,
-        "finalEndpoints": [
-          "portless-proxy",
-          "audiobook.localhost",
-          "brain.audiobook.localhost",
-          "tts.audiobook.localhost"
-        ],
-        "attempts": 4
+  "directLoopback": {
+    "status": "pass",
+    "configuredEndpoints": [
+      {
+        "service": "review",
+        "listenUrl": "http://127.0.0.1:3000",
+        "browserUrl": "http://localhost:3000"
       },
-      "finalServices": [
-        "audiobook",
+      {
+        "service": "brain",
+        "listenUrl": "http://127.0.0.1:8080",
+        "baseUrl": "http://127.0.0.1:8080/v1"
+      },
+      {
+        "service": "tts",
+        "listenUrl": "http://127.0.0.1:8081",
+        "baseUrl": "http://127.0.0.1:8081"
+      }
+    ],
+    "fixedPorts": true,
+    "collisionFailedClosed": true,
+    "restartReusedConfiguredReviewPort": true,
+    "finalListeners": [
+      {
+        "service": "review",
+        "listenUrl": "http://127.0.0.1:3000",
+        "loopbackOnly": true
+      },
+      {
+        "service": "brain",
+        "listenUrl": "http://127.0.0.1:8080",
+        "loopbackOnly": true
+      },
+      {
+        "service": "tts",
+        "listenUrl": "http://127.0.0.1:8081",
+        "loopbackOnly": true
+      }
+    ],
+    "finalLan": {
+      "addressCount": 1,
+      "services": [
+        "review",
         "brain",
         "tts"
       ],
-      "proxyIdentityVerified": true,
-      "processOwnership": {
-        "ownerTokenSignaledByIpcAndHttp": true,
-        "pidStartExecutableAndCommandIdentityRecorded": true,
-        "executableMismatchRejected": true,
-        "startTimeMismatchRejected": true,
-        "gracefulStop": "pass",
-        "staleRecordRejected": true,
-        "restartAndRouteReplacement": "pass"
-      },
-      "windowsBrowserInvoked": false
+      "attempts": 3,
+      "allUnavailable": true
     },
-    "exactHttpsAcceptance": {
-      "status": "blocked",
-      "configured": {
-        "configuredUrls": [
-          "https://audiobook.localhost",
-          "https://brain.audiobook.localhost",
-          "https://tts.audiobook.localhost"
-        ],
-        "status": "pass"
-      },
-      "port443": {
-        "listening": false,
-        "loopbackOnly": false
-      },
-      "nonInteractiveSudoAvailable": false,
+    "runtimeManifest": {
+      "atomicReadBack": "pass",
+      "generationAdvancedOnRestart": true,
+      "effectiveEndpointsRecorded": true,
+      "ownerTokenRecordedAtRuntimeOnly": true,
+      "processIdentityRecorded": true
+    },
+    "processOwnership": {
+      "ownerTokenSignaledByIpcAndHttp": true,
+      "pidStartExecutableAndCommandIdentityRecorded": true,
+      "executableMismatchRejected": true,
+      "gracefulStop": "pass",
+      "staleRecordRejected": true
+    },
+    "browser": {
+      "status": "pass",
+      "browserInvoked": true,
       "browserVersion": "150.0.7871.186",
-      "browserVersionObservation": "read from the installed Chrome version directory using native WSL filesystem access",
-      "browserInvoked": false,
-      "blockers": [
-        "Portless HTTPS proxy is not listening on WSL port 443"
-      ]
+      "browserUrl": "http://localhost:3000",
+      "method": "direct Windows Chrome headless screenshot; no shell wrapper"
     }
+  },
+  "deferredOption": {
+    "note": "Portless may be reconsidered after the core runtime is stable.",
+    "currentDependency": false,
+    "currentAcceptanceRequirement": false
   },
   "redaction": {
     "userPaths": "redacted",
-    "ipAddresses": "redacted",
+    "hostSpecificIpAddresses": "redacted; configured loopback endpoints retained",
     "processIds": "redacted",
     "ownerTokens": "redacted",
     "temporaryPaths": "redacted",
