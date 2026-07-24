@@ -12,10 +12,11 @@ Updated: 2026-07-24
 - Casting target: narrator plus persistent character voices
 - Unknown speakers: use a fallback dialogue voice and flag for review
 - Preserve the source text: the LLM may classify/direct text, but must not rewrite or invent it
-- Implement the application in strict TypeScript with object-oriented programming and pragmatic domain-driven design (DDD)
+- Implement the application in strict TypeScript 7 with object-oriented programming and pragmatic domain-driven design (DDD)
 - Use the TanStack ecosystem for AI integration and the local review application
 - Use Portless for stable, named local-development URLs
 - Use Biome for TypeScript formatting, linting, and import organization
+- Use pnpm 11 for package and workspace management; do not use npm for project commands
 - Provide a local-only TanStack Start web app for importing books, reviewing scripts and voices, approving work, and monitoring generation
 - Use SQLite as the source of truth for project state, review decisions, and jobs
 - Require no user-provided voice recordings; create synthetic voice candidates locally
@@ -27,7 +28,7 @@ Updated: 2026-07-24
 
 ## Software design and framework strategy
 
-The application will be a **modular TypeScript monolith** on Node.js 24 or newer, not a collection of microservices. It will use strict TypeScript, object-oriented domain models, and pragmatic DDD so audiobook rules remain understandable, testable, and independent of infrastructure.
+The application will be a **modular TypeScript 7 monolith** on Node.js 24 or newer, not a collection of microservices. It will use strict TypeScript settings, object-oriented domain models, and pragmatic DDD so audiobook rules remain understandable, testable, and independent of infrastructure.
 
 Planned domain areas (bounded contexts):
 
@@ -52,6 +53,7 @@ Use the **TanStack ecosystem** at the application boundaries while keeping the c
 - **Zod / JSON Schema** for input, output, and LLM-response validation; domain objects should remain plain TypeScript classes where practical
 - **Vitest** for unit, fidelity, integration, and resume/restart tests
 - **Biome** as the standard formatter, linter, and import organizer, enforced locally and in CI
+- **pnpm 11** with a committed lockfile and pinned `packageManager` version for reproducible installs
 - A dedicated CLI/background worker for long-running processing and rendering; these jobs must not depend on a web-request lifetime
 - One launcher CLI with `start`, `stop`, and `status` actions for Portless, the web app, worker, llama.cpp router, and llama.cpp-omni TTS server
 - A custom HTTP adapter for VoxCPM2 because its llama.cpp-omni TTS API is separate from the director model API
