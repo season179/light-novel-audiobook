@@ -24,6 +24,8 @@ Updated: 2026-07-24
 - Run a preflight estimate before generation and warn about large disk use or insufficient free space
 - Save numbered output versions and never overwrite an existing audiobook automatically
 - Require no login and bind all services to the local machine only
+- Make both the director LLM and TTS engine easy to replace through stable interfaces and configuration
+- Support side-by-side model experiments without changing domain code or overwriting previous results
 - Keep the business rules independent from model servers, file formats, databases, and user-interface frameworks
 
 ## Software design and framework strategy
@@ -41,7 +43,18 @@ Planned domain areas (bounded contexts):
 
 Use entities and value objects for concepts such as `Book`, `Chapter`, `SourcePassage`, `Segment`, `Character`, `VoiceProfile`, and `RenderJob`. Domain services will enforce cross-object rules, especially exact source-text coverage, stable character voices, and resumable rendering. Repository interfaces will keep SQLite and filesystem details out of the domain.
 
-Infrastructure will connect through explicit adapters for EPUB parsing, the director LLM, VoxCPM2, the filesystem, and FFmpeg. The domain layer must not import those adapters. Application services will coordinate use cases such as importing a book, directing a chapter, approving a script, rendering pending segments, and assembling an audiobook.
+Infrastructure will connect through explicit adapters for EPUB parsing, director LLMs, TTS engines, the filesystem, and FFmpeg. Gemma and VoxCPM2 are the initial implementations, not hard dependencies of the domain or application layers. Application services will coordinate use cases such as importing a book, directing a chapter, approving a script, rendering pending segments, and assembling an audiobook.
+
+### Replaceable model providers
+
+- Define stable application-facing interfaces such as `DirectorModel` and `SpeechEngine`.
+- Select implementations through named configuration profiles; do not scatter provider names, model IDs, endpoints, or parameters through business code.
+- Each adapter must declare its capabilities, supported schema/features, health check, and model identity.
+- Keep prompts, schemas, pronunciation data, and model parameters versioned separately from adapter code.
+- Record adapter, model, model hash/version, prompt/schema versions, seed, and parameters in every experiment and output manifest.
+- Allow the same representative chapter to run against multiple profiles and compare accuracy, speed, memory use, disk use, and listening-review results.
+- Never overwrite earlier experiment or audiobook versions when switching models.
+- Require new LLM and TTS adapters to pass shared contract tests plus the relevant acceptance tests before bulk use.
 
 ### Framework decision
 
@@ -241,7 +254,7 @@ Use llama.cpp JSON-schema/grammar enforcement for syntax, then deterministic val
 ## Implementation order
 
 1. Validate TanStack AI's OpenAI-compatible adapter with llama.cpp, then test the selected Gemma 4 26B-A4B director brain on a manually labeled representative chapter.
-2. Define the domain model, bounded-context boundaries, repository interfaces, JSON schemas, and fidelity checks.
+2. Define the domain model, bounded-context boundaries, replaceable `DirectorModel` and `SpeechEngine` interfaces, repository interfaces, JSON schemas, and fidelity checks.
 3. Build EPUB extraction and normalization behind infrastructure adapters.
 4. Build story-bible, speaker attribution, and review workflow as application/domain services.
 5. Process and approve one representative chapter.
