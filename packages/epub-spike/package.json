@@ -1,0 +1,21 @@
+{
+  "name": "@light-novel-audiobook/epub-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:fixtures": "tsx scripts/build-fixtures.ts",
+    "compare": "tsx scripts/compare-candidates.ts && biome format --write ../../docs/evidence/epub-parser-comparison.json",
+    "update:goldens": "tsx scripts/update-goldens.ts && biome format --write test/golden",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/epub-spike/test"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "saxes": "6.0.0"
+  },
+  "devDependencies": {
+    "@lingo-reader/epub-parser": "0.4.6",
+    "epub2": "3.0.2"
+  }
+}

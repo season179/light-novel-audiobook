@@ -1,0 +1,108 @@
+{
+  "synthetic-complex": {
+    "navigation": {
+      "package_version": "3.0",
+      "spine_paths": [
+        "EPUB/chapter-1.xhtml",
+        "EPUB/chapter-2.xhtml",
+        "EPUB/notes.xhtml",
+        "EPUB/image-page.xhtml",
+        "EPUB/low-text.xhtml",
+        "EPUB/side-story.xhtml"
+      ],
+      "epub3_nav": {
+        "status": "valid",
+        "paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml", "EPUB/side-story.xhtml"]
+      },
+      "ncx": {
+        "status": "valid",
+        "paths": ["EPUB/chapter-2.xhtml", "EPUB/chapter-1.xhtml"]
+      },
+      "conflict": true,
+      "conflict_sources": ["epub3-nav", "ncx"]
+    },
+    "finding_kinds": [
+      "navigation-spine-conflict",
+      "duplicate-heading",
+      "image-outside-passage-root",
+      "ambiguous-spine-content",
+      "ambiguous-spine-content",
+      "ambiguous-spine-content",
+      "ambiguous-spine-content",
+      "ambiguous-spine-content"
+    ],
+    "source_text": [
+      "CLOCKWORK LANTERN",
+      "1",
+      "The Brass Door",
+      "A & B 🙂 é   end.",
+      "  Keep\tboth\nspaces.  ",
+      "She opened the door—slowly.",
+      "The mark 星 glowed.*",
+      "Figure 1",
+      "The Brass Door",
+      "“Nothing moved,” said Noa.",
+      "Was this a memory, or a warning?",
+      "* The inventor’s original wording.",
+      "*",
+      "After the Bell",
+      "Noa carried the lantern home."
+    ]
+  },
+  "synthetic-ncx-only": {
+    "navigation": {
+      "package_version": "2.0",
+      "spine_paths": ["EPUB/one.xhtml", "EPUB/two.xhtml"],
+      "epub3_nav": {
+        "status": "not-applicable",
+        "paths": []
+      },
+      "ncx": {
+        "status": "valid",
+        "paths": ["EPUB/one.xhtml", "EPUB/two.xhtml"]
+      },
+      "conflict": false,
+      "conflict_sources": []
+    },
+    "finding_kinds": [],
+    "source_text": ["First.", "Second."]
+  },
+  "synthetic-missing-nav": {
+    "navigation": {
+      "package_version": "3.0",
+      "spine_paths": ["EPUB/chapter.xhtml"],
+      "epub3_nav": {
+        "status": "missing",
+        "paths": []
+      },
+      "ncx": {
+        "status": "missing",
+        "paths": []
+      },
+      "conflict": false,
+      "conflict_sources": []
+    },
+    "finding_kinds": ["missing-epub3-navigation"],
+    "source_text": ["Still retained."]
+  },
+  "synthetic-malformed-nav": {
+    "navigation": {
+      "package_version": "3.0",
+      "spine_paths": ["EPUB/chapter.xhtml"],
+      "epub3_nav": {
+        "status": "malformed",
+        "paths": [],
+        "error": "EPUB/nav.xhtml: malformed XML: 2:131: unexpected close tag.",
+        "error_sha256": "918c90b2e93379b2fa761930b9e01db5cb159d87208935c3425a2991c6b36399"
+      },
+      "ncx": {
+        "status": "missing",
+        "paths": []
+      },
+      "conflict": false,
+      "conflict_sources": []
+    },
+    "finding_kinds": ["malformed-epub3-navigation"],
+    "source_text": ["The spine survives."]
+  }
+}

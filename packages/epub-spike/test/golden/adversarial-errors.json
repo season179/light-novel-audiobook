@@ -1,0 +1,9 @@
+{
+  "nested_parent_text": "EPUB/chapter.xhtml: nested passage root would reorder parent-owned text at spine[0000]::EPUB/chapter.xhtml::/html[1]/body[1]/div[1]",
+  "unsafe_zip_entries": {
+    "/unreferenced.txt": "Unsafe ZIP entry name: \"/unreferenced.txt\"",
+    "../unreferenced.txt": "Unsafe ZIP entry name: \"../unreferenced.txt\"",
+    "dir\\unreferenced.txt": "Unsafe ZIP entry name: \"dir\\\\unreferenced.txt\"",
+    "C:/unreferenced.txt": "Unsafe ZIP entry name: \"C:/unreferenced.txt\""
+  }
+}
