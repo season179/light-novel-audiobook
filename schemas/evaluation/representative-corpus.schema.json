@@ -1,0 +1,104 @@
+{
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/representative-corpus@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "representative-corpus@1"
+    },
+    "corpus_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "corpus_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "storage_class": {
+      "type": "string",
+      "enum": ["committed_synthetic", "workspace_private"]
+    },
+    "selection_policy_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "selection_rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cases": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_start": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source_end": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "legitimate": {
+            "type": "boolean",
+            "const": true
+          },
+          "criteria": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dialogue",
+                "narration",
+                "internal_thought",
+                "alias",
+                "coreference",
+                "ambiguous_speaker",
+                "structurally_ambiguous",
+                "repeated_text",
+                "source_reference"
+              ]
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "source_ref",
+          "source_start",
+          "source_end",
+          "legitimate",
+          "criteria"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "corpus_version",
+    "corpus_id",
+    "source_sha256",
+    "storage_class",
+    "selection_policy_version",
+    "selection_rationale",
+    "cases"
+  ],
+  "additionalProperties": false
+}

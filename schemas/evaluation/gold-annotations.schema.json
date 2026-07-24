@@ -1,0 +1,124 @@
+{
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/gold-annotations@2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "gold-annotations@2"
+    },
+    "annotation_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "annotation_policy_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "corpus_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "cases": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["narration", "dialogue", "thought", "message", "sound_cue"]
+          },
+          "speaker": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "exact"
+                  },
+                  "accepted_character_ids": {
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": ["explicit", "alias", "coreference"]
+                  }
+                },
+                "required": ["status", "accepted_character_ids", "evidence"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["ambiguous", "unresolved"]
+                  },
+                  "accepted_character_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "const": "ambiguous"
+                  }
+                },
+                "required": ["status", "accepted_character_ids", "evidence"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "not_applicable"
+                  },
+                  "accepted_character_ids": {
+                    "type": "array",
+                    "prefixItems": []
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "const": "none"
+                  }
+                },
+                "required": ["status", "accepted_character_ids", "evidence"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["case_id", "kind", "speaker"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "annotation_version",
+    "annotation_policy_version",
+    "source_sha256",
+    "corpus_sha256",
+    "cases"
+  ],
+  "additionalProperties": false
+}

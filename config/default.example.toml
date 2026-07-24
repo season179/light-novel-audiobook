@@ -1,6 +1,9 @@
 [workspace]
 # Per-book workspace outside this repository.
-root = "C:/Users/WINDOWS 11/Audiobooks"
+root = "/mnt/c/Users/WINDOWS 11/Audiobooks"
+
+# Private source, gold labels, model runs, and reports use <workspace.root>/evaluation/.
+# They must remain outside this repository.
 
 [brain]
 base_url = "https://brain.audiobook.localhost/v1"

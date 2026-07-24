@@ -1,0 +1,638 @@
+{
+  "schema_version": "evaluation-run@2",
+  "run_index": 3,
+  "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
+  "corpus_sha256": "e8af15d4867b8ad450cc253e03ad9c74f5fb2997f6b0964d8740a37aaef938c0",
+  "model": {
+    "adapter_id": "synthetic-director",
+    "adapter_version": "1.0.0",
+    "model_id": "synthetic-model",
+    "model_sha256": "60b3d90d8a002f23fd7a59bcebeb68e7707c4116239e3ef138f46161284ead2e",
+    "prompt_version": "synthetic-prompt@1",
+    "prompt_sha256": "a22d46319bc8433360517a62306b26befdc30ac1a738e2f7ebd7c9148c93e6d7",
+    "output_schema_version": "director-output@1",
+    "output_schema_sha256": "9f04c23ae4d805254eb4d525301b9505a067751f409c37864879c55760f4637d",
+    "seed": 42,
+    "context_size": 32768,
+    "parameters": {
+      "temperature": 0,
+      "top_p": 1
+    }
+  },
+  "operational": {
+    "resource_measurement": {
+      "method_version": "resource-measurement@1",
+      "collector_id": "synthetic-resource-collector",
+      "collector_version": "1.0.0",
+      "elapsed_scope": "complete-direction-run",
+      "memory_unit": "mebibyte"
+    },
+    "elapsed_ms": 3600000,
+    "peak_vram_mib": 15872,
+    "peak_ram_mib": 61440,
+    "crashed": false,
+    "out_of_memory": false
+  },
+  "predictions": [
+    {
+      "source_ref": "source-ref-001",
+      "source_start": 0,
+      "source_end": 20,
+      "status": "predicted",
+      "text": "The brass bell rang.",
+      "kind": "dialogue",
+      "speaker": "known-wrong-character",
+      "review_required": true
+    },
+    {
+      "source_ref": "source-ref-001",
+      "source_start": 20,
+      "source_end": 40,
+      "status": "predicted",
+      "text": "The brass bell rang.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-002",
+      "source_start": 0,
+      "source_end": 26,
+      "status": "predicted",
+      "text": "The lantern blinked twice.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-003",
+      "source_start": 0,
+      "source_end": 26,
+      "status": "predicted",
+      "text": "The lantern blinked twice.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-004",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 005.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-005",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 006.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-006",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 007.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-007",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 008.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-008",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 009.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-009",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 010.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-010",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 011.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-011",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 012.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-012",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 013.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-013",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 014.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-014",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 015.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-015",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 016.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-016",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 017.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-017",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 018.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-018",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 019.",
+      "kind": "dialogue",
+      "speaker": "character-a",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-019",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 020.",
+      "kind": "dialogue",
+      "speaker": "character-b",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-020",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 021.",
+      "kind": "dialogue",
+      "speaker": "fallback-dialogue",
+      "review_required": true
+    },
+    {
+      "source_ref": "source-ref-021",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 022.",
+      "kind": "dialogue",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-022",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 023.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-023",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 024.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-024",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 025.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-025",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 026.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-026",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 027.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-027",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 028.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-028",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 029.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-029",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 030.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-030",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 031.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-031",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 032.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-032",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 033.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-033",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 034.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-034",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 035.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-035",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 036.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-036",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 037.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-037",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 038.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-038",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 039.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-039",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 040.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-040",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 041.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-041",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 042.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-042",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 043.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-043",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 044.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-044",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 045.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-045",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 046.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-046",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 047.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-047",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 048.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-048",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 049.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-049",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 050.",
+      "kind": "thought",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-050",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 051.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": true
+    },
+    {
+      "source_ref": "source-ref-051",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 052.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-052",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 053.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-053",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 054.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-054",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 055.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-055",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 056.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-056",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 057.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-057",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 058.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-058",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 059.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    },
+    {
+      "source_ref": "source-ref-059",
+      "source_start": 0,
+      "source_end": 38,
+      "status": "predicted",
+      "text": "Original synthetic benchmark line 060.",
+      "kind": "narration",
+      "speaker": "narrator",
+      "review_required": false
+    }
+  ]
+}

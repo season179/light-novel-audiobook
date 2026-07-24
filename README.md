@@ -6,7 +6,8 @@ The project combines deterministic EPUB processing, a Gemma director through lla
 
 ## Status
 
-Architecture foundation and model evaluation. See [`docs/PLAN.md`](docs/PLAN.md).
+Architecture foundation and model evaluation. See [`docs/PLAN.md`](docs/PLAN.md) and the
+[representative-corpus scoring guide](docs/evaluation/representative-corpus.md).
 
 ## Technology foundation
 

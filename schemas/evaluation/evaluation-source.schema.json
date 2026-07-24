@@ -1,0 +1,115 @@
+{
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/evaluation-source@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "evaluation-source@1"
+    },
+    "source_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string",
+          "enum": ["project_synthetic", "private_copyrighted", "permissively_licensed"]
+        },
+        "redistribution": {
+          "type": "string",
+          "enum": ["committed_allowed", "workspace_only"]
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contains_personal_data": {
+          "type": "boolean"
+        }
+      },
+      "required": ["origin", "redistribution", "license", "contains_personal_data"],
+      "additionalProperties": false
+    },
+    "extraction_identity": {
+      "type": "object",
+      "properties": {
+        "archive_parser": {
+          "type": "string",
+          "minLength": 1
+        },
+        "xml_parser": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extraction_rules": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+        },
+        "publication_content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "extraction_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "offset_unit": {
+          "type": "string",
+          "const": "unicode-scalar-value"
+        }
+      },
+      "required": [
+        "archive_parser",
+        "xml_parser",
+        "extraction_rules",
+        "publication_content_sha256",
+        "extraction_sha256",
+        "offset_unit"
+      ],
+      "additionalProperties": false
+    },
+    "passages": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "locator": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_text_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["source_ref", "locator", "source_text", "source_text_sha256"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "source_version",
+    "source_id",
+    "provenance",
+    "extraction_identity",
+    "passages"
+  ],
+  "additionalProperties": false
+}

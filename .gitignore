@@ -34,6 +34,8 @@ config/local.*
 /data/
 /models/
 /output/
+/evaluation/
+/evaluation-private/
 *.epub
 *.gguf
 *.ggml
