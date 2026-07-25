@@ -37,7 +37,7 @@ const modelRoot = requiredEnvironment('VOXCPM2_MODEL_ROOT')
 const audioBase = requiredEnvironment('VOXCPM2_AUDIO_BASE')
 const rawBase = requiredEnvironment('VOXCPM2_RAW_BASE')
 const buildLogBase = requiredEnvironment('VOXCPM2_BUILD_LOG_BASE')
-const expectedSourceIdentity = requiredEnvironment('VOXCPM2_SOURCE_IDENTITY')
+const expectedSourceIdentity = requiredValue('VOXCPM2_SOURCE_IDENTITY')
 const cli = join(runtimeRoot, 'build/bin/voxcpm2-cli')
 const server = join(runtimeRoot, 'build/bin/llama-tts-server')
 const baseModel = join(modelRoot, lock.ggufModel.assets[0].name)
@@ -53,10 +53,14 @@ const ownedServers = new Set()
 const ownedMonitors = new Set()
 let artifacts
 
-function requiredEnvironment(name) {
+function requiredValue(name) {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is required; invoke this probe through voxcpm2-spike.sh`)
-  return resolve(value)
+  return value
+}
+
+function requiredEnvironment(name) {
+  return resolve(requiredValue(name))
 }
 
 async function exists(path) {
