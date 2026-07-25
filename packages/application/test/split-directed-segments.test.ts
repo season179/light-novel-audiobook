@@ -1,6 +1,10 @@
 import { type DirectedSegment, DomainError } from '@light-novel-audiobook/domain'
 import { describe, expect, it } from 'vitest'
-import { MAX_FRAGMENT_CHARACTERS, splitDirectedSegments } from '../src/split-directed-segments.js'
+import {
+  MAX_FRAGMENT_CHARACTERS,
+  SEPARATOR_OVERSHOOT,
+  splitDirectedSegments,
+} from '../src/split-directed-segments.js'
 
 const BASE_FRAGMENT: DirectedSegment = {
   sourcePassageId: 'passage-1',
@@ -136,6 +140,37 @@ describe('splitDirectedSegments (#55)', () => {
     expect(() => splitDirectedSegments([unsplittable])).toThrow(DomainError)
     expect(() => splitDirectedSegments([unsplittable])).toThrow(
       /cannot be split: a run longer than the .*-character render budget/iu,
+    )
+  })
+
+  it('attaches an isolated separator instead of emitting a whitespace-only piece (#55 r2)', () => {
+    // 400-char unbreakable run + one separator + 400-char unbreakable run would naively yield
+    // [400, 1, 400] -- a whitespace-only middle piece that QwenTtsSpeechEngine.validateRequest
+    // rejects. The separator attaches to the preceding piece within the bounded overshoot.
+    const run = 'A'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const text = `${run} ${'B'.repeat(MAX_FRAGMENT_CHARACTERS)}`
+    const pieces = split(text)
+
+    expect(pieces.length).toBe(2)
+    expect(pieces.join('')).toBe(text)
+    for (const piece of pieces) expect(piece.trim().length).toBeGreaterThan(0)
+    for (const piece of pieces) {
+      expect(Array.from(piece).length).toBeLessThanOrEqual(
+        MAX_FRAGMENT_CHARACTERS + SEPARATOR_OVERSHOOT,
+      )
+    }
+    expect(pieces[0]).toBe(`${run} `)
+    expect(pieces[1]).toBe('B'.repeat(MAX_FRAGMENT_CHARACTERS))
+  })
+
+  it('throws when a separator run is too long to attach within the bounded overshoot (#55 r2)', () => {
+    const tooLong = SEPARATOR_OVERSHOOT + 1
+    const text = `${'A'.repeat(MAX_FRAGMENT_CHARACTERS)}${' '.repeat(tooLong)}${'B'.repeat(
+      MAX_FRAGMENT_CHARACTERS,
+    )}`
+    expect(() => split(text)).toThrow(DomainError)
+    expect(() => split(text)).toThrow(
+      /cannot be split: a whitespace run longer than the .*-character separator allowance/iu,
     )
   })
 })

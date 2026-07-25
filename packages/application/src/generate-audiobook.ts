@@ -20,7 +20,7 @@ import type {
   SpeechEngine,
 } from './ports.js'
 import { createRenderInputIdentity } from './render-input-identity.js'
-import { splitDirectedSegments } from './split-directed-segments.js'
+import { splitDirectedSegments, splitterIdentity } from './split-directed-segments.js'
 
 export interface GenerateAudiobookCommand {
   readonly jobId: string
@@ -78,6 +78,7 @@ export class GenerateAudiobook {
       directorIdentity: this.directorModel.identity,
       speechEngineIdentity: this.speechEngine.identity,
       audioAssemblerIdentity: this.audioAssembler.identity,
+      splitterIdentity: splitterIdentity(),
     })
     let job = await this.jobs.findJob(command.jobId)
     if (

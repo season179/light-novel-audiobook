@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { DomainError, type VoiceCast } from '@light-novel-audiobook/domain'
+import { splitterIdentity as computeSplitterIdentity } from './split-directed-segments.js'
 
 export interface GenerationCommandIdentityInput {
   readonly epubPath: string
@@ -9,6 +10,12 @@ export interface GenerationCommandIdentityInput {
   readonly directorIdentity: string
   readonly speechEngineIdentity: string
   readonly audioAssemblerIdentity: string
+  /**
+   * Stable identity for the deterministic segment splitter (#55); changing it changes every segment
+   * id, source text, render identity, and assembled audio. Defaults to the production splitter policy
+   * so the binding is always present even when a caller does not name one explicitly.
+   */
+  readonly splitterIdentity?: string
 }
 
 /** Binds a job/result to every immutable input that can change direction, speech, or assembly. */
@@ -26,6 +33,7 @@ export const createGenerationCommandIdentity = (input: GenerationCommandIdentity
   if (externalIdentities.some((identity) => identity.trim().length === 0)) {
     throw new DomainError('Extractor, director, speech, and assembler identities are required')
   }
+  const splitterIdentity = input.splitterIdentity ?? computeSplitterIdentity()
   const canonical = JSON.stringify({
     schema: 2,
     epubPath: input.epubPath,
@@ -35,6 +43,7 @@ export const createGenerationCommandIdentity = (input: GenerationCommandIdentity
     director: input.directorIdentity,
     speech: input.speechEngineIdentity,
     assembly: input.audioAssemblerIdentity,
+    splitter: splitterIdentity,
   })
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
 }

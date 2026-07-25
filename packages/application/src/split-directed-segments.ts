@@ -7,6 +7,43 @@ import { type DirectedSegment, DomainError } from '@light-novel-audiobook/domain
  */
 export const MAX_FRAGMENT_CHARACTERS = 400
 
+/**
+ * Bounded allowance by which one piece may exceed `MAX_FRAGMENT_CHARACTERS` to absorb an otherwise
+ * isolated separator (#55 r2, MEDIUM 1). A separator is a few characters, not a re-budget: this
+ * absorbs any realistic inter-token whitespace (single/double/triple space, tabs, small indent)
+ * while using only a small slice of the ~70-character margin to the measured 470–486 crossing, so a
+ * maxed-out piece is still ≤ 408. A whitespace run too long to attach within this throws.
+ */
+export const SEPARATOR_OVERSHOOT = 8
+
+/**
+ * Policy version for the deterministic split (#55 r2, MEDIUM 2). Bumped when the boundary algorithm
+ * or separator handling changes, so a changed splitter invalidates the generation command identity.
+ */
+export const SPLITTER_POLICY_VERSION = 1
+
+export interface SplitterPolicy {
+  readonly maxFragmentCharacters: number
+  readonly separatorOvershoot: number
+}
+
+export const DEFAULT_SPLITTER_POLICY: SplitterPolicy = Object.freeze({
+  maxFragmentCharacters: MAX_FRAGMENT_CHARACTERS,
+  separatorOvershoot: SEPARATOR_OVERSHOOT,
+})
+
+/**
+ * Stable identity for the splitter policy, folded into the generation command identity (#55 r2) so
+ * that changing the budget, the overshoot, or the boundary algorithm invalidates affected work.
+ */
+export function splitterIdentity(policy: SplitterPolicy = DEFAULT_SPLITTER_POLICY): string {
+  return JSON.stringify({
+    schema: SPLITTER_POLICY_VERSION,
+    maxFragmentCharacters: policy.maxFragmentCharacters,
+    separatorOvershoot: policy.separatorOvershoot,
+  })
+}
+
 const SENTENCE_TERMINATORS = new Set(['.', '!', '?', '…', '。'])
 const CLAUSE_TERMINATORS = new Set([',', ';', ':', '—', '–', '、'])
 // Closing quotes/brackets that may follow a terminator before the separating whitespace; skipped
@@ -84,7 +121,9 @@ function rangeCodePoints(clusterCodePoints: readonly number[], start: number, en
  * truncate or emit an over-budget piece.
  */
 function splitText(text: string, maxCharacters: number, sourcePassageId: string): string[] {
-  if (codePointLength(text) <= maxCharacters) return [text]
+  if (codePointLength(text) <= maxCharacters) {
+    return attachOrphanSeparators([text], maxCharacters, sourcePassageId)
+  }
 
   const clusters = graphemes(text)
   const clusterCodePoints = clusters.map((cluster) => codePointLength(cluster))
@@ -124,7 +163,63 @@ function splitText(text: string, maxCharacters: number, sourcePassageId: string)
     pieces.push(clusters.slice(start, end).join(''))
     start = end
   }
-  return pieces
+  return attachOrphanSeparators(pieces, maxCharacters, sourcePassageId)
+}
+
+/**
+ * Merges any whitespace-only piece into a neighbour so the splitter never emits a piece whose
+ * `trim()` is empty (`QwenTtsSpeechEngine.validateRequest` rejects those). A separator attaches to
+ * the preceding piece by default, or to the following piece if that is where it fits; the piece may
+ * overshoot `maxCharacters` by at most `SEPARATOR_OVERSHOOT`. A run too long to attach within that
+ * ceiling -- or an all-whitespace fragment -- throws rather than silently truncate or emit an
+ * unrenderable piece. Merging adjacent pieces keeps the partition exact.
+ */
+function attachOrphanSeparators(
+  pieces: readonly string[],
+  maxCharacters: number,
+  sourcePassageId: string,
+): string[] {
+  const ceiling = maxCharacters + SEPARATOR_OVERSHOOT
+  const attached: string[] = []
+  let pendingSeparator = ''
+  const flush = (token: string): void => {
+    const merged = pendingSeparator + token
+    if (codePointLength(merged) > ceiling) {
+      throw new DomainError(
+        `Directed segment for source passage ${sourcePassageId} cannot be split: a whitespace run longer than the ${SEPARATOR_OVERSHOOT}-character separator allowance cannot attach to a neighbouring piece within the ${ceiling}-character ceiling`,
+      )
+    }
+    attached.push(merged)
+    pendingSeparator = ''
+  }
+  for (const piece of pieces) {
+    if (piece.trim().length === 0) {
+      const previous = attached.at(-1)
+      if (previous !== undefined && codePointLength(previous) + codePointLength(piece) <= ceiling) {
+        attached[attached.length - 1] = previous + piece
+      } else {
+        // No preceding piece, or it is already at the ceiling: defer to the following piece.
+        pendingSeparator += piece
+      }
+    } else {
+      flush(piece)
+    }
+  }
+  if (pendingSeparator !== '') {
+    const previous = attached.at(-1)
+    if (previous === undefined) {
+      throw new DomainError(
+        `Directed segment for source passage ${sourcePassageId} cannot be split: the fragment is whitespace-only`,
+      )
+    }
+    if (codePointLength(previous) + codePointLength(pendingSeparator) > ceiling) {
+      throw new DomainError(
+        `Directed segment for source passage ${sourcePassageId} cannot be split: a trailing whitespace run longer than the ${SEPARATOR_OVERSHOOT}-character separator allowance cannot attach within the ${ceiling}-character ceiling`,
+      )
+    }
+    attached[attached.length - 1] = previous + pendingSeparator
+  }
+  return attached
 }
 
 /**
