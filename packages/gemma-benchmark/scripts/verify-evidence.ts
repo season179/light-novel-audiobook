@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { canonicalJson, type JsonValue, sha256 } from '@light-novel-audiobook/scoring-harness'
-import { syntheticEvidenceSchema, verifyEvidenceInternalConsistency } from '../src/evidence.js'
+import {
+  syntheticEvidenceSchema,
+  verifyEvidenceInternalConsistency,
+  verifySyntheticAnnotationFixtureIdentity,
+} from '../src/evidence.js'
 import { readImplementationIdentity } from '../src/implementation-identity.js'
 import { BENCHMARK_PROFILES } from '../src/profiles.js'
 
@@ -21,6 +25,15 @@ await execFile('git', ['merge-base', '--is-ancestor', evidence.implementation.co
 })
 const recorded = await readImplementationIdentity(repositoryRoot, evidence.implementation.commit)
 const current = await readImplementationIdentity(repositoryRoot)
+const { stdout: annotationFixtureBytes } = await execFile(
+  'git',
+  [
+    'show',
+    `${evidence.implementation.commit}:packages/scoring-harness/test/fixtures/annotations.json`,
+  ],
+  { cwd: repositoryRoot },
+)
+verifySyntheticAnnotationFixtureIdentity(evidence, JSON.parse(annotationFixtureBytes) as JsonValue)
 if (
   recorded.commit !== evidence.implementation.commit ||
   recorded.tree !== evidence.implementation.tree ||
@@ -65,6 +78,7 @@ const requiredSources = [
   'packages/gemma-benchmark/scripts/verify-evidence.ts',
   'packages/gemma-benchmark/provenance.json',
   'packages/scoring-harness/src/scorer.ts',
+  'packages/scoring-harness/test/fixtures/annotations.json',
   'pnpm-lock.yaml',
 ]
 if (requiredSources.some((path) => !evidence.implementation.source_files.includes(path))) {

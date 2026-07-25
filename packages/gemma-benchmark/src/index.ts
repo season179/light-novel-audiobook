@@ -4,6 +4,7 @@ export {
   syntheticEvidenceSchema,
   verifyEvidenceInternalConsistency,
   verifyPassingCleanupEvidence,
+  verifySyntheticAnnotationFixtureIdentity,
 } from './evidence.js'
 export {
   type GatewayCompletion,

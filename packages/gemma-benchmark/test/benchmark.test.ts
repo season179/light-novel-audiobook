@@ -509,6 +509,83 @@ describe('Gemma benchmark policy', () => {
     }
   })
 
+  it('allows exactly one owner when 32 acquisitions race from a stale lock', async () => {
+    const { root, inputs: validated } = await temporaryInput()
+    const identity = await currentLinuxIdentity()
+    const experimentId = 'concurrent-stale-lock-stress'
+    const experimentRoot = join(root, 'experiments', experimentId)
+    await mkdir(experimentRoot, { recursive: true, mode: 0o700 })
+    await writeCanonical(join(experimentRoot, '.experiment.lock'), {
+      schema_version: 'benchmark-experiment-lock@1',
+      pid: 2_147_483_647,
+      linux_start_time_ticks: '1',
+      executable: identity.executable,
+      owner_token: 'b'.repeat(64),
+    })
+
+    let releaseOwner!: () => void
+    let rejectCount = 0
+    let ownerCount = 0
+    let allLosersObserved!: () => void
+    let ownerObserved!: () => void
+    const releaseOwnerPromise = new Promise<void>((resolvePromise) => {
+      releaseOwner = resolvePromise
+    })
+    const allLosersObservedPromise = new Promise<void>((resolvePromise) => {
+      allLosersObserved = resolvePromise
+    })
+    const ownerObservedPromise = new Promise<void>((resolvePromise) => {
+      ownerObserved = resolvePromise
+    })
+    const racingGateway: ModelGateway = {
+      async countTokens() {
+        ownerCount += 1
+        ownerObserved()
+        await releaseOwnerPromise
+        return 1_000
+      },
+      async complete() {
+        throw new Error('not reached')
+      },
+    }
+    const attempts = Array.from({ length: 32 }, () =>
+      runExactlyThree(optionsFor(validated, racingGateway, experimentId)).catch(
+        (error: unknown) => {
+          rejectCount += 1
+          if (rejectCount === 31) allLosersObserved()
+          throw error
+        },
+      ),
+    )
+    const allResults = Promise.allSettled(attempts)
+    let timeout: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([
+        Promise.all([allLosersObservedPromise, ownerObservedPromise]),
+        new Promise<void>((_, rejectPromise) => {
+          timeout = setTimeout(
+            () => rejectPromise(new Error('concurrent lock stress timed out')),
+            5_000,
+          )
+        }),
+      ])
+      expect(ownerCount).toBe(1)
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      releaseOwner()
+    }
+    const results = await allResults
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(
+      results.filter(
+        (result) =>
+          result.status === 'rejected' &&
+          result.reason instanceof Error &&
+          result.reason.message.includes('already locked'),
+      ),
+    ).toHaveLength(31)
+  })
+
   it('rejects extra artifacts and stale plan, dataset, profile, model, binary, runtime, or request identity', async () => {
     const mutationCases: Array<{ name: string; mutate: (root: string) => Promise<void> }> = [
       {

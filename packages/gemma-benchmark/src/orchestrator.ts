@@ -1,5 +1,7 @@
+import { type ChildProcess, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { link, lstat, mkdir, open, readdir, readFile, readlink, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { chmod, link, lstat, mkdir, open, readdir, readFile, readlink, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   canonicalJson,
@@ -166,21 +168,131 @@ async function readLockOwner(
   return { owner, bytes }
 }
 
-async function lockOwnerIsLive(owner: ExperimentLockOwner): Promise<boolean> {
-  const identity = await linuxProcessIdentity(owner.pid)
-  return (
-    identity !== null &&
-    identity.startTimeTicks === owner.linux_start_time_ticks &&
-    identity.executable === owner.executable
+async function initializeAdvisoryLockFile(lockPath: string): Promise<void> {
+  const handle = await open(
+    lockPath,
+    constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW,
+    0o600,
   )
+  await handle.close()
+  await chmod(lockPath, 0o600)
+  const details = await lstat(lockPath)
+  if (!details.isFile() || details.isSymbolicLink()) {
+    throw new Error('Experiment advisory lock is not a regular file')
+  }
 }
 
-async function releaseExperimentLock(lockPath: string, ownerToken: string): Promise<void> {
-  const current = await readLockOwner(lockPath)
-  if (current.owner.owner_token !== ownerToken) {
-    throw new Error('Experiment lock ownership changed unexpectedly')
+async function acquireAdvisoryLock(lockPath: string): Promise<ChildProcess> {
+  await initializeAdvisoryLockFile(lockPath)
+  const child = spawn(
+    'flock',
+    [
+      '--exclusive',
+      '--nonblock',
+      '--conflict-exit-code',
+      '73',
+      lockPath,
+      'sh',
+      '-c',
+      'printf "locked\\n"; cat >/dev/null',
+    ],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  )
+  return await new Promise<ChildProcess>((resolvePromise, rejectPromise) => {
+    let settled = false
+    let output = ''
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('error', onError)
+      child.removeListener('exit', onExit)
+      child.stdout?.removeListener('data', onData)
+      if (error) {
+        child.stdin?.end()
+        rejectPromise(error)
+      } else resolvePromise(child)
+    }
+    const onError = (error: Error): void => finish(error)
+    const onExit = (code: number | null): void =>
+      finish(
+        new Error(
+          code === 73
+            ? 'Experiment is already locked by another process'
+            : 'Experiment advisory lock failed',
+        ),
+      )
+    const onData = (chunk: Buffer): void => {
+      output += chunk.toString('utf8')
+      if (output === 'locked\n') finish()
+      else if (!'locked\n'.startsWith(output)) finish(new Error('Unexpected advisory lock output'))
+    }
+    const timer = setTimeout(
+      () => finish(new Error('Experiment advisory lock acquisition timed out')),
+      5_000,
+    )
+    child.once('error', onError)
+    child.once('exit', onExit)
+    child.stdout?.on('data', onData)
+  })
+}
+
+async function writeLockOwner(lockPath: string, owner: ExperimentLockOwner): Promise<void> {
+  const handle = await open(lockPath, constants.O_RDWR | constants.O_NOFOLLOW)
+  try {
+    await handle.truncate(0)
+    await handle.writeFile(`${canonicalJson(owner as unknown as JsonValue)}\n`)
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
-  await rm(lockPath)
+}
+
+async function releaseAdvisoryLock(child: ChildProcess): Promise<void> {
+  child.stdin?.end()
+  const code = await new Promise<number | null>((resolvePromise, rejectPromise) => {
+    if (child.exitCode !== null) {
+      resolvePromise(child.exitCode)
+      return
+    }
+    let settled = false
+    const finish = (error?: Error, exitCode: number | null = null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('error', onError)
+      child.removeListener('exit', onExit)
+      if (error) rejectPromise(error)
+      else resolvePromise(exitCode)
+    }
+    const onError = (error: Error): void => finish(error)
+    const onExit = (exitCode: number | null): void => finish(undefined, exitCode)
+    const timer = setTimeout(
+      () => finish(new Error('Experiment advisory lock release timed out')),
+      5_000,
+    )
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+  if (code !== 0) throw new Error('Experiment advisory lock holder exited abnormally')
+}
+
+async function releaseExperimentLock(
+  lockPath: string,
+  ownerToken: string,
+  child: ChildProcess,
+): Promise<void> {
+  let ownershipError: Error | undefined
+  try {
+    const current = await readLockOwner(lockPath)
+    if (current.owner.owner_token !== ownerToken) {
+      ownershipError = new Error('Experiment lock ownership changed unexpectedly')
+    }
+  } catch (error: unknown) {
+    ownershipError = error as Error
+  }
+  await releaseAdvisoryLock(child)
+  if (ownershipError) throw ownershipError
 }
 
 async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
@@ -194,44 +306,17 @@ async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<
     owner_token: randomBytes(32).toString('hex'),
   }
   const lockPath = join(experimentRoot, LOCK_NAME)
-  const candidatePath = join(
-    experimentRoot,
-    '..',
-    `.experiment-lock-candidate-${process.pid}-${owner.owner_token}`,
-  )
-  const candidate = await open(candidatePath, 'wx', 0o600)
+  const lockChild = await acquireAdvisoryLock(lockPath)
   try {
-    await candidate.writeFile(`${canonicalJson(owner as unknown as JsonValue)}\n`)
-    await candidate.sync()
-  } finally {
-    await candidate.close()
+    await writeLockOwner(lockPath, owner)
+  } catch (error: unknown) {
+    await releaseAdvisoryLock(lockChild)
+    throw error
   }
-
-  let acquired = false
-  try {
-    while (!acquired) {
-      try {
-        await link(candidatePath, lockPath)
-        acquired = true
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        const observed = await readLockOwner(lockPath)
-        if (await lockOwnerIsLive(observed.owner)) {
-          throw new Error('Experiment is already locked by another process')
-        }
-        const current = await readLockOwner(lockPath)
-        if (current.bytes !== observed.bytes) continue
-        await rm(lockPath)
-      }
-    }
-  } finally {
-    await rm(candidatePath, { force: true })
-  }
-
   try {
     return await run()
   } finally {
-    await releaseExperimentLock(lockPath, owner.owner_token)
+    await releaseExperimentLock(lockPath, owner.owner_token, lockChild)
   }
 }
 

@@ -84,6 +84,25 @@ export function evidenceBinding(value: Omit<SyntheticEvidence, 'evidence_binding
   return canonicalSha256(value as unknown as JsonValue)
 }
 
+export function verifySyntheticAnnotationFixtureIdentity(
+  value: SyntheticEvidence,
+  annotationFixture: JsonValue,
+): void {
+  const fixtureSha256 = canonicalSha256(annotationFixture)
+  if (
+    fixtureSha256 !== value.experiment.annotations_sha256 ||
+    fixtureSha256 !== value.experiment.plan.annotations_sha256 ||
+    fixtureSha256 !==
+      (
+        value.experiment.sanitized_report as {
+          scoring?: { identities?: { annotation_sha256?: unknown } }
+        }
+      ).scoring?.identities?.annotation_sha256
+  ) {
+    throw new Error('Recorded implementation annotation fixture identity mismatch')
+  }
+}
+
 export function verifyPassingCleanupEvidence(value: RuntimeCleanupEvidence): void {
   if (!isGracefulOwnedShutdown(value)) {
     throw new Error('Evidence cleanup is not a graceful owned shutdown')
@@ -113,6 +132,10 @@ export function verifyEvidenceInternalConsistency(value: SyntheticEvidence): voi
     run_manifest_sha256?: unknown
     decision?: unknown
     runs?: Array<Record<string, unknown>>
+    scoring?: { identities?: { annotation_sha256?: unknown } }
+  }
+  if (report.scoring?.identities?.annotation_sha256 !== value.experiment.annotations_sha256) {
+    throw new Error('Evidence scoring annotation identity mismatch')
   }
   if (
     report.schema_version !== 'issue-6-benchmark-report@3' ||

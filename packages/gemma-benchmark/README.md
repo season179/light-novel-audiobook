@@ -2,7 +2,7 @@
 
 Issue [#6](https://github.com/season179/light-novel-audiobook/issues/6) is implemented here up to the private-input acceptance gate. The runner performs exactly three sequential, identically configured calls, reconstructs source slices deterministically, invokes the merged #4 scorer, and writes private immutable run bundles plus a text-free report.
 
-Resume is fail-closed: one process owns an exclusive experiment lock bound to its PID, Linux process start time, executable, and random owner token. Live concurrency is rejected; a valid stale crash lock is reclaimed without signaling any process. The directory may contain only the exact plan, run 1–3, report, and transient lock; every plan/run/report identity and canonical byte representation is revalidated. Resume rehashes and reparses raw provider bytes, reconstructs predictions, verifies experiment/dataset/source/corpus/annotations/profile/model/build/runtime/request identities, and rejects stale, substituted, tampered, symlinked, or extra artifacts.
+Resume is fail-closed: one process owns a Linux `flock(1)` advisory lock with a manifest bound to its PID, Linux process start time, executable, and random owner token. Every acquisition uses the same kernel lock; live concurrency is rejected, a stale crash manifest resumes automatically after the kernel releases the dead owner, and the stable lock path is never unlinked or replaced. The directory may contain only the exact plan, run 1–3, report, and transient lock; every plan/run/report identity and canonical byte representation is revalidated. Resume rehashes and reparses raw provider bytes, reconstructs predictions, verifies experiment/dataset/source/corpus/annotations/profile/model/build/runtime/request identities, and rejects stale, substituted, tampered, symlinked, or extra artifacts.
 
 ## Locked primary profile
 
@@ -44,7 +44,7 @@ Operational pass requires exactly runs 1–3, each with `result_state=completed`
 
 The #4 fixture may exercise loading, CUDA, JSON-schema output, orchestration, resources, cleanup, resume, and sanitization. It is always `synthetic_operational` and cannot support representative accuracy or a profile decision. The authoritative measured RAM/VRAM values are in the current evidence file rather than duplicated here.
 
-Evidence uses two commits. First commit all implementation and CI-visible verification surfaces. The immutable plan and evidence bind the canonical gold-annotations hash without exposing annotation content. From that clean commit, run:
+Evidence uses two commits. First commit all implementation and CI-visible verification surfaces. The immutable plan and evidence bind the canonical gold-annotations hash without exposing annotation content. Verification also binds `sanitized_report.scoring.identities.annotation_sha256` and recomputes the synthetic annotation fixture from the recorded implementation commit with `git show`. From that clean commit, run:
 
 ```sh
 pnpm exec tsx packages/gemma-benchmark/scripts/record-synthetic-evidence.ts
