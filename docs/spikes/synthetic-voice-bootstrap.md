@@ -3,8 +3,11 @@
 - Issue: [#8](https://github.com/season179/light-novel-audiobook/issues/8)
 - Dependency: issue #7 is **NO-GO for production `SpeechEngine`/M2**
 - Allowed scope: serialized, non-streaming VoxCPM2 experiment only
+- Date: 2026-07-25
 - License/provenance: [`../licenses/synthetic-voice-bootstrap.md`](../licenses/synthetic-voice-bootstrap.md)
-- Host evidence: generated only after the harness implementation is committed
+- Host evidence: [`../evidence/issue-8-synthetic-voices-wsl2.json`](../evidence/issue-8-synthetic-voices-wsl2.json)
+- Decision: **GO for synthetic bootstrap technical feasibility only**
+- Listening approval: **PENDING**
 
 ## Purpose and boundary
 
@@ -70,12 +73,46 @@ they cannot establish word accuracy. The external run therefore includes an immu
 transcript-aligned manual listening form with intelligibility, stability, distinguishability,
 and cross-line consistency fields left explicitly pending.
 
-## Decision rule
+## Measured results
 
-A **GO for synthetic bootstrap technical feasibility** requires all objective checks. It means
-only that three deterministic, distinct, non-human references can condition multiple serialized
-VoxCPM2 lines reproducibly. Manual listening approval remains a later gate.
+The final host run was generated from implementation commit
+`932e11e8bfa7562b8da5bada2217e96dcdef88ab`. It recorded eSpeak NG binary SHA-256
+`36925debdef847f953863b68cf2c2452acaf1446309ab4b33f25e6c2626b7a36`, build-configuration
+SHA-256 `aa7a8488c6d7e8262cce47d4247012a77620cb7a48764fced6dcb4076ebda8d1`, selected-voice-source
+SHA-256 `13a4d25df87bfc42b14d82213b07826c711d8c32b748d14ebd249b2fbd8eb5e0`, and the exact
+compiler/CMake cache identity. The three references were byte-identical across two
+process-isolated, candidate-separated generation passes:
 
-Any objective failure is a **NO-GO for synthetic bootstrap technical feasibility**. In either
-case, issue #7 remains **NO-GO for production `SpeechEngine`/M2**, and this spike must not be
-cited as production readiness evidence.
+| Candidate | Voice | Reference SHA-256 | Estimated median pitch |
+| --- | --- | --- | ---: |
+| Narrator | `en-us` | `3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92` | 94.23 Hz |
+| Character one | `en-us+m3` | `6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc` | 76.56 Hz |
+| Character two | `en-us+f4` | `c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5` | 210.00 Hz |
+
+All pairwise reference pitch ratios exceeded the fixed 1.12 distinction gate (measured 1.23,
+2.23, and 2.74). Every reference passed PCM, clipping, and speech-activity checks.
+
+The probe made 12 serialized non-streaming requests: three fixed lines for each reference plus
+one exact repeat per candidate. Every request reused its candidate's unchanged reference hash,
+all WAVs passed strict validation and objective stability/intelligibility-proxy bounds, and all
+three repeated VoxCPM2 outputs were byte-identical. Across each candidate's three lines, pitch
+coefficient of variation was 0.054, 0.106, and 0.054 respectively. The server retained one
+process, never exceeded one in-flight request, listened only on `127.0.0.1:8081`, exited
+cleanly, and released the port.
+
+The immutable transcript-aligned listening form has SHA-256
+`b49af2cbe36150abb1ee062dfca598128e1b440a7d273f00f143c6cbd49d9caa` and nine primary audio
+entries. Its intelligibility, stability, distinguishability, and cross-line-consistency ratings
+remain deliberately unset. Objective duration/activity bounds are not word-accuracy evidence.
+
+## Go/no-go decision
+
+**GO for synthetic bootstrap technical feasibility.** The required additional local engine is
+the pinned eSpeak NG 1.52.0 source build with deterministic formant voices and MBROLA disabled.
+It is justified because it creates reproducible, distinguishable, non-human reference assets
+without requiring a user recording or a network service.
+
+This is **not** production listening approval. The external manual review remains pending, and
+issue #7 remains **NO-GO for production `SpeechEngine`/M2**. This experiment does not approve a
+production adapter, streaming, concurrency, cancellation, deadlines, voice naturalness, or M2
+readiness.
