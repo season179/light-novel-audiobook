@@ -1,8 +1,40 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-07-25T00:35:46.004Z",
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-25T01:27:17.734Z",
   "decision": "go",
   "scope": "issue-5-spike-only",
+  "git": {
+    "implementationCommit": "c403cd61b1d6410671fd51a52b5aac16dd76f511",
+    "implementationTree": "5c37f2cd4cf3e0079daf539446fd690a8fe4bed0",
+    "canonicalSourceSetSha256": "100b897f98ecff9906528dfc95d5f3e587b8060f19a5b7e67c5899fe8e5dd024",
+    "sourceFiles": [
+      ".github/workflows/ci.yml",
+      "biome.json",
+      "package.json",
+      "packages/llama-cpp-spike/.gitignore",
+      "packages/llama-cpp-spike/README.md",
+      "packages/llama-cpp-spike/package.json",
+      "packages/llama-cpp-spike/provenance.json",
+      "packages/llama-cpp-spike/scripts/prepare-host.sh",
+      "packages/llama-cpp-spike/scripts/real-host-smoke.ts",
+      "packages/llama-cpp-spike/src/client.ts",
+      "packages/llama-cpp-spike/src/config.ts",
+      "packages/llama-cpp-spike/src/errors.ts",
+      "packages/llama-cpp-spike/src/implementation-identity.ts",
+      "packages/llama-cpp-spike/src/index.ts",
+      "packages/llama-cpp-spike/src/recording-fetch.ts",
+      "packages/llama-cpp-spike/src/schema.ts",
+      "packages/llama-cpp-spike/src/slot-pool.ts",
+      "packages/llama-cpp-spike/test/client.test.ts",
+      "packages/llama-cpp-spike/test/evidence.test.ts",
+      "packages/llama-cpp-spike/test/llama-fixture-server.ts",
+      "packages/llama-cpp-spike/tsconfig.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "tsconfig.base.json",
+      "vitest.config.ts"
+    ]
+  },
   "environment": {
     "os": "Linux",
     "wsl2": true,
@@ -22,15 +54,50 @@
   "runtime": {
     "project": "ggml-org/llama.cpp",
     "commit": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
-    "versionOutput": "version: 1 (555881eb)\nbuilt with GNU 13.3.0 for Linux x86_64",
+    "versionOutput": "version: 1 (555881e)\nbuilt with GNU 13.3.0 for Linux x86_64",
+    "binarySha256": "7251aa057f209d5a0110b9b1ae6bd378fa63cc868d56243e74669d577a089636",
+    "cleanSourceCheckout": true,
+    "cleanRebuild": true,
     "ext4": true,
     "modelRepository": "bartowski/SmolLM2-135M-Instruct-GGUF",
     "modelRevision": "09816acd5d99df7be770d85ea30822623dab342c",
     "modelSha256": "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d"
   },
-  "harness": {
-    "sourceSha256": "5defb8b1c053e7959c1520e5b89655f5e6906ccbb627bf4b02c468864ea33b1b",
-    "portableFaultSuite": true
+  "security": {
+    "apiKey": {
+      "randomPerRun": true,
+      "entropyBytes": 32,
+      "fileMode0600": true,
+      "passedByFile": true,
+      "serverSideOnly": true,
+      "capturedAuthorization": "redacted",
+      "logged": false,
+      "committed": false
+    },
+    "cors": {
+      "configuredOrigins": "localhost",
+      "credentials": false,
+      "upstreamDefaultReflectionLimitationDocumented": true
+    },
+    "browserBoundary": {
+      "attackerOrigin": "https://attacker.invalid",
+      "apiKeySent": false,
+      "options": {
+        "attempts": 16,
+        "statuses": [200],
+        "slotSamples": 1,
+        "slotObservedBusy": false,
+        "accessControlAllowOrigin": null
+      },
+      "posts": {
+        "attempts": 16,
+        "statuses": [401],
+        "slotSamples": 2,
+        "slotObservedBusy": false,
+        "inferenceAuthorized": false
+      },
+      "finalSlotIdle": true
+    }
   },
   "tanstackAi": {
     "coreVersion": "0.42.0",
@@ -43,17 +110,50 @@
     "schemaValid": true
   },
   "requestShape": {
-    "serverSideFixtureCaptured": true,
-    "observedFields": [
-      "model",
-      "messages",
-      "temperature",
-      "seed",
-      "max_tokens",
-      "stream",
-      "stream_options",
-      "response_format.json_schema"
-    ]
+    "boundary": "loopback-transparent-fetch",
+    "forwardedToRealBackend": "/v1/chat/completions",
+    "bodyBytes": 564,
+    "bodySha256": "b2f4cc2011b25e761cc74d13ef179b63aef5ddafaf9323dd6277f4e2fd9b6e50",
+    "forwardedBodySha256": "b2f4cc2011b25e761cc74d13ef179b63aef5ddafaf9323dd6277f4e2fd9b6e50",
+    "authorization": {
+      "present": true,
+      "scheme": "Bearer",
+      "redacted": true
+    },
+    "backendStatus": 200,
+    "observed": {
+      "model": "smollm2-135m-instruct-q4-k-m",
+      "temperature": 0,
+      "seed": 5,
+      "maxTokens": 64,
+      "stream": true,
+      "streamOptions": {
+        "include_usage": true
+      },
+      "messageCount": 1,
+      "responseFormat": {
+        "type": "json_schema",
+        "name": "structured_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "const": "pass"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "required": ["verdict", "summary"],
+          "additionalProperties": false
+        },
+        "schemaSha256": "8374331727cb6784a93625f29c5b701d5785456566243baf7a6ee11daf273e27"
+      }
+    }
   },
   "capabilities": {
     "healthStatus": "ok",
@@ -71,9 +171,19 @@
     "classifiedAs": "cancelled",
     "serverSlotReleased": true,
     "clientSlotReleased": true,
-    "slotReleased": true
+    "followUpSucceeded": true
+  },
+  "timeout": {
+    "requestReachedServer": true,
+    "classifiedAs": "timeout",
+    "serverSlotReleased": true,
+    "clientSlotReleased": true,
+    "followUpSucceeded": true
   },
   "cleanup": {
-    "portReleased": true
+    "portReleased": true,
+    "apiKeyFileRemoved": true,
+    "logsDisabled": true,
+    "resourcesClosed": true
   }
 }
