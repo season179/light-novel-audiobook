@@ -176,6 +176,7 @@ class FakeDirector implements DirectorModel {
   readonly corrupt: boolean
   releaseCalls = 0
   failRelease = false
+  failOnceOnChapterId: string | null = null
 
   constructor(
     events: string[],
@@ -189,6 +190,10 @@ class FakeDirector implements DirectorModel {
 
   async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
     this.events.push(`direct:${chapter.id}`)
+    if (this.failOnceOnChapterId === chapter.id) {
+      this.failOnceOnChapterId = null
+      throw new Error('synthetic direction failure')
+    }
     const segments = directionFor(chapter)
     if (this.corrupt && chapter.position === 1) {
       const first = segments[0]
@@ -930,6 +935,86 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await expect(
       makeUseCase(redirected).execute(command),
     ).rejects.toThrow('stale for the requested generation inputs')
+  })
+
+  // Issue #54 item 1. Pre-fix (#45 without this patch), the resume below re-extracted and
+  // re-directed BOTH chapters before rendering reused anything: this test then fails with 2 new
+  // direct events, 1 new extractor call and 1 new director construction.
+  it('resumes a render-stage crash without re-extracting or re-directing any chapter', async () => {
+    const command = {
+      jobId: 'job-resume-render',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    app.speech.failOnceAtRenderCall = 3
+    await expect(generate(app, command)).rejects.toThrow('synthetic speech failure')
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('failed')
+    const directCalls = app.events.filter((event) => event.startsWith('direct:')).length
+    const extractCalls = app.extractor.calls.length
+    const directorBuilds = app.directorFactory.created.length
+
+    const resumed = await generate(app, command)
+
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.reusedSegments).toBe(2)
+    expect(resumed.generatedSegments).toBe(2)
+    // The whole point, measured by director calls rather than log lines: zero new directions, zero
+    // extractions — and the terminal, GPU-owning adapter is not even constructed, because
+    // direction's output is hashed into every segment's content address and re-running it would
+    // restale audio the ledger already holds (llama.cpp is not bit-deterministic run to run).
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(directCalls)
+    expect(app.extractor.calls).toHaveLength(extractCalls)
+    expect(app.directorFactory.created).toHaveLength(directorBuilds)
+  })
+
+  // Issue #54 item 1, mid-direction axis: a crash while directing chapter 2 of 2 must resume by
+  // directing ONLY chapter 2 — chapter 1's approved script is persisted and skipped.
+  it('resumes a direction-stage crash directing only the chapters never directed', async () => {
+    const command = {
+      jobId: 'job-resume-direction',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    const chapterTwoId = StableIds.chapter(bookId, 2)
+    app.director.failOnceOnChapterId = chapterTwoId
+    await expect(generate(app, command)).rejects.toThrow('synthetic direction failure')
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('failed')
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(2)
+
+    const resumed = await generate(app, command)
+
+    expect(resumed.job.state).toBe('completed')
+    // One new director call (chapter 2), never a second crack at chapter 1, no re-extraction.
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(3)
+    expect(
+      app.events.filter((event) => event === `direct:${StableIds.chapter(bookId, 1)}`),
+    ).toHaveLength(1)
+    expect(app.extractor.calls).toHaveLength(1)
+  })
+
+  // Issue #54 item 1 meets the review gate: the resumed direction must still STOP at
+  // awaiting_review when decisions are missing — skipping direction is not skipping review.
+  it('stops a resumed direction at the review gate when decisions are still missing', async () => {
+    const chapterTwoId = StableIds.chapter(bookId, 2)
+    app.director.failOnceOnChapterId = chapterTwoId
+    const command = {
+      jobId: 'job-resume-into-gate',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await expect(app.useCase.execute(command)).rejects.toThrow('synthetic direction failure')
+
+    await expect(app.useCase.execute(command)).rejects.toThrow(
+      /awaiting a fallback decision for 1 unresolved speaker segment/,
+    )
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('awaiting_review')
+    // Chapter 1 was directed once, before the crash; the resume directed only chapter 2.
+    expect(
+      app.events.filter((event) => event === `direct:${StableIds.chapter(bookId, 1)}`),
+    ).toHaveLength(1)
   })
 
   it('rejects an extractor result whose content hash differs from the bound EPUB', async () => {
