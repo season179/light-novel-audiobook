@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "adapter": {
+    "id": "qwen3-tts-python-batch",
+    "version": 1,
+    "protocolVersion": 1
+  },
+  "model": {
+    "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "snapshotLockSha256": "52eb83769efd950f0fbc0d7936db0e3381b133582e2a405f8f074f4458670d27",
+    "mainWeightsSha256": "38b1d5971bdbd982b561cccec982669a53b0537c3cf5e9bd4778ed07bb2f5137",
+    "speechTokenizerWeightsSha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"
+  },
+  "runtime": {
+    "python": "3.12.13",
+    "package": "qwen-tts",
+    "version": "0.1.1",
+    "torch": "2.9.1",
+    "torchaudio": "2.9.1",
+    "uvLockSha256": "6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9",
+    "attentionImplementation": "sdpa",
+    "flashAttentionAllowed": false,
+    "offline": true,
+    "referenceAudioAllowed": false
+  },
+  "generation": {
+    "language": "English",
+    "doSample": true,
+    "topK": 50,
+    "topP": 1.0,
+    "temperature": 0.9,
+    "repetitionPenalty": 1.05,
+    "subtalkerDoSample": true,
+    "subtalkerTopK": 50,
+    "subtalkerTopP": 1.0,
+    "subtalkerTemperature": 0.9,
+    "maxNewTokens": 8192,
+    "nonStreamingMode": true
+  },
+  "wav": {
+    "container": "RIFF/WAVE",
+    "encoding": "PCM",
+    "sampleRateHz": 24000,
+    "channels": 1,
+    "bitsPerSample": 16,
+    "maximumClippedSampleFraction": 0.001,
+    "minimumActiveFrameFraction": 0.15,
+    "minimumSecondsPerWord": 0.08,
+    "maximumSecondsPerWord": 2.0,
+    "maximumDurationSeconds": 30.0
+  },
+  "voiceProfiles": [
+    {
+      "id": "aiden-calm-narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "instruction": "Speak as a calm audiobook narrator with measured pacing, clear diction, and restrained warmth.",
+      "instructionSha256": "89ab750b6aca87f33cf45bb27853af5558244756b7a71c2397e73715aed32569",
+      "seedSalt": 9201,
+      "listeningEvidenceOutputSha256": "14f815c1d532d6e331e7817bb5b11ef5cd1a4b4e8897fc1ed046a596f523ffb5"
+    },
+    {
+      "id": "ryan-energetic-baseline",
+      "role": "character",
+      "speaker": "Ryan",
+      "instruction": "Speak with energetic confidence and lively momentum; alert, direct, and crisp without shouting.",
+      "instructionSha256": "d183f94963e48d47d999ea3411ef12fb973f4a66b7e2def5f6b22d9525da99c0",
+      "seedSalt": 9204,
+      "listeningEvidenceOutputSha256": "e77c6eab20bb2302579cfcb7834fe02dc710224c6d913e975f3cda5a003c7db3"
+    },
+    {
+      "id": "ryan-low-weary",
+      "role": "character-or-fallback",
+      "speaker": "Ryan",
+      "instruction": "Speak in a low, weary, restrained manner; tired and guarded, with slow deliberate phrasing and little emotional display.",
+      "instructionSha256": "5d1475b3120ef90869104a7a9b355105050486ce5bf053427e38e2b159f34ba1",
+      "seedSalt": 9205,
+      "listeningEvidenceOutputSha256": "a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759"
+    }
+  ],
+  "fallbackVoiceProfileId": "ryan-low-weary",
+  "seedStrategy": "sha256-profile-segment-v1",
+  "evidence": {
+    "humanListeningPath": "docs/evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json",
+    "humanListeningFileSha256": "db2a3fdae8b6d9989bd261007f53c8cd5c77a61cee8510b6f1fa025a133d67d7"
+  }
+}
