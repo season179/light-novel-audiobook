@@ -295,6 +295,19 @@ function decodeXml(bytes: Uint8Array, archivePath: string): string {
   return decoded
 }
 
+/**
+ * True when a DOCTYPE declares an internal subset, which is where `<!ENTITY` declarations live and
+ * therefore where entity-expansion and external-entity attacks would have to come from.
+ *
+ * Quoted spans are removed before looking for the delimiter: the subset's `[` is always outside
+ * quotes, whereas a SYSTEM identifier may legitimately contain one (an IPv6 host literal such as
+ * `http://[::1]/x.dtd`). A `[` cannot appear in a PUBLIC identifier at all -- the XML `PubidChar`
+ * production excludes it -- so this only affects SYSTEM identifiers.
+ */
+function hasInternalSubset(doctype: string): boolean {
+  return doctype.replace(/"[^"]*"|'[^']*'/g, '').includes('[')
+}
+
 function parseXml(
   bytes: Uint8Array,
   archivePath: string,
@@ -322,8 +335,10 @@ function parseXml(
     }
   }
 
-  parser.on('doctype', () => {
-    parseError = new Error(`${archivePath}: DOCTYPE and custom entities are not permitted`)
+  parser.on('doctype', (doctype) => {
+    if (hasInternalSubset(doctype)) {
+      parseError ??= new Error(`${archivePath}: DOCTYPE internal subsets are not permitted`)
+    }
   })
   parser.on('error', (error) => {
     parseError ??= new Error(`${archivePath}: malformed XML: ${error.message}`)

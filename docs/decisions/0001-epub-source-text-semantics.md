@@ -64,8 +64,11 @@ or speech-ready text.
    only line-ending change and is part of the extraction semantics.
 4. XML predefined references (`amp`, `lt`, `gt`, `quot`, `apos`) and valid decimal/hex numeric
    references are decoded once to Unicode. For example, `&amp;` becomes `&` and `&#x1F642;` becomes
-   `🙂`. A DOCTYPE, custom entity, undeclared named HTML entity such as `&nbsp;`, malformed reference,
-   or invalid scalar is a hard error. A non-breaking space can be authored as `&#160;`.
+   `🙂`. A custom entity, undeclared named HTML entity such as `&nbsp;`, malformed reference, or
+   invalid scalar is a hard error. A non-breaking space can be authored as `&#160;`.
+   A `DOCTYPE` **with no internal subset** is permitted and ignored; a `DOCTYPE` declaring an
+   internal subset (`[ ... ]`) is a hard error, whatever the subset contains. See
+   [amendment 2026-07-25](#amendment-2026-07-25-doctype-with-no-internal-subset-is-permitted).
 5. No NFC, NFD, NFKC, case, punctuation, smart-quote, compatibility, or grapheme normalization is
    performed. A decomposed `e` plus combining acute remains two Unicode scalar values.
 
@@ -241,3 +244,82 @@ issue #29 adapter maps only non-empty spine documents to one-based domain Chapte
 items remain explicit audited non-story documents. The broader uncommon-EPUB and visual/CSS
 semantics listed above remain review or future-format gates; the adapter continues to fail closed
 where it cannot preserve source semantics.
+
+## Amendment 2026-07-25: `DOCTYPE` with no internal subset is permitted
+
+- Issue: #41 (P0 bug)
+- Amends: decode-and-parse rule 4
+- Rules version: unchanged, still `epub-source-text@2` — see "Why the rules version is not bumped"
+
+### What changed
+
+Rule 4 previously made *any* `DOCTYPE` a hard error. It now rejects only a `DOCTYPE` that declares
+an internal subset (`[ ... ]`). Everything else rule 4 rejected is still rejected: `<!ENTITY`
+declarations, undeclared named entities such as `&nbsp;`, malformed references, and invalid scalars.
+
+### Why
+
+The original rule was written to stop XXE and entity-expansion ("billion laughs") attacks. Both
+require an internal DTD subset containing `<!ENTITY` declarations. Rejecting the *declaration line*
+as well was over-broad, and it made the adapter unable to read real books at all.
+
+Measured against one real commercial EPUB 2.0 light novel (19,060,624 bytes; not committed, and
+gitignored under `/ebooks/`):
+
+| Measure | Value |
+| --- | --- |
+| Markup documents in the archive | 24 |
+| Documents carrying a `DOCTYPE` | **22** |
+| Distinct `DOCTYPE` forms | 2 |
+| Documents with an internal subset (`[ ... ]`) | **0** |
+| `<!ENTITY` declarations anywhere | **0** |
+| Undeclared named entities | **0** |
+| Numeric character references | 190 decimal, 0 hex |
+| Predefined named references | 4 (`&quot;`) |
+
+Both forms are standards boilerplate rather than publication content: the XHTML 1.1 public
+identifier on 21 content documents, and the NCX 2005-1 public identifier on the navigation document.
+A staged experiment on in-memory copies isolated the cause: unmodified archive → rejected; with only
+the `DOCTYPE` declarations removed → extracted successfully. So the declaration was the sole blocker
+and the threat it was guarding against was absent.
+
+### Why this is safe
+
+Permitting a bare `DOCTYPE` is only safe if the parser never resolves the external identifier it
+names. That is verified rather than assumed, in `packages/epub-ingestion/test/doctype-rule.test.ts`:
+
+- `saxes@6.0.0`'s dependency closure is `saxes → xmlchars → (none)`; neither module references any
+  network or filesystem API, so it has no means to fetch a DTD.
+- A local HTTP server is started, a `DOCTYPE`'s `SYSTEM` identifier is pointed at it, extraction is
+  run, and the server must observe **zero** requests. The same is asserted for a `PUBLIC`
+  identifier's system fallback.
+- A document referencing an entity that only the served external DTD could declare fails as an
+  undefined entity, proving the DTD was not consulted rather than merely not logged.
+- An unreachable external identifier extracts normally instead of erroring or hanging, which a
+  fetching parser could not do.
+
+`saxes` additionally does not act on `<!ENTITY` declarations inside an internal subset at all: a
+reference to such an entity is reported as an undefined entity. Internal subsets are still rejected
+outright, so that behaviour is defence in depth rather than the thing being relied on.
+
+### Detection detail
+
+The internal-subset test strips quoted spans before looking for `[`. The subset delimiter is always
+outside quotes, whereas a `SYSTEM` identifier may legitimately contain one — an IPv6 host literal
+such as `http://[::1]/x.dtd`. A `[` cannot occur in a `PUBLIC` identifier, because the XML
+`PubidChar` production excludes it.
+
+### Why the rules version is not bumped
+
+`extraction_rules` stays `epub-source-text@2`, and the identity guarantee is not weakened.
+
+The rule change only *widens the set of accepted inputs*. For every input that was accepted under
+the previous wording, extraction is byte-identical: documents without a `DOCTYPE` parse exactly as
+before, and the `DOCTYPE` event is ignored where it is now permitted. No previously-accepted
+publication changes its passages, locators, hashes, or IDs, so those IDs must stay the same — a bump
+would falsely signal that stored records had become stale.
+
+The versioning requirement exists so that outputs produced under different rules cannot be confused
+when they could differ. Here they cannot differ: the overlap between the old and new accepted sets is
+exactly identical, and inputs newly accepted have no prior extraction to be confused with. No real
+book had ever been ingested under the previous wording, because the rule rejected them all.
