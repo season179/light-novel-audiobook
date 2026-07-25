@@ -44,6 +44,10 @@ config/local.*
 /output/
 /evaluation/
 /evaluation-private/
+# Real source books live here and are never committed, whatever their extension.
+# The whole directory is ignored so a non-.epub container (.kepub, .azw3, .zip) or an
+# unpacked directory cannot slip past the extension rules below.
+/ebooks/
 *.epub
 *.gguf
 *.ggml
