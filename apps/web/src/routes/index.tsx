@@ -1,29 +1,31 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { serverFnAudiobookClient } from '../client/server-fn-audiobook-client.js'
+import { EpubUploadPanel } from '../components/epub-upload-panel.js'
 
 export const Route = createFileRoute('/')({
   component: Home,
 })
 
 function Home() {
+  const navigate = useNavigate()
+
   return (
-    <main className="shell">
+    <main className="shell stack">
       <header className="hero">
         <p className="eyebrow">Local audiobook studio</p>
         <h1>Light Novel Audiobook</h1>
         <p>
-          Import an EPUB, review the directed script and synthetic cast, then generate a versioned
-          audiobook on this machine.
+          Import an EPUB, generate it into a numbered audiobook on this machine, then play the
+          chapters or download the M4B. Nothing leaves this computer.
         </p>
       </header>
 
-      <section className="panel" aria-labelledby="status-heading">
-        <div>
-          <p className="eyebrow">Project status</p>
-          <h2 id="status-heading">Foundation ready</h2>
-          <p>The import and generation workflow will be added in the next implementation stage.</p>
-        </div>
-        <span className="status">Local only</span>
-      </section>
+      <EpubUploadPanel
+        client={serverFnAudiobookClient}
+        onStarted={(jobId) => {
+          void navigate({ to: '/jobs/$jobId', params: { jobId } })
+        }}
+      />
     </main>
   )
 }
