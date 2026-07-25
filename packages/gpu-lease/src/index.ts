@@ -96,10 +96,21 @@ async function parentProcessId(pid: number): Promise<number | undefined> {
 }
 
 /**
- * A process group with any live member still owns the locked descriptor, so `ESRCH` - and only
- * `ESRCH` - proves the holder subtree is gone.
+ * Only a real, positive pid may ever be negated: `process.kill(-0, …)` signals *our own* process
+ * group, and `process.kill(-1, …)` signals every process we are allowed to signal. Neither is a
+ * holder subtree, so validity - not just definedness - has to be established first.
  */
-function isProcessGroupAlive(groupId: number): boolean {
+function isSignallableProcessId(pid: number | undefined): pid is number {
+  return pid !== undefined && Number.isSafeInteger(pid) && pid > 1
+}
+
+/**
+ * A process group with any live member still owns the locked descriptor, so `ESRCH` - and only
+ * `ESRCH` - proves the holder subtree is gone. Fail closed: an id we must not signal is an id whose
+ * group we cannot prove empty.
+ */
+function isProcessGroupAlive(groupId: number | undefined): boolean {
+  if (!isSignallableProcessId(groupId)) return true
   try {
     process.kill(-groupId, 0)
     return true
@@ -434,9 +445,10 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     } catch {
       // Already gone.
     }
-    if (child.pid === undefined) return
+    const groupId = child.pid
+    if (!isSignallableProcessId(groupId)) return
     try {
-      process.kill(-child.pid, signal)
+      process.kill(-groupId, signal)
     } catch {
       // ESRCH is success: the group has no member left to signal.
     }
@@ -451,10 +463,11 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     const deadline = Date.now() + timeoutMs
     const result = await this.#settleWithin(exit, timeoutMs)
     if (result === undefined) return undefined
-    const groupId = child.pid
-    if (groupId === undefined) return result
+    // An undefined pid means the spawn itself failed, so there is no subtree to outlive it. Any
+    // other unusable pid is handled fail-closed inside `isProcessGroupAlive`.
+    if (child.pid === undefined) return result
     for (;;) {
-      if (!isProcessGroupAlive(groupId)) return result
+      if (!isProcessGroupAlive(child.pid)) return result
       if (Date.now() >= deadline) return undefined
       await delay(HOLDER_GROUP_POLL_MS)
     }

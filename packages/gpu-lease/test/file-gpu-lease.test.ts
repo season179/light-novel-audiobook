@@ -368,8 +368,10 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       }).acquire('gemma')
       const directPid = await directHolderPid(path)
 
+      // `process.kill` returns once the signal is queued; the kernel drops the flock only when the
+      // last descriptor on it is closed, which needs both holder processes torn down first.
       process.kill(-directPid, 'SIGKILL')
-      const contender = await coordinator(path).acquire('qwen3-tts')
+      const contender = await acquireWithin(path, 5_000)
       await contender.release()
       expect((await stat(path)).isFile()).toBe(true)
 
