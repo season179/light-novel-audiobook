@@ -11,6 +11,9 @@
 - Human listening decision: **NO-GO** — all nine primary outputs were judged “unacceptable / extremely bad quality”
 - Decision record: [`../evidence/issue-8-human-listening-2026-07-25.json`](../evidence/issue-8-human-listening-2026-07-25.json)
 - Independent replacement: [`qwen3-tts-custom-voice.md`](qwen3-tts-custom-voice.md)
+- Replacement decision: **GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice**
+- Replacement human decision:
+  [`../evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json`](../evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json)
 
 ## Purpose and boundary
 
@@ -151,4 +154,15 @@ naturalness, or M2 readiness.
 After the human rejection, the orchestrator removed the external VoxCPM2 weights/runtime and
 eSpeak NG source/build/install (about 4 GB). The 12 historical WAVs, immutable manifests,
 review bundle, repository harness, and committed evidence remain preserved. The retired engines
-must not be reinstalled or the old harness rerun for the independent Qwen evaluation.
+must not be reinstalled or the old harness rerun.
+
+## Independent replacement outcome
+
+The official pinned Qwen3-TTS 1.7B CustomVoice evaluation supersedes this rejected engine path
+without deleting its history. Human listening accepted Aiden and Ryan for English, rejected
+Serena for English, and accepted all six follow-up Aiden/Ryan instruction variants as usable.
+The selected roles are Aiden calm narrator, Ryan energetic character one, and Ryan low/weary
+restrained character two; all six variants remain candidates.
+
+Issue #8 is **GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice**. This does
+not approve a production server adapter, streaming, cancellation, concurrency, or deadlines.

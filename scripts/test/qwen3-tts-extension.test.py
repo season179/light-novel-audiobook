@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 import struct
 import subprocess
 import tempfile
@@ -249,6 +250,54 @@ class HarnessTests(unittest.TestCase):
         self.assertIn('if [[ "${1:-}" == -- ]]', shell)
         self.assertIn("gpuReturnedToBaselineAfterWorkerExit", probe)
         self.assertNotIn("reference_audio", probe)
+
+    def test_human_decision_binds_both_rounds_without_invented_scores(self) -> None:
+        decision_path = ROOT / "docs/evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json"
+        evidence_path = ROOT / "docs/evidence/issue-8-qwen3-tts-custom-voice-wsl2.json"
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        original = decision["evidenceBindings"]["originalEvidenceRun"]
+        self.assertEqual(original["committedFileSha256"], hashlib.sha256(evidence_path.read_bytes()).hexdigest())
+        self.assertEqual(original["runId"], evidence["run"]["runId"])
+        self.assertEqual(original["modelRevision"], evidence["provenance"]["model"]["revision"])
+        expected_primary = [
+            {key: output[key] for key in ("profileId", "voiceId", "speaker", "lineId", "sha256")}
+            for output in evidence["outputs"]
+            if output["repetition"] == 0
+        ]
+        self.assertEqual(original["primaryOutputs"], expected_primary)
+        audition = decision["evidenceBindings"]["followUpExploratoryAudition"]
+        self.assertEqual(audition["manifestSha256"], "a25b2ccf0de5f96e3f3cd308b6a9ef2e164d7061e2341db85e825c861996ea96")
+        self.assertEqual(audition["outputCount"], 6)
+        self.assertEqual([item["seed"] for item in audition["outputs"]], [9201, 9202, 9203, 9204, 9205, 9206])
+        expected_variants = [
+            "aiden-calm-narrator",
+            "aiden-cold-antagonist",
+            "aiden-gentle-younger",
+            "ryan-energetic-baseline",
+            "ryan-low-weary",
+            "ryan-quiet-cautious",
+        ]
+        self.assertEqual([item["id"] for item in audition["outputs"]], expected_variants)
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) for item in audition["outputs"]))
+        review = decision["humanReview"]
+        self.assertFalse(review["numericScoresProvided"])
+        self.assertIsNone(review["numericScores"])
+        self.assertEqual(
+            [item["judgment"] for item in review["rounds"][0]["judgments"]],
+            ["usable English voice", "usable English voice", "rejected; not good for English"],
+        )
+        self.assertTrue(all(item["judgment"] == "good/usable" for item in review["rounds"][1]["judgments"]))
+        selected = decision["castSelection"]["selected"]
+        self.assertEqual([item["variantId"] for item in selected], ["aiden-calm-narrator", "ryan-energetic-baseline", "ryan-low-weary"])
+        self.assertTrue(decision["castSelection"]["allAuditionVariantsRemainCandidates"])
+        final = decision["decision"]
+        self.assertEqual(final["result"], "GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice")
+        self.assertFalse(final["productionServerAdapterApproval"])
+        self.assertFalse(final["streamingApproval"])
+        self.assertFalse(final["cancellationApproval"])
+        serialized = json.dumps(decision)
+        self.assertNotRegex(serialized, r"/(?:home|mnt)/")
 
     def test_latest_evidence_recomputes_historical_harness_and_objective_decision(self) -> None:
         evidence_path = ROOT / "docs/evidence/issue-8-qwen3-tts-custom-voice-wsl2.json"

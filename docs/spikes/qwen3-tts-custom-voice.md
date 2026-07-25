@@ -8,7 +8,9 @@
 - Host evidence:
   [`../evidence/issue-8-qwen3-tts-custom-voice-wsl2.json`](../evidence/issue-8-qwen3-tts-custom-voice-wsl2.json)
 - Technical decision: **GO for Qwen3-TTS technical evaluation**
-- Human listening: **PENDING** until the external review form is completed
+- Human decision:
+  [`../evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json`](../evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json)
+- Final issue #8 decision: **GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice**
 
 ## Boundary
 
@@ -17,10 +19,11 @@ failed human listening. The prior repository history, evidence, 12 external WAVs
 review bundle remain intact. Their deleted runtime, weights, source, build, and install paths
 must remain absent; this harness checks that condition and never calls the old setup or probe.
 
-The extension uses only the pinned 1.7B CustomVoice model and its built-in voices: Aiden for the
-narrator, Ryan for character one, and Serena for character two. All speak English with distinct,
-locked delivery instructions. It supplies no reference audio and cannot select another Qwen
-checkpoint.
+The extension uses only the pinned 1.7B CustomVoice model and its built-in voices. The original
+evaluation assigned Aiden, Ryan, and Serena to the three test roles. Human listening retained
+Aiden and Ryan as usable English voices and rejected Serena as not good for English. The final
+bootstrap cast uses instruction variants of Aiden and Ryan, supplies no reference audio, and
+cannot select another Qwen checkpoint.
 
 ## Reproduction in two commits
 
@@ -95,9 +98,9 @@ Evidence paths and run assets cannot be overwritten. Group/other permissions, sy
 snapshot, unexpected files, local paths, and recreated retired engines fail closed.
 
 The external review page contains all 18 primary clips with exact transcripts and style
-instructions. Its JSON form leaves intelligibility, naturalness, style fit, stability, voice
-distinction, and cross-line consistency explicitly null. Technical evidence may be committed,
-but listening and production decisions remain pending until a person completes that form.
+instructions. Its JSON form left numeric ratings null. The later sanitized listening decision
+records the supplied categorical judgments without inventing numeric scores. Production adapter
+behavior remains outside this review.
 
 ## Measured host results
 
@@ -129,12 +132,34 @@ evidence contains no absolute paths, process IDs, audio, or logs.
 
 The immutable external review bundle contains all 18 primary clips, exact transcripts and style
 instructions, `manual-review.json`, `review.html`, instructions, and a hashed artifact manifest.
-All subjective fields remain null pending a human review.
+
+## Human listening and final cast
+
+The sanitized decision binds two listening rounds without numeric scores. In the original
+committed evidence run, Aiden and Ryan were judged usable English voices; Serena was rejected as
+not good for English. A create-new follow-up audition then loaded the same local model once with
+SDPA and stock seeded sampling. Its private manifest SHA-256 is
+`a25b2ccf0de5f96e3f3cd308b6a9ef2e164d7061e2341db85e825c861996ea96`; the committed decision
+binds that manifest's run ID, common-text hash, six fixed seeds, instructions, and output hashes.
+All six Aiden/Ryan variants were judged good/usable, with sufficient distinction for a third
+bootstrap role. Distinctness is a human listening judgment, not an objective metric claim.
+
+The selected bootstrap cast is:
+
+| Role | Built-in speaker | Instruction variant |
+| --- | --- | --- |
+| Narrator | Aiden | calm narrator baseline |
+| Character one | Ryan | energetic baseline |
+| Character two | Ryan | low/weary restrained character |
+
+Aiden's cold/clipped antagonist and gentle/hesitant younger variants, Ryan's quiet/cautious soft
+variant, and the three selected variants all remain available candidates. Serena is excluded
+from English bootstrap casting by this decision.
 
 ## Decision
 
-**GO for Qwen3-TTS technical evaluation.** Every locked provenance, isolation, exact-matrix,
-WAV/activity/clipping, resource-cleanup, permission, sanitization, and review-bundle gate passed.
-This technical GO does not imply human listening approval or production `SpeechEngine`
-readiness. Both remain explicitly unassessed until the listening form is completed and later
-adapter requirements are tested.
+**GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice.** Technical gates and
+two human listening rounds support the selected local built-in voice/instruction profiles. This
+closes issue #8's bootstrap decision. It does **not** approve a production `SpeechEngine` server
+adapter, streaming, cancellation, concurrency, or deadline behavior; those require separate
+adapter validation.

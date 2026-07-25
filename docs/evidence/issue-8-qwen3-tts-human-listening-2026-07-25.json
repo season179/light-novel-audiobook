@@ -1,0 +1,343 @@
+{
+  "schemaVersion": 1,
+  "issue": 8,
+  "decisionDate": "2026-07-25",
+  "scope": {
+    "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "modelRevision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "runtime": "qwen-tts==0.1.1; local PyTorch SDPA",
+    "referenceAudioUsed": false
+  },
+  "evidenceBindings": {
+    "originalEvidenceRun": {
+      "committedPath": "docs/evidence/issue-8-qwen3-tts-custom-voice-wsl2.json",
+      "committedFileSha256": "b898c2c544b67eec66431290719a2063bff23a091eb4f2caa8e84a30a422467d",
+      "generatedFromCommit": "ce94ed7acef3e288dd9e95daf50e3bc5e6e9803d",
+      "runId": "qwen3tts-50a6642ec71f15a3-20260725T063447993240Z-394e8bf293b6",
+      "sourceIdentity": "50a6642ec71f15a36b6fb8769d01056bd8f4ebb4336012b53934b1dcbc61d144",
+      "artifactManifestSha256": "74ca4bea51924c12616de05f03eca0c534cdc404649ca1a6716b4c5e146e635d",
+      "modelRevision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+      "primaryOutputCount": 18,
+      "primaryOutputs": [
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-01",
+          "sha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-02",
+          "sha256": "98a50719368a7001c0efe7d4b13079681d838327b25bab44f6656cb0b3f4abcb"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-03",
+          "sha256": "0b661ddad6c762bc1ccfeb996cb5d62436b7c61dcd63258686a9c0d59ff0de8d"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-01",
+          "sha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-02",
+          "sha256": "3301a7308f4e6cea28b0e2e8207b80e62720b48a1f4de2280afa752e63838b37"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-03",
+          "sha256": "b55919b9158c625d8db96e556c6cdca42f012708abc684d394a57195ffc849b5"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-01",
+          "sha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-02",
+          "sha256": "4bdd9181102539bf3e68afb84f05cafa02ef7dbdc7ee00aaa8f0ace4d7ce39b1"
+        },
+        {
+          "profileId": "stock-seeded",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-03",
+          "sha256": "cd7ca779c5efd4f2377640c5eaf77ad401b33c141dc0f48192d92348a0c9ecd9"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-01",
+          "sha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-02",
+          "sha256": "71245885777bbdda70b378249de8dfda7a7820f458fa2239ffb6875b51c5f426"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "narrator",
+          "speaker": "Aiden",
+          "lineId": "line-03",
+          "sha256": "6a5279cb5d25bd5ffd605e72151501c3874649e9fbc5b54f7b52aca7c3b1064a"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-01",
+          "sha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-02",
+          "sha256": "fa1250e562f03fc679be6ca49d9798557729194f180d41553f8bde0e33b8b539"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-one",
+          "speaker": "Ryan",
+          "lineId": "line-03",
+          "sha256": "4fe6e7335c90997c0e4ec6fb240238d31a3a1583a2711589434a8408ac4c193a"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-01",
+          "sha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-02",
+          "sha256": "9d0676419e6d5411c8dd34c4a4bbf587b0abb1d7afae046c741e7e852eb615fd"
+        },
+        {
+          "profileId": "greedy",
+          "voiceId": "character-two",
+          "speaker": "Serena",
+          "lineId": "line-03",
+          "sha256": "14e5c401d9535656880dde23496bbeca4924f9ea01d3c238b61c6255e097706d"
+        }
+      ]
+    },
+    "followUpExploratoryAudition": {
+      "storage": "private external immutable run; absolute path omitted",
+      "manifestSha256": "a25b2ccf0de5f96e3f3cd308b6a9ef2e164d7061e2341db85e825c861996ea96",
+      "manifestSchemaVersion": 1,
+      "runId": "audition-aiden-ryan-20260725T065322366111Z-215e5a159e",
+      "createdAt": "2026-07-25T06:54:21.335169Z",
+      "modelRevision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+      "profile": "stock-seeded",
+      "commonTextSha256": "74f2be293ffdeb76402da61691951a851bd4c7c08ddeb4cde7778dab57ed0413",
+      "outputCount": 6,
+      "outputs": [
+        {
+          "id": "aiden-calm-narrator",
+          "label": "Aiden \u2014 calm narrator baseline",
+          "speaker": "Aiden",
+          "instruction": "Speak as a calm audiobook narrator with measured pacing, clear diction, and restrained warmth.",
+          "instructionSha256": "89ab750b6aca87f33cf45bb27853af5558244756b7a71c2397e73715aed32569",
+          "seed": 9201,
+          "file": "01-aiden-calm-narrator.wav",
+          "sha256": "14f815c1d532d6e331e7817bb5b11ef5cd1a4b4e8897fc1ed046a596f523ffb5"
+        },
+        {
+          "id": "aiden-cold-antagonist",
+          "label": "Aiden \u2014 cold/clipped antagonist",
+          "speaker": "Aiden",
+          "instruction": "Speak in a cold, clipped antagonist tone; controlled, severe, and emotionally distant, with short precise phrasing.",
+          "instructionSha256": "3ad0c087b8b1f26efc88932696260d1e26bdd8b9fdcbd85f776f2edb60292740",
+          "seed": 9202,
+          "file": "02-aiden-cold-antagonist.wav",
+          "sha256": "de5c56cc1beb99099cf049f98f3cba7075dbb8ae0ac6e19234e97104cffd05b4"
+        },
+        {
+          "id": "aiden-gentle-younger",
+          "label": "Aiden \u2014 gentle/hesitant younger character",
+          "speaker": "Aiden",
+          "instruction": "Speak as a gentle, hesitant younger character; soft, uncertain, and slightly breathless, with cautious pauses.",
+          "instructionSha256": "546f55e094187049d7929883f85682a95542da58f1fea45178dded40f17dcd89",
+          "seed": 9203,
+          "file": "03-aiden-gentle-younger.wav",
+          "sha256": "08e8fe449c36502de2e464cc44b52aeffa4359a2efb55036a71dfcff7ec9649d"
+        },
+        {
+          "id": "ryan-energetic-baseline",
+          "label": "Ryan \u2014 energetic baseline",
+          "speaker": "Ryan",
+          "instruction": "Speak with energetic confidence and lively momentum; alert, direct, and crisp without shouting.",
+          "instructionSha256": "d183f94963e48d47d999ea3411ef12fb973f4a66b7e2def5f6b22d9525da99c0",
+          "seed": 9204,
+          "file": "04-ryan-energetic-baseline.wav",
+          "sha256": "e77c6eab20bb2302579cfcb7834fe02dc710224c6d913e975f3cda5a003c7db3"
+        },
+        {
+          "id": "ryan-low-weary",
+          "label": "Ryan \u2014 low/weary restrained character",
+          "speaker": "Ryan",
+          "instruction": "Speak in a low, weary, restrained manner; tired and guarded, with slow deliberate phrasing and little emotional display.",
+          "instructionSha256": "5d1475b3120ef90869104a7a9b355105050486ce5bf053427e38e2b159f34ba1",
+          "seed": 9205,
+          "file": "05-ryan-low-weary.wav",
+          "sha256": "a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759"
+        },
+        {
+          "id": "ryan-quiet-cautious",
+          "label": "Ryan \u2014 quiet/cautious soft character",
+          "speaker": "Ryan",
+          "instruction": "Speak quietly and cautiously in a soft voice; concerned, careful, and intimate, keeping the delivery understated.",
+          "instructionSha256": "7b3abe87d4cee0f22ea94a3e925c15a468d99ced798d23188e34732e8b71cce5",
+          "seed": 9206,
+          "file": "06-ryan-quiet-cautious.wav",
+          "sha256": "0dc31b7e61906c7d638c36ec85dadd1b4d9a871247fc1774d6b460f660100f7b"
+        }
+      ]
+    }
+  },
+  "humanReview": {
+    "status": "completed-without-numeric-scores",
+    "reviewerIdentity": "omitted",
+    "numericScoresProvided": false,
+    "numericScores": null,
+    "rounds": [
+      {
+        "id": "original-evidence-run",
+        "binding": "evidenceBindings.originalEvidenceRun",
+        "judgments": [
+          {
+            "speaker": "Aiden",
+            "voiceId": "narrator",
+            "judgment": "usable English voice"
+          },
+          {
+            "speaker": "Ryan",
+            "voiceId": "character-one",
+            "judgment": "usable English voice"
+          },
+          {
+            "speaker": "Serena",
+            "voiceId": "character-two",
+            "judgment": "rejected; not good for English"
+          }
+        ]
+      },
+      {
+        "id": "follow-up-aiden-ryan-instruction-audition",
+        "binding": "evidenceBindings.followUpExploratoryAudition",
+        "judgments": [
+          {
+            "variantId": "aiden-calm-narrator",
+            "outputSha256": "14f815c1d532d6e331e7817bb5b11ef5cd1a4b4e8897fc1ed046a596f523ffb5",
+            "judgment": "good/usable"
+          },
+          {
+            "variantId": "aiden-cold-antagonist",
+            "outputSha256": "de5c56cc1beb99099cf049f98f3cba7075dbb8ae0ac6e19234e97104cffd05b4",
+            "judgment": "good/usable"
+          },
+          {
+            "variantId": "aiden-gentle-younger",
+            "outputSha256": "08e8fe449c36502de2e464cc44b52aeffa4359a2efb55036a71dfcff7ec9649d",
+            "judgment": "good/usable"
+          },
+          {
+            "variantId": "ryan-energetic-baseline",
+            "outputSha256": "e77c6eab20bb2302579cfcb7834fe02dc710224c6d913e975f3cda5a003c7db3",
+            "judgment": "good/usable"
+          },
+          {
+            "variantId": "ryan-low-weary",
+            "outputSha256": "a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759",
+            "judgment": "good/usable"
+          },
+          {
+            "variantId": "ryan-quiet-cautious",
+            "outputSha256": "0dc31b7e61906c7d638c36ec85dadd1b4d9a871247fc1774d6b460f660100f7b",
+            "judgment": "good/usable"
+          }
+        ],
+        "aggregateJudgment": "all six Aiden/Ryan instruction variants are good/usable",
+        "thirdRoleJudgment": "instruction variants provide a sufficiently distinct third role for bootstrap casting"
+      }
+    ]
+  },
+  "castSelection": {
+    "selected": [
+      {
+        "role": "narrator",
+        "speaker": "Aiden",
+        "variantId": "aiden-calm-narrator",
+        "instruction": "Speak as a calm audiobook narrator with measured pacing, clear diction, and restrained warmth.",
+        "seed": 9201,
+        "outputSha256": "14f815c1d532d6e331e7817bb5b11ef5cd1a4b4e8897fc1ed046a596f523ffb5"
+      },
+      {
+        "role": "character-one",
+        "speaker": "Ryan",
+        "variantId": "ryan-energetic-baseline",
+        "instruction": "Speak with energetic confidence and lively momentum; alert, direct, and crisp without shouting.",
+        "seed": 9204,
+        "outputSha256": "e77c6eab20bb2302579cfcb7834fe02dc710224c6d913e975f3cda5a003c7db3"
+      },
+      {
+        "role": "character-two",
+        "speaker": "Ryan",
+        "variantId": "ryan-low-weary",
+        "instruction": "Speak in a low, weary, restrained manner; tired and guarded, with slow deliberate phrasing and little emotional display.",
+        "seed": 9205,
+        "outputSha256": "a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759"
+      }
+    ],
+    "allAuditionVariantsRemainCandidates": true,
+    "candidateVariantIds": [
+      "aiden-calm-narrator",
+      "aiden-cold-antagonist",
+      "aiden-gentle-younger",
+      "ryan-energetic-baseline",
+      "ryan-low-weary",
+      "ryan-quiet-cautious"
+    ],
+    "serenaStatus": "rejected for English use in this bootstrap decision"
+  },
+  "decision": {
+    "result": "GO for local synthetic voice bootstrapping with Qwen3-TTS CustomVoice",
+    "issue8Closure": "GO",
+    "productionServerAdapterApproval": false,
+    "streamingApproval": false,
+    "cancellationApproval": false,
+    "explanation": "Listening approves the selected local built-in voice/instruction profiles for bootstrap use. A production SpeechEngine server adapter, streaming behavior, cancellation, concurrency, and deadlines require separate validation."
+  },
+  "redaction": {
+    "absolutePaths": "omitted",
+    "reviewerIdentity": "omitted",
+    "inventedNumericScores": "none",
+    "audio": "external only"
+  }
+}

@@ -2,7 +2,7 @@
 
 Local TypeScript pipeline for converting English EPUB light novels into multi-voice audiobooks.
 
-The project combines deterministic EPUB processing, a Gemma director through llama.cpp, VoxCPM2 speech generation through `llama.cpp-omni`, human review, audio quality control, and M4B assembly.
+The project combines deterministic EPUB processing, a Gemma director through llama.cpp, pinned local Qwen3-TTS CustomVoice generation behind a replaceable `SpeechEngine`, human review, audio quality control, and M4B assembly.
 
 ## Status
 
