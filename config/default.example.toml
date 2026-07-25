@@ -31,11 +31,15 @@ top_p = 1.0
 lease_path = "/home/<wsl-user>/.local/state/light-novel-audiobook/gpu/exclusive.lock"
 
 [tts]
+# Reserved loopback endpoint for any later accepted server; this batch adapter does not listen.
 base_url = "http://127.0.0.1:8081"
-model = "voxcpm"
-seed = 42
-cfg_value = 2.0
-inference_timesteps = 10
+adapter = "qwen3-tts-python-batch"
+# Keep runtime/model/output paths on WSL ext4 and outside this Git worktree.
+runtime_root = "/home/<wsl-user>/.local/share/light-novel-audiobook/runtimes/tts/qwen3-tts/<uv-lock-sha>"
+model_snapshot = "/home/<wsl-user>/.local/share/light-novel-audiobook/models/tts/qwen3-tts-custom-voice/0c0e3051f131929182e2c023b9537f8b1c68adfe/snapshot"
+output_root = "/home/<wsl-user>/.local/state/light-novel-audiobook/rendered-segments"
+gpu_lease_path = "/home/<wsl-user>/.local/state/light-novel-audiobook/gpu/exclusive.lock"
+fallback_voice_profile = "ryan-low-weary"
 
 [quality_control]
 minimum_speaker_confidence = 0.80

@@ -1,0 +1,18 @@
+{
+  "name": "@light-novel-audiobook/qwen-tts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run test",
+    "smoke:real": "tsx scripts/real-smoke.ts"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  }
+}

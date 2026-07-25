@@ -1,0 +1,123 @@
+export const SELECTED_VOICE_PROFILE_IDS = [
+  'aiden-calm-narrator',
+  'ryan-energetic-baseline',
+  'ryan-low-weary',
+] as const
+
+export type SelectedVoiceProfileId = (typeof SELECTED_VOICE_PROFILE_IDS)[number]
+
+export interface SpeechSegmentRequest {
+  /** Stable ID from the approved script. It also determines the canonical WAV filename. */
+  readonly segmentId: string
+  /** Exact approved render text. This adapter never normalizes or rewrites it. */
+  readonly text: string
+  /** Omit only for an explicitly approved unresolved-speaker fallback. */
+  readonly voiceProfileId?: SelectedVoiceProfileId
+}
+
+export interface SpeechRenderOptions {
+  readonly signal?: AbortSignal
+  readonly onProgress?: (event: SpeechProgressEvent) => void
+}
+
+export type SpeechProgressEvent =
+  | {
+      readonly type: 'batch-started'
+      readonly total: number
+      readonly renderCount: number
+      readonly reuseCount: number
+    }
+  | {
+      readonly type: 'segment-reused'
+      readonly segmentId: string
+      readonly completed: number
+      readonly total: number
+    }
+  | { readonly type: 'process-started'; readonly renderCount: number }
+  | { readonly type: 'runtime-validated' }
+  | { readonly type: 'model-loading' }
+  | { readonly type: 'model-loaded' }
+  | { readonly type: 'segment-started'; readonly segmentId: string; readonly sequence: number }
+  | {
+      readonly type: 'segment-rendered'
+      readonly segmentId: string
+      readonly completed: number
+      readonly total: number
+    }
+  | { readonly type: 'gpu-cleanup-complete' }
+  | { readonly type: 'batch-completed'; readonly rendered: number; readonly reused: number }
+
+export interface SpeechAudioIdentity {
+  readonly sha256: string
+  readonly bytes: number
+  readonly sampleRateHz: number
+  readonly channels: number
+  readonly bitsPerSample: number
+  readonly frames: number
+  readonly durationSeconds: number
+}
+
+export interface SpeechSegmentResult {
+  readonly segmentId: string
+  readonly status: 'rendered' | 'reused'
+  readonly voiceProfileId: SelectedVoiceProfileId
+  readonly usedFallback: boolean
+  readonly wavPath: string
+  readonly manifestPath: string
+  readonly renderIdentitySha256: string
+  readonly audio: SpeechAudioIdentity
+}
+
+export interface SpeechBatchResult {
+  readonly results: ReadonlyArray<SpeechSegmentResult>
+  readonly rendered: number
+  readonly reused: number
+}
+
+/**
+ * Temporary M1 port. Issue #29 can replace this shape at the composition root without changing
+ * the Qwen process protocol; see docs/integration/issue-31-qwen-tts.md.
+ */
+export interface SpeechEngine {
+  /** Model/runtime/global generation identity; segment text and voice stay segment-scoped. */
+  readonly identity: string
+  renderBatch(
+    segments: ReadonlyArray<SpeechSegmentRequest>,
+    options?: SpeechRenderOptions,
+  ): Promise<SpeechBatchResult>
+}
+
+export type SpeechEngineErrorCode =
+  | 'cancelled'
+  | 'configuration'
+  | 'gpu-busy'
+  | 'process-failed'
+  | 'protocol'
+  | 'audio-validation'
+
+export class SpeechEngineError extends Error {
+  override readonly name = 'SpeechEngineError'
+  readonly code: SpeechEngineErrorCode
+  readonly segmentId: string | undefined
+
+  constructor(
+    code: SpeechEngineErrorCode,
+    message: string,
+    options: { cause?: unknown; segmentId?: string } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause })
+    this.code = code
+    this.segmentId = options.segmentId
+  }
+}
+
+export interface GpuLease {
+  release(): Promise<void>
+}
+
+/** Shared by the Gemma and Qwen composition roots to prevent simultaneous GPU residency. */
+export type GpuOwner = 'gemma' | 'qwen3-tts'
+
+export interface ExclusiveGpuGate {
+  acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease>
+}
