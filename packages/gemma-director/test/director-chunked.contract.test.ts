@@ -420,6 +420,134 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     expect(progress.events.at(-1)).toMatchObject({ state: 'failed' })
   })
 
+  it('counts runtime startup against the chapter deadline instead of letting it run free', async () => {
+    const texts = ['A passage.']
+    const ids = ['passage-001']
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const slowLifecycle = new (class implements DirectorRuntimeLifecycle {
+      async start(): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 900))
+      }
+      async release(): Promise<void> {}
+    })()
+    const model = new GemmaDirectorModel({
+      baseUrl: server.baseUrl,
+      apiKey: API_KEY,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [{ id: 'mira', aliases: ['Mira'] }],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+      progressStore: { async append() {} },
+      lifecycle: slowLifecycle,
+      gpuLeaseCoordinator: new FakeGpuLeaseCoordinator(),
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+    })
+    models.push(model)
+
+    const started = Date.now()
+    try {
+      // A 400 ms chapter budget must fire DURING the 900 ms startup, not after it.
+      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
+      throw new Error('Expected the chapter deadline to fire during runtime startup')
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectorError)
+      expect((error as DirectorError).code).toBe('timeout')
+      expect((error as DirectorError).message).toContain('runtime startup')
+    }
+    expect(Date.now() - started).toBeLessThan(900)
+    expect(server.requests).toHaveLength(0)
+  })
+
+  it('counts context loading against the chapter deadline', async () => {
+    const texts = ['A passage.']
+    const ids = ['passage-001']
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const model = new GemmaDirectorModel({
+      baseUrl: server.baseUrl,
+      apiKey: API_KEY,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      contextProvider: {
+        forChapter: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 900))
+          return {
+            speakers: [{ id: 'mira', aliases: ['Mira'] }],
+            narratorSpeakerId: 'narrator',
+            fallbackSpeakerId: 'fallback-dialogue',
+          }
+        },
+      },
+      progressStore: { async append() {} },
+      lifecycle: new FakeLifecycle(),
+      gpuLeaseCoordinator: new FakeGpuLeaseCoordinator(),
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+    })
+    models.push(model)
+
+    const started = Date.now()
+    try {
+      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
+      throw new Error('Expected the chapter deadline to fire during context loading')
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectorError)
+      expect((error as DirectorError).code).toBe('timeout')
+      expect((error as DirectorError).message).toContain('context loading')
+    }
+    expect(Date.now() - started).toBeLessThan(900)
+    expect(server.requests).toHaveLength(0)
+  })
+
+  it('counts setup time against the budget available to later windows', async () => {
+    const texts = ['First.', 'Second.', 'Third.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    server.delayMs = 150
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const slowLifecycle = new (class implements DirectorRuntimeLifecycle {
+      async start(): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+      async release(): Promise<void> {}
+    })()
+    const model = new GemmaDirectorModel({
+      baseUrl: server.baseUrl,
+      apiKey: API_KEY,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [{ id: 'mira', aliases: ['Mira'] }],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+      progressStore: { async append() {} },
+      lifecycle: slowLifecycle,
+      gpuLeaseCoordinator: new FakeGpuLeaseCoordinator(),
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+      chunking: { windowPassageBudget: 1 },
+    })
+    models.push(model)
+
+    // 400 ms startup + 150 ms per window: a 650 ms chapter budget admits startup and about one
+    // window; if setup ran free, all three windows would fit under 650 ms after it.
+    try {
+      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 650 })
+      throw new Error('Expected the chapter deadline to fire inside the window loop')
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectorError)
+      expect((error as DirectorError).code).toBe('timeout')
+    }
+    expect(server.requests.length).toBeLessThan(texts.length)
+  })
+
   it('binds chunking settings into the director identity', async () => {
     server = new OracleLlamaServer(new Map())
     await server.start()

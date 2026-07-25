@@ -259,6 +259,9 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     chapter: Chapter,
     options: DirectionOptions = {},
   ): Promise<GemmaDirectedChapter> {
+    // The chapter deadline clock starts here, at entry: lease acquisition, runtime startup,
+    // and context loading all consume the same budget as the window requests that follow.
+    const chapterStartedAt = Date.now()
     this.assertAvailable()
     if (
       chapter.bookId !== book.id ||
@@ -268,7 +271,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         new Error('Director chapter must be the exact chapter owned by the book'),
       )
     }
-    return this.trackOperation(this.directChapterInternal(book, chapter, options))
+    return this.trackOperation(this.directChapterInternal(book, chapter, options, chapterStartedAt))
   }
 
   /**
@@ -317,9 +320,31 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     book: Book,
     chapter: Chapter,
     options: DirectionOptions,
+    chapterStartedAt: number,
   ): Promise<GemmaDirectedChapter> {
-    await this.ensureRuntimeReady(options.signal)
-    const context = await this.contextProvider.forChapter(book, chapter)
+    if (
+      options.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1)
+    ) {
+      throw new Error('Gemma Director chapter timeout must be a positive integer')
+    }
+    // The whole-chapter deadline starts at directChapter() entry, so GPU lease acquisition,
+    // runtime startup, and the context provider all consume the same budget as the window
+    // requests — the slowest, least predictable phase is exactly what the deadline must cover.
+    const chapterTimeoutMs = options.timeoutMs ?? DEFAULT_CHAPTER_TIMEOUT_MS
+    const chapterRemaining = (): number => chapterTimeoutMs - (Date.now() - chapterStartedAt)
+    await this.withChapterDeadline(
+      chapterRemaining(),
+      chapterTimeoutMs,
+      'runtime startup',
+      this.ensureRuntimeReady(options.signal),
+    )
+    const context = await this.withChapterDeadline(
+      chapterRemaining(),
+      chapterTimeoutMs,
+      'chapter context loading',
+      this.contextProvider.forChapter(book, chapter),
+    )
     const baseRequestId = `direction-${canonicalSha256({
       bookId: book.id,
       bookSourceSha256: book.source.sha256,
@@ -331,17 +356,6 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       text: passage.sourceText,
     }))
     const totalPassages = passages.length
-    if (
-      options.timeoutMs !== undefined &&
-      (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1)
-    ) {
-      throw new Error('Gemma Director chapter timeout must be a positive integer')
-    }
-    // The whole-chapter deadline spans every window request and retry. Each window's own timer
-    // is the smaller of the per-request setting and the remaining chapter budget, so a chapter
-    // can never sit below the per-request timeout window after window.
-    const chapterTimeoutMs = options.timeoutMs ?? DEFAULT_CHAPTER_TIMEOUT_MS
-    const chapterStartedAt = Date.now()
 
     const parameters: DirectorParameters = Object.freeze({
       seed: SELECTED_GEMMA_PROFILE.seed,
@@ -423,7 +437,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     try {
       while (nextIndex < totalPassages) {
         windowIndex += 1
-        const chapterRemainingMs = chapterTimeoutMs - (Date.now() - chapterStartedAt)
+        const chapterRemainingMs = chapterRemaining()
         if (chapterRemainingMs < 1) {
           throw new DirectorError(
             'timeout',
@@ -634,6 +648,44 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       warnings.length,
     )
     return Object.freeze(result)
+  }
+
+  /**
+   * Bounds one setup phase by the chapter deadline. A raced-away loser is not cancelled —
+   * `release()` still awaits and unloads it — but the chapter stops waiting for it.
+   */
+  private async withChapterDeadline<T>(
+    remainingMs: number,
+    chapterTimeoutMs: number,
+    label: string,
+    operation: Promise<T>,
+  ): Promise<T> {
+    if (remainingMs < 1) {
+      throw new DirectorError(
+        'timeout',
+        `Gemma Director chapter direction timed out after ${chapterTimeoutMs} ms before ${label}`,
+        true,
+      )
+    }
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new DirectorError(
+                'timeout',
+                `Gemma Director chapter direction timed out after ${chapterTimeoutMs} ms during ${label}`,
+                true,
+              ),
+            )
+          }, remainingMs)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
