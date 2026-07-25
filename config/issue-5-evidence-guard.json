@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "implementationCommit": "7a0ed3c935d5980838a0c7a59ca416ce884ef53d",
+  "authorizedVerifierPatches": {
+    "packages/llama-cpp-spike/test/evidence.test.ts": "ba30a508e962fb3b50953388720c574d6473f69bac6be98b699b45656f19606f"
+  }
+}
