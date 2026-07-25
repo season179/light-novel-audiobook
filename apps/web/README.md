@@ -88,6 +88,7 @@ only surface once real models load:
 | `FakeSpeechEngine` | second open batch; render outside a batch; overlapping renders; non-SHA-256 `inputIdentity`; voice that is not the segment's assignment; **fallback speech with no matching per-segment human approval** |
 | `FakeAudioAssembler` | chapter/segment misordering; audio supplied for the wrong segment; truncated segment lists; duplicate segments; overwriting a reserved output; **a reserved chapter extension it cannot produce** |
 | `InMemoryJobRepository` | reuse of a segment whose bytes no longer match its hash and size; a reservation naming an existing file |
+| `createM1VoiceCast` | it cannot drift: `syntheticSpeaker`, `instruction` and `seed` are read out of the pinned Qwen production config, which is exactly what `selectedVoiceProfile()` matches on |
 
 Two consequences worth knowing:
 
@@ -96,13 +97,27 @@ Two consequences worth knowing:
   stand-in, because this app has no approval action yet; it mints an identity-bound record per
   segment and lists them on `autoApprovedFallbacks`. **The real Qwen adapter accepts no such policy**
   — #21 must supply persisted `fallbackApprovals` or any book with an unresolved speaker will fail.
-- `FakeAudioAssembler` produces WAV, so it refuses a `.flac` or extensionless reservation rather than
-  writing WAV bytes under the wrong name. The merged SQLite repository reserves extensionless chapter
-  paths and the merged FFmpeg planner requires `.flac`; that mismatch is #43 and owned elsewhere.
+- `FakeAudioAssembler` produces WAV, so it refuses a `.flac` reservation rather than writing WAV bytes
+  under the wrong name. #43 has since aligned the real pair — SQLite persistence reserves
+  `<stem>-vNNN.flac` chapter masters and `<base>-vNNN.m4b`, which the FFmpeg planner requires — and
+  this app's chapter route already content-types `.flac` as `audio/flac`, covered by
+  `real-output-extensions.test.ts`. The fake's refusal is what stops a fake from hiding that class of
+  mismatch again.
 
 Adapter failures are also sanitized at the composition boundary, because `GenerateAudiobook` persists
 an adapter's message into job state and the browser reads that back. The raw cause is logged
 server-side; only `WebApiError` and `DomainError` messages pass through.
+
+### What the served-file guarantee is, and is not
+
+The binary routes serve **only paths the job reserved**, opened with `O_NOFOLLOW` and proven inside the
+workspace from the open descriptor. They do not claim the *content* is what this app produced: a
+hardlink placed in the workspace, or a plain overwrite of a reserved path, both look like ordinary
+in-workspace files, and both need workspace write access — which already allows substituting the bytes
+directly. Refusing `nlink > 1` would not change that and would reject legitimate exports, since the
+FFmpeg assembler places outputs with `link()` and a failed `unlink()` of its staged copy leaves a real
+output at two links. Closing it properly needs a digest recorded when the output is produced and
+verified when it is served; `AudiobookOutput` carries no hashes today, so that is a port-level change.
 
 ## Local workspace
 

@@ -10,7 +10,7 @@ import {
 import { describe, expect, it } from 'vitest'
 import { FakeDirectorModel } from '../src/server/fakes/fake-director-model.js'
 import { FIXTURE_CHAPTERS } from '../src/server/fakes/fixture-book.js'
-import { createM1VoiceCast } from '../src/server/m1-voice-cast.js'
+import { createM1VoiceCast, loadPinnedQwenConfig } from '../src/server/m1-voice-cast.js'
 
 /**
  * Pins the fake director against the real domain rules it has to satisfy. If an upstream change to
@@ -90,7 +90,7 @@ describe('fake director source fidelity', () => {
 
 describe('M1 cast resolution of the fixture', () => {
   it('produces exactly the four casting outcomes the UI reports', async () => {
-    const voices = createM1VoiceCast()
+    const voices = createM1VoiceCast(await loadPinnedQwenConfig())
     const outcomes = new Map<string, { profileId: string; reason: FallbackReason | null }>()
 
     for (const segment of await directAll()) {
@@ -109,7 +109,7 @@ describe('M1 cast resolution of the fixture', () => {
     })
   })
 
-  it('gives sound cues the narrator without a fallback warning', () => {
+  it('gives sound cues the narrator without a fallback warning', async () => {
     const chapterId = StableIds.chapter(bookId, 1)
     const passageId = StableIds.passage(chapterId, 1)
     const soundCue = new Segment({
@@ -124,7 +124,7 @@ describe('M1 cast resolution of the fixture', () => {
       delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 200 },
     })
 
-    const resolved = createM1VoiceCast().resolve(soundCue)
+    const resolved = createM1VoiceCast(await loadPinnedQwenConfig()).resolve(soundCue)
     expect(resolved.profile.id).toBe('narrator-aiden-calm')
     expect(resolved.assignment.usesFallback).toBe(false)
     expect(resolved.assignment.fallbackReason).toBeNull()

@@ -135,6 +135,17 @@ export class LocalWorkspace {
    * symlink in the final position fails outright — and containment is then decided from the open
    * descriptor itself via `/proc/self/fd/<fd>`, which names the inode actually held. Nothing after
    * the open can change what this handle refers to, and the same handle is what gets streamed.
+   *
+   * What this guarantees, precisely: the bytes served come from a regular file whose name resolves
+   * inside the workspace, reached without following a link out of it. It does **not** guarantee the
+   * *content* is what this app produced. A hardlink placed in the workspace, or a plain overwrite of
+   * a reserved path, both present as ordinary in-workspace files — and both require write access to
+   * the workspace, which already allows substituting the bytes directly. Refusing `nlink > 1` would
+   * not change that and would reject legitimate exports, because the FFmpeg assembler places outputs
+   * with `link()` and a failed `unlink()` of its staged copy leaves a real output at two links.
+   * Content integrity needs a digest recorded when the output is produced and checked when it is
+   * served; `AudiobookOutput` carries no hashes today, so that is a port-level change, not a check
+   * this function can make. Callers must also only ever pass paths the job actually reserved.
    */
   async openContainedFile(candidate: string): Promise<ContainedFile> {
     const lexical = this.assertContains(candidate)

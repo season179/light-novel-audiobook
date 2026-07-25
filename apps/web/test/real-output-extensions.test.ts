@@ -30,11 +30,12 @@ import { waitForJobState } from './support/test-harness.js'
  * proves **this app's routes and content typing** serve those extensions with no change, so #21 can
  * wire the real assembler behind them.
  *
- * It deliberately does NOT claim the real repository/assembler pair works together: merged SQLite
- * persistence reserves extensionless chapter paths and the merged planner requires `.flac`, which is
- * tracked as #43 and owned elsewhere. Both doubles here are local to this test because the shipped
- * `FakeAudioAssembler` now refuses a reservation it cannot honour, which is the behaviour that stops
- * a fake from hiding exactly that class of mismatch.
+ * #43 has since aligned the real pair: SQLite persistence reserves `<stem>-vNNN.flac` chapter masters
+ * and the planner requires `.flac`. This test still uses local doubles rather than those packages, so
+ * `apps/web` does not take a dependency on persistence or FFmpeg assembly to prove its own routing;
+ * pinning the real pair against each other belongs with #43/#21. The doubles are local because the
+ * shipped `FakeAudioAssembler` refuses a reservation it cannot honour, which is the behaviour that
+ * stops a fake from hiding that class of mismatch.
  */
 class FlacReservingRepository implements JobRepository {
   private readonly inner: InMemoryJobRepository

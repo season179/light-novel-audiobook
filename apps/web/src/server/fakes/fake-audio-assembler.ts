@@ -24,10 +24,10 @@ const SHA256 = /^[0-9a-f]{64}$/i
  * one operation rather than a stat and a hopeful write.
  *
  * It also **refuses a reservation whose chapter paths it cannot honour**. This fake produces WAV, so
- * a `.flac` (or extensionless) reservation is an error rather than WAV bytes written under the wrong
- * name. That is deliberate: silently accepting any extension is exactly what hid the real
- * persistence/FFmpeg reservation mismatch now tracked as #43. The RIFF-in-`.m4b` payload stays a
- * documented shortcut; issue #32's assembler replaces this.
+ * a `.flac` reservation is an error rather than WAV bytes written under the wrong name. That is
+ * deliberate: silently accepting any extension is exactly what hid the real persistence/FFmpeg
+ * reservation mismatch that #43 has since fixed. The RIFF-in-`.m4b` payload stays a documented
+ * shortcut; issue #32's assembler replaces this.
  */
 export class FakeAudioAssembler implements AudioAssembler {
   readonly identity = 'fake-assembler/2'

@@ -8,7 +8,11 @@ import { toWebApiResult } from '../../src/server/errors.js'
 import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
-import { createM1VoiceCast } from '../../src/server/m1-voice-cast.js'
+import {
+  createM1VoiceCast,
+  loadPinnedQwenConfig,
+  pinnedVoiceMaterial,
+} from '../../src/server/m1-voice-cast.js'
 import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace.js'
 
 /** Blocks the fake speech engine at a chosen segment so a test can observe mid-generation state. */
@@ -54,7 +58,8 @@ export interface TestHarnessOptions {
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
   const root = await mkdtemp(join(tmpdir(), 'lna-web-'))
   const workspace = await createWorkspace(root)
-  const voices = createM1VoiceCast()
+  const pinnedConfig = await loadPinnedQwenConfig()
+  const voices = createM1VoiceCast(pinnedConfig)
   // A shared speech engine is the legitimate factory shape for an adapter whose endBatch is not
   // terminal, and it lets a test count renders across two runs. The fallback policy mirrors what the
   // composition root passes: the fake refuses unapproved fallback speech like the real Qwen adapter,
@@ -62,6 +67,7 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   const speechEngine = new FakeSpeechEngine(workspace, {
     beforeRender: options.beforeRender,
     fallbackVoiceProfileId: voices.fallback.id,
+    pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
     unreviewedFallbackPolicy: options.unreviewedFallbackPolicy ?? 'auto-approve',
   })
   const directors: FakeDirectorModel[] = []

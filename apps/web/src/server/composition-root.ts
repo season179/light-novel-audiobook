@@ -17,7 +17,7 @@ import { FakeEpubExtractor } from './fakes/fake-epub-extractor.js'
 import { FakeSpeechEngine } from './fakes/fake-speech-engine.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
-import { createM1VoiceCast } from './m1-voice-cast.js'
+import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
 import { createWorkspace, type LocalWorkspace } from './workspace.js'
 
 /**
@@ -57,13 +57,18 @@ export interface AudiobookAdapterFactories {
 export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly workspaceRoot?: string | undefined
   readonly workspace?: LocalWorkspace | undefined
+  /** Overrides the pinned Qwen production configuration the default cast is derived from. */
+  readonly qwenConfigPath?: string | undefined
 }
 
 export const createAudiobookWebApi = async (
   options: AudiobookWebApiOptions = {},
 ): Promise<AudiobookWebApi> => {
   const workspace = options.workspace ?? (await createWorkspace(options.workspaceRoot))
-  const voices = options.voices ?? createM1VoiceCast()
+  // The pinned Qwen configuration is the source of truth for which voices are approved, so the
+  // default cast is derived from it and the default fake engine is held to the same profiles.
+  const pinnedConfig = await loadPinnedQwenConfig(options.qwenConfigPath)
+  const voices = options.voices ?? createM1VoiceCast(pinnedConfig)
   const books = new BookReadModelStore()
   // Sanitized before projection: a raw adapter message must not reach job state, which the browser
   // reads back directly.
@@ -80,6 +85,7 @@ export const createAudiobookWebApi = async (
     (() =>
       new FakeSpeechEngine(workspace, {
         fallbackVoiceProfileId: voices.fallback.id,
+        pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
         // M1 STAND-IN, and the one place to change when the approval workflow lands. The fake — like
         // the real Qwen adapter — refuses fallback speech without a per-segment human approval, and
         // this app has no approval action yet, so it mints an identity-bound record per segment and

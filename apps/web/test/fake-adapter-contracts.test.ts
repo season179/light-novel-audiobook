@@ -22,7 +22,11 @@ import {
   FakeSpeechEngine,
   type FakeSpeechEngineOptions,
 } from '../src/server/fakes/fake-speech-engine.js'
-import { createM1VoiceCast } from '../src/server/m1-voice-cast.js'
+import {
+  createM1VoiceCast,
+  loadPinnedQwenConfig,
+  pinnedVoiceMaterial,
+} from '../src/server/m1-voice-cast.js'
 import { createWorkspace, type LocalWorkspace } from '../src/server/workspace.js'
 
 /**
@@ -39,6 +43,7 @@ const passageId = StableIds.passage(chapterId, 1)
 let workspace: LocalWorkspace
 let root: string
 let voices: VoiceCast
+let pinned: readonly { syntheticSpeaker: string; instruction: string; seed: number }[]
 
 const buildBook = (): Book =>
   new Book({
@@ -92,7 +97,9 @@ const renderRequest = (segment: Segment, overrides: { inputIdentity?: string } =
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'lna-contract-'))
   workspace = await createWorkspace(root)
-  voices = createM1VoiceCast()
+  const pinnedConfig = await loadPinnedQwenConfig()
+  voices = createM1VoiceCast(pinnedConfig)
+  pinned = pinnedVoiceMaterial(pinnedConfig)
 })
 
 afterEach(async () => {
@@ -103,6 +110,7 @@ describe('FakeSpeechEngine mirrors the merged Qwen adapter', () => {
   const engine = (options: FakeSpeechEngineOptions = {}) =>
     new FakeSpeechEngine(workspace, {
       fallbackVoiceProfileId: voices.fallback.id,
+      pinnedVoiceProfiles: pinned,
       ...options,
     })
 
@@ -302,6 +310,7 @@ describe('FakeAudioAssembler mirrors the merged FFmpeg planner', () => {
     // Real segment clips have to exist for the concatenation step.
     const speech = new FakeSpeechEngine(workspace, {
       fallbackVoiceProfileId: voices.fallback.id,
+      pinnedVoiceProfiles: pinned,
       unreviewedFallbackPolicy: 'auto-approve',
     })
     await speech.beginBatch()

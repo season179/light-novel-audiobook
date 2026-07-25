@@ -7,10 +7,13 @@ import type {
   SpeechRenderRequest,
 } from '@light-novel-audiobook/application'
 import type { FallbackReason } from '@light-novel-audiobook/domain'
+import type { PinnedVoiceMaterial } from '../m1-voice-cast.js'
 import type { LocalWorkspace } from '../workspace.js'
 import { createPlaceholderWav } from './placeholder-wav.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
+/** Same shape the real engine requires of a persisted approval identity. */
+const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
 
 /** Same shape the merged Qwen adapter requires: one human decision bound to one segment. */
 export interface FakeFallbackApproval {
@@ -35,6 +38,13 @@ export interface FakeSpeechEngineOptions {
    * records it on `autoApprovedFallbacks` so nothing about it is silent.
    */
   readonly unreviewedFallbackPolicy?: 'reject' | 'auto-approve' | undefined
+  /**
+   * The approved profiles the real engine would match on. When supplied, a voice whose
+   * `syntheticSpeaker`/`instruction`/`seed` does not resolve is refused exactly as
+   * `QwenTtsSpeechEngine.selectedVoiceProfile()` refuses it — so a cast that drifts from the pinned
+   * configuration fails here instead of surviving until the first GPU run.
+   */
+  readonly pinnedVoiceProfiles?: readonly PinnedVoiceMaterial[] | undefined
 }
 
 /**
@@ -59,6 +69,7 @@ export class FakeSpeechEngine implements SpeechEngine {
   private readonly fallbackVoiceProfileId: string | undefined
   private readonly approvals: Map<string, FakeFallbackApproval>
   private readonly unreviewedFallbackPolicy: 'reject' | 'auto-approve'
+  private readonly pinnedVoiceProfiles: readonly PinnedVoiceMaterial[] | undefined
   private readonly autoApproved: FakeFallbackApproval[] = []
   private batchOpen = false
   private rendering = false
@@ -69,9 +80,21 @@ export class FakeSpeechEngine implements SpeechEngine {
     this.beforeRender = options.beforeRender
     this.fallbackVoiceProfileId = options.fallbackVoiceProfileId
     this.unreviewedFallbackPolicy = options.unreviewedFallbackPolicy ?? 'reject'
-    this.approvals = new Map(
-      (options.fallbackApprovals ?? []).map((approval) => [approval.segmentId, approval]),
-    )
+    this.pinnedVoiceProfiles = options.pinnedVoiceProfiles
+    this.approvals = new Map()
+    // Validated on construction, like the real adapter: a duplicate or malformed approval is a
+    // configuration error, not something to resolve by last-write-wins at render time.
+    for (const approval of options.fallbackApprovals ?? []) {
+      if (this.approvals.has(approval.segmentId)) {
+        throw new Error(`Duplicate fallback approval for ${approval.segmentId}`)
+      }
+      if (!APPROVAL_ID.test(approval.approvalId) || !SHA256.test(approval.approvalSha256)) {
+        throw new Error(
+          `Fallback approval for ${approval.segmentId} needs a policy-safe ID and a lowercase SHA-256`,
+        )
+      }
+      this.approvals.set(approval.segmentId, approval)
+    }
   }
 
   get rendered(): number {
@@ -102,6 +125,7 @@ export class FakeSpeechEngine implements SpeechEngine {
     if (assignment.usesFallback !== (request.voice.role === 'fallback')) {
       throw new Error(`Fake speech engine fallback role mismatch for ${request.segment.id}`)
     }
+    this.requirePinnedVoice(request)
     if (assignment.usesFallback) {
       this.requireFallbackApproval(request, assignment.fallbackReason)
     }
@@ -133,6 +157,22 @@ export class FakeSpeechEngine implements SpeechEngine {
 
   async endBatch(): Promise<void> {
     this.batchOpen = false
+  }
+
+  /** Mirrors `QwenTtsSpeechEngine.selectedVoiceProfile()`: exact speaker, instruction and seed. */
+  private requirePinnedVoice(request: SpeechRenderRequest): void {
+    if (this.pinnedVoiceProfiles === undefined) return
+    const resolved = this.pinnedVoiceProfiles.some(
+      (pinned) =>
+        pinned.syntheticSpeaker === request.voice.syntheticSpeaker &&
+        pinned.instruction === request.voice.instruction &&
+        pinned.seed === request.voice.seed,
+    )
+    if (!resolved) {
+      throw new Error(
+        `Application voice ${request.voice.id} does not match an approved pinned Qwen profile`,
+      )
+    }
   }
 
   private requireFallbackApproval(

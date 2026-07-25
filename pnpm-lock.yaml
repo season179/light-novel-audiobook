@@ -35,6 +35,9 @@ importers:
       '@light-novel-audiobook/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@light-novel-audiobook/qwen-tts':
+        specifier: workspace:*
+        version: link:../../packages/qwen-tts
       '@tanstack/react-query':
         specifier: 5.101.4
         version: 5.101.4(react@19.2.8)
