@@ -1,4 +1,4 @@
-export { canonicalJson, canonicalSha256, sha256 } from './canonical-json.js'
+export { canonicalJson, canonicalSha256, type JsonValue, sha256 } from './canonical-json.js'
 export {
   type EvaluationReport,
   type EvaluationRun,
@@ -17,6 +17,7 @@ export {
   GovernanceValidationError,
   RepresentativeCorpusScorer,
   type ScoringInputs,
+  validateEvaluationGovernance,
 } from './scorer.js'
 export {
   AMBIGUITY_POLICY,

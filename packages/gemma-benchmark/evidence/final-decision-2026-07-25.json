@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "issue": 6,
+  "decisionDate": "2026-07-25",
+  "operationalEvidence": {
+    "path": "packages/gemma-benchmark/evidence/synthetic-operational-smoke.json",
+    "sha256": "15b4f0bc62b7840d1f98d1e0486a1821cb559fa03338abe27ee7fb0e75cd9c46",
+    "implementationCommit": "49cb60e754ed55fdccfb44751fbb723153c3aea3",
+    "datasetClass": "synthetic_operational",
+    "runCount": 3,
+    "allRunsCompleted": true,
+    "peakVramMiB": 14940,
+    "peakWslRamMiB": 4961,
+    "gracefulCleanupPassed": true
+  },
+  "representativeGate": {
+    "executed": false,
+    "representativeAccuracyClaimPermitted": false,
+    "missingInputs": [
+      "lawfully held private representative English EPUB chapter",
+      "evaluation-source@1",
+      "representative-corpus@1",
+      "model-blind adjudicated gold-annotations@2",
+      "matching benchmark-context@1"
+    ]
+  },
+  "decision": {
+    "result": "NO-GO for claiming representative Gemma acceptance or starting M1 director implementation",
+    "operationalFeasibility": "PASS on the synthetic operational workload",
+    "representativeAccuracy": "NOT ASSESSED",
+    "modelRejectedForAccuracy": false,
+    "reason": "The required lawful private chapter and independently adjudicated annotations were not supplied before M0 closure.",
+    "followUpRequiredBeforeProductUse": true
+  },
+  "privacy": {
+    "privateStoryTextCommitted": false,
+    "rawModelResponsesCommitted": false,
+    "absoluteHostPathsCommitted": false
+  }
+}

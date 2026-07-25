@@ -240,7 +240,7 @@ The dense Gemma 4 31B variants are not planned fallbacks: they require substanti
 
 ### Primary-model acceptance test
 
-The choice is locked, but the primary model must still pass a representative-chapter acceptance test before bulk processing. Initial passing thresholds are:
+The choice is locked, but the primary model must still pass a representative-chapter acceptance test before bulk processing. The M0 spike closed on 2026-07-25 with synthetic operational feasibility passing but representative accuracy **not assessed**, because the required lawful private chapter and independently adjudicated annotations were unavailable. This is a **NO-GO for claiming model acceptance or starting M1 director implementation** until a follow-up completes the locked benchmark. Initial passing thresholds are:
 
 - 100% exact source-text coverage and valid final schemas
 - At least 95% dialogue-speaker and character alias/coreference accuracy

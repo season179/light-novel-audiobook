@@ -302,7 +302,11 @@ function exactCoverage(
   return hasUnknownReference ? 0 : covered
 }
 
-function validateGovernance(sourceInput: unknown, corpusInput: unknown, annotationInput: unknown) {
+export function validateEvaluationGovernance(
+  sourceInput: unknown,
+  corpusInput: unknown,
+  annotationInput: unknown,
+) {
   const sourceResult = evaluationSourceSchema.safeParse(sourceInput)
   const corpusResult = representativeCorpusSchema.safeParse(corpusInput)
   const annotationResult = goldAnnotationsSchema.safeParse(annotationInput)
@@ -470,7 +474,7 @@ function validateGovernance(sourceInput: unknown, corpusInput: unknown, annotati
 
 export class RepresentativeCorpusScorer {
   score(inputs: ScoringInputs): EvaluationReport {
-    const { source, corpus, annotations, sourceHash, corpusHash } = validateGovernance(
+    const { source, corpus, annotations, sourceHash, corpusHash } = validateEvaluationGovernance(
       inputs.source,
       inputs.corpus,
       inputs.annotations,

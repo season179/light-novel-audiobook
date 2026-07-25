@@ -1,0 +1,28 @@
+{
+  "schema_version": "benchmark-context@1",
+  "context_version": "synthetic-benchmark-context@1",
+  "source_sha256": "eecb2df9be07a8b50e256bef05948be5bc77df1d2c072f47148bf858c16451c7",
+  "corpus_sha256": "e8af15d4867b8ad450cc253e03ad9c74f5fb2997f6b0964d8740a37aaef938c0",
+  "story_context": "A deliberately artificial bell-and-lantern classification fixture with no relationship to any book.",
+  "characters": [
+    {
+      "character_id": "character-a",
+      "aliases": ["A"]
+    },
+    {
+      "character_id": "character-b",
+      "aliases": ["B"]
+    }
+  ],
+  "narrator_id": "narrator",
+  "fallback_dialogue_id": "fallback-dialogue",
+  "governance": {
+    "lawful_access_confirmed": true,
+    "permitted_use": "local_evaluation",
+    "redistribution": "committed_allowed",
+    "gold_annotations_completed_before_model_runs": true,
+    "gold_annotators_blind_to_model_outputs": true,
+    "independent_annotator_count": 2,
+    "disagreements_adjudicated": true
+  }
+}
