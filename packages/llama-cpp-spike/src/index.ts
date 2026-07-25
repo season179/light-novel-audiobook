@@ -18,6 +18,7 @@ export {
 export {
   LoopbackRecordingFetch,
   type LoopbackRecordingFetchOptions,
+  loopbackHttpFetch,
   type SanitizedRequestCapture,
 } from './recording-fetch'
 export {

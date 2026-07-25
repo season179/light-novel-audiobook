@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import {
   LlamaCppSpikeClient,
   LoopbackRecordingFetch,
+  loopbackHttpFetch,
   readImplementationIdentity,
   type SanitizedRequestCapture,
   SpikeError,
@@ -418,7 +419,10 @@ async function main(): Promise<void> {
     if (!loopbackOnly) throw new Error(`Unsafe llama.cpp listener shape: ${listeners.join('; ')}`)
 
     const browserBoundary = await probeBrowserBoundary(apiKey)
-    const recordingFetch = new LoopbackRecordingFetch({ inspectBody: inspectStructuredRequest })
+    const recordingFetch = new LoopbackRecordingFetch({
+      fetch: loopbackHttpFetch,
+      inspectBody: inspectStructuredRequest,
+    })
     const client = new LlamaCppSpikeClient({
       endpoint: ORIGIN,
       model: MODEL_ALIAS,

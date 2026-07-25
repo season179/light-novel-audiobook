@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { request as httpRequest } from 'node:http'
+import { Readable } from 'node:stream'
 
 export interface SanitizedRequestCapture {
   readonly method: string
@@ -23,6 +25,66 @@ export interface LoopbackRecordingFetchOptions {
 
 function sha256(value: Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+/**
+ * Node HTTP transport with a fresh loopback socket per request. This prevents an aborted SSE
+ * connection from blocking a later request in a shared connection pool.
+ */
+export const loopbackHttpFetch: typeof globalThis.fetch = async (input, init) => {
+  const webRequest = new Request(input, init)
+  const url = new URL(webRequest.url)
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') {
+    throw new Error(`Loopback HTTP transport refused ${url.origin}`)
+  }
+  const body = webRequest.body === null ? undefined : Buffer.from(await webRequest.arrayBuffer())
+
+  return await new Promise<Response>((resolve, reject) => {
+    let responseStarted = false
+    const request = httpRequest(
+      url,
+      {
+        method: webRequest.method,
+        headers: Object.fromEntries(webRequest.headers.entries()),
+        agent: false,
+      },
+      (response) => {
+        responseStarted = true
+        const headers = new Headers()
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (Array.isArray(value)) {
+            for (const item of value) headers.append(name, item)
+          } else if (value !== undefined) {
+            headers.set(name, value)
+          }
+        }
+        resolve(
+          new Response(Readable.toWeb(response) as ReadableStream, {
+            status: response.statusCode ?? 500,
+            ...(response.statusMessage === undefined ? {} : { statusText: response.statusMessage }),
+            headers,
+          }),
+        )
+      },
+    )
+    const abort = (): void => {
+      const reason =
+        webRequest.signal.reason instanceof Error
+          ? webRequest.signal.reason
+          : new DOMException('Request aborted', 'AbortError')
+      request.destroy(reason)
+    }
+    webRequest.signal.addEventListener('abort', abort, { once: true })
+    request.once('close', () => webRequest.signal.removeEventListener('abort', abort))
+    request.once('error', (error) => {
+      if (!responseStarted) reject(error)
+    })
+    if (webRequest.signal.aborted) {
+      abort()
+      return
+    }
+    request.end(body)
+  })
 }
 
 /**

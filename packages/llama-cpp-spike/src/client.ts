@@ -133,6 +133,7 @@ export class LlamaCppSpikeClient {
           baseURL: this.endpoint.openAiBaseUrl,
           apiKey: this.apiKey,
           maxRetries: 0,
+          defaultHeaders: { connection: 'close' },
           fetch: this.fetchImplementation,
         })
         const stream = chat({
@@ -222,6 +223,7 @@ export class LlamaCppSpikeClient {
           baseURL: this.endpoint.openAiBaseUrl,
           apiKey: this.apiKey,
           maxRetries: 0,
+          defaultHeaders: { connection: 'close' },
           fetch: this.fetchImplementation,
         })
         const stream = chat({

@@ -4,6 +4,7 @@ import {
   LlamaCppSpikeClient,
   LoopbackEndpoint,
   LoopbackRecordingFetch,
+  loopbackHttpFetch,
   SpikeError,
   type SpikeErrorCode,
 } from '../src'
@@ -52,6 +53,7 @@ describe('LlamaCppSpikeClient', () => {
     fixture = new LlamaFixtureServer()
     await fixture.start()
     recordingFetch = new LoopbackRecordingFetch({
+      fetch: loopbackHttpFetch,
       inspectBody: (body) => {
         const parsed = JSON.parse(Buffer.from(body).toString('utf8')) as Record<string, unknown>
         return { model: parsed.model }
@@ -128,6 +130,7 @@ describe('LlamaCppSpikeClient', () => {
     expect(boundaryCapture?.bodySha256).toBe(fixture.requests.at(-1)?.rawBodySha256)
     expect(boundaryCapture?.forwardedBodySha256).toBe(boundaryCapture?.bodySha256)
     expect(fixture.requests.at(-1)?.headers.authorization).toBe(`Bearer ${FIXTURE_API_KEY}`)
+    expect(fixture.requests.at(-1)?.headers.connection).toBe('close')
     expect(client.slotSnapshot()).toEqual({ capacity: 1, active: 0, queued: 0 })
   })
 
