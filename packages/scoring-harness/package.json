@@ -7,10 +7,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ../gemma-benchmark/tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json",
     "generate:schemas": "tsx scripts/generate-schemas.ts && biome format --write ../../schemas/evaluation",
     "score": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ../gemma-benchmark/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. packages/scoring-harness/test",
     "build:fixtures": "tsx scripts/build-synthetic-fixture.ts && biome format --write test/fixtures"
   },

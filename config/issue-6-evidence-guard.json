@@ -1,7 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "implementationCommit": "49cb60e754ed55fdccfb44751fbb723153c3aea3",
-  "authorizedVerifierPatches": {
-    "packages/gemma-benchmark/scripts/verify-evidence.ts": "3e920d3135ffaa141e52126f0b04a4c033b944aab241ebccc8a012d759a8bd79"
+  "authorizedMigrationPatches": {
+    "packages/gemma-benchmark/package.json": "fb7d0f5342d55767ddcf26b53b989fbe792c13aa050549ca6bbf0e856f60d2dc",
+    "packages/gemma-benchmark/scripts/verify-evidence.ts": "32f5de3ebdbd5c84310742a08fa7b681be36199d10e64a1d5b9c4584b5010ce7",
+    "packages/scoring-harness/package.json": "e543b14ee82f356770a338c03123bdaf63203753961e0b2774d95a759c58c0d2"
   }
 }

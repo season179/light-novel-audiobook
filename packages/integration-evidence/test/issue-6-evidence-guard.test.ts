@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  issue6PackagingPaths,
+  issue6PathDiffSha256,
   issue6VerifierDiffSha256,
   issue6VerifierPath,
   readUnapprovedIssue6Changes,
@@ -58,6 +60,8 @@ describe('issue #6 historical evidence drift guard', () => {
 
     await Promise.all([
       write(repository, issue6VerifierPath, 'export const verifier = 2\n'),
+      write(repository, 'packages/gemma-benchmark/package.json', '{"name":"benchmark"}\n'),
+      write(repository, 'packages/scoring-harness/package.json', '{"private":true,"fixed":true}\n'),
       write(repository, 'packages/gemma-benchmark/evidence/run.json', '{"run":2}\n'),
       write(repository, 'packages/issue-7/runtime.ts', 'export const unrelated = true\n'),
       write(repository, 'package.json', '{"private":true,"merged":7}\n'),
@@ -69,6 +73,18 @@ describe('issue #6 historical evidence drift guard', () => {
         implementationCommit,
         mergedCommit,
       ),
+      [issue6PackagingPaths[0]]: await issue6PathDiffSha256(
+        repository,
+        implementationCommit,
+        mergedCommit,
+        issue6PackagingPaths[0],
+      ),
+      [issue6PackagingPaths[1]]: await issue6PathDiffSha256(
+        repository,
+        implementationCommit,
+        mergedCommit,
+        issue6PackagingPaths[1],
+      ),
     }
     expect(
       await readUnapprovedIssue6Changes(
@@ -79,6 +95,18 @@ describe('issue #6 historical evidence drift guard', () => {
       ),
     ).toEqual([])
 
+    await write(repository, 'packages/gemma-benchmark/package.json', '{"name":"tampered"}\n')
+    const packagingDrift = await commit(repository, 'edit authorized packaging migration')
+    expect(
+      await readUnapprovedIssue6Changes(
+        repository,
+        implementationCommit,
+        packagingDrift,
+        authorization,
+      ),
+    ).toContain('packages/gemma-benchmark/package.json')
+
+    await git(repository, ['reset', '--hard', mergedCommit])
     await write(
       repository,
       'packages/gemma-benchmark/src/orchestrator.ts',

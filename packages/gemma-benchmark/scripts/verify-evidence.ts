@@ -17,6 +17,10 @@ const execFile = promisify(execFileCallback)
 const benchmarkRoot = 'packages/gemma-benchmark'
 const benchmarkEvidenceRoot = `${benchmarkRoot}/evidence/`
 export const issue6VerifierPath = `${benchmarkRoot}/scripts/verify-evidence.ts`
+export const issue6PackagingPaths = [
+  `${benchmarkRoot}/package.json`,
+  'packages/scoring-harness/package.json',
+] as const
 export const issue6ScopedPaths = [
   benchmarkRoot,
   'packages/scoring-harness/package.json',
@@ -30,10 +34,11 @@ async function gitOutput(repository: string, args: readonly string[]): Promise<s
   return stdout
 }
 
-export async function issue6VerifierDiffSha256(
+export async function issue6PathDiffSha256(
   repository: string,
   implementationCommit: string,
   currentRevision: string,
+  path: string,
 ): Promise<string> {
   const patch = await gitOutput(repository, [
     'diff',
@@ -42,16 +47,29 @@ export async function issue6VerifierDiffSha256(
     implementationCommit,
     currentRevision,
     '--',
-    issue6VerifierPath,
+    path,
   ])
   return createHash('sha256').update(patch).digest('hex')
+}
+
+export async function issue6VerifierDiffSha256(
+  repository: string,
+  implementationCommit: string,
+  currentRevision: string,
+): Promise<string> {
+  return await issue6PathDiffSha256(
+    repository,
+    implementationCommit,
+    currentRevision,
+    issue6VerifierPath,
+  )
 }
 
 export async function readUnapprovedIssue6Changes(
   repository: string,
   implementationCommit: string,
   currentRevision: string,
-  authorizedVerifierPatches: Readonly<Record<string, string>>,
+  authorizedMigrationPatches: Readonly<Record<string, string>>,
 ): Promise<readonly string[]> {
   const names = await gitOutput(repository, [
     'diff',
@@ -69,11 +87,10 @@ export async function readUnapprovedIssue6Changes(
     .filter((path) => !path.startsWith(benchmarkEvidenceRoot))
   const unapproved: string[] = []
   for (const path of changes) {
-    const expectedPatch = authorizedVerifierPatches[path]
+    const expectedPatch = authorizedMigrationPatches[path]
     if (
-      path !== issue6VerifierPath ||
       !expectedPatch ||
-      (await issue6VerifierDiffSha256(repository, implementationCommit, currentRevision)) !==
+      (await issue6PathDiffSha256(repository, implementationCommit, currentRevision, path)) !==
         expectedPatch
     ) {
       unapproved.push(path)
@@ -83,26 +100,28 @@ export async function readUnapprovedIssue6Changes(
 }
 
 interface EvidenceGuard {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly implementationCommit: string
-  readonly authorizedVerifierPatches: Readonly<Record<string, string>>
+  readonly authorizedMigrationPatches: Readonly<Record<string, string>>
 }
 
 function parseEvidenceGuard(value: unknown): EvidenceGuard {
   const guard = value as Partial<EvidenceGuard>
-  const patches = guard.authorizedVerifierPatches
+  const patches = guard.authorizedMigrationPatches
+  const expectedPaths = [issue6VerifierPath, ...issue6PackagingPaths].sort()
   if (
     typeof guard !== 'object' ||
     guard === null ||
-    guard.schemaVersion !== 1 ||
+    guard.schemaVersion !== 2 ||
     typeof guard.implementationCommit !== 'string' ||
     !/^[a-f0-9]{40}$/.test(guard.implementationCommit) ||
     typeof patches !== 'object' ||
     patches === null ||
     Array.isArray(patches) ||
-    Object.keys(patches).length !== 1 ||
-    typeof patches[issue6VerifierPath] !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(patches[issue6VerifierPath] ?? '')
+    JSON.stringify(Object.keys(patches).sort()) !== JSON.stringify(expectedPaths) ||
+    expectedPaths.some(
+      (path) => typeof patches[path] !== 'string' || !/^[a-f0-9]{64}$/.test(patches[path] ?? ''),
+    )
   ) {
     throw new Error('Issue #6 evidence guard is invalid')
   }
@@ -138,7 +157,7 @@ export async function verifyCommittedIssue6Evidence(repositoryRoot: string): Pro
     repositoryRoot,
     evidence.implementation.commit,
     'HEAD',
-    guard.authorizedVerifierPatches,
+    guard.authorizedMigrationPatches,
   )
   if (unapprovedChanges.length > 0) {
     throw new Error(
