@@ -110,7 +110,7 @@ Issue #8 adds a second opt-in host experiment:
 ```sh
 pnpm voices:verify
 pnpm voices:setup
-pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2.json
+pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2-v2.json
 ```
 
 Setup builds pinned GPL-licensed eSpeak NG source outside Git with MBROLA disabled. The probe

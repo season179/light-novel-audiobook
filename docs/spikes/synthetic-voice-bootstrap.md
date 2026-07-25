@@ -5,7 +5,8 @@
 - Allowed scope: serialized, non-streaming VoxCPM2 experiment only
 - Date: 2026-07-25
 - License/provenance: [`../licenses/synthetic-voice-bootstrap.md`](../licenses/synthetic-voice-bootstrap.md)
-- Host evidence: [`../evidence/issue-8-synthetic-voices-wsl2.json`](../evidence/issue-8-synthetic-voices-wsl2.json)
+- Latest host evidence: [`../evidence/issue-8-synthetic-voices-wsl2-v2.json`](../evidence/issue-8-synthetic-voices-wsl2-v2.json)
+- Superseded evidence: `issue-8-synthetic-voices-wsl2.json` (retained historically; do not use for review)
 - Decision: **GO for synthetic bootstrap technical feasibility only**
 - Listening approval: **PENDING**
 
@@ -90,8 +91,8 @@ explicitly pending. Human listening remains a required closure gate.
 
 ## Measured results
 
-The final host run was generated from implementation commit
-`932e11e8bfa7562b8da5bada2217e96dcdef88ab`. It recorded eSpeak NG binary SHA-256
+The replacement host run was generated from hardened implementation commit
+`f6a445ac9bd422a60d3b74f66ad96a1a2da9b84d`. It recorded eSpeak NG binary SHA-256
 `36925debdef847f953863b68cf2c2452acaf1446309ab4b33f25e6c2626b7a36`, build-configuration
 SHA-256 `aa7a8488c6d7e8262cce47d4247012a77620cb7a48764fced6dcb4076ebda8d1`, selected-voice-source
 SHA-256 `13a4d25df87bfc42b14d82213b07826c711d8c32b748d14ebd249b2fbd8eb5e0`, and the exact
@@ -110,15 +111,24 @@ All pairwise reference pitch ratios exceeded the fixed 1.12 distinction gate (me
 The probe made 12 serialized non-streaming requests: three fixed lines for each reference plus
 one exact repeat per candidate. Every request reused its candidate's unchanged reference hash,
 all WAVs passed strict validation and objective stability/intelligibility-proxy bounds, and all
-three repeated VoxCPM2 outputs were byte-identical. Across each candidate's three lines, pitch
+three repeated VoxCPM2 outputs were byte-identical. The exact primary/repeat matrices, all
+transcript/line/seed/model/parameter/reference/file identities, unique conditioned hashes, and
+every locked decision gate passed. Across each candidate's three lines, pitch
 coefficient of variation was 0.054, 0.106, and 0.054 respectively. The server retained one
 process, never exceeded one in-flight request, listened only on `127.0.0.1:8081`, exited
 cleanly, and released the port.
 
 The immutable transcript-aligned listening form has SHA-256
 `b49af2cbe36150abb1ee062dfca598128e1b440a7d273f00f143c6cbd49d9caa` and nine primary audio
-entries. Its intelligibility, stability, distinguishability, and cross-line-consistency ratings
-remain deliberately unset. Objective duration/activity bounds are not word-accuracy evidence.
+entries. The same external run contains `review.html`, `review-instructions.txt`, and `outputs/`.
+From that run root, start `python3 -m http.server 8098 --bind 127.0.0.1`, open
+`http://localhost:8098/review.html`, listen to every clip, and then fill every null field in
+`manual-review.json`, including reviewer, date, and listening approval. The probe prints the
+exact external paths after each run.
+
+The intelligibility, stability, distinguishability, and cross-line-consistency ratings remain
+deliberately unset. **Manual listening is a required, incomplete human closure gate.** Objective
+duration/activity bounds are not word-accuracy evidence.
 
 ## Go/no-go decision
 
