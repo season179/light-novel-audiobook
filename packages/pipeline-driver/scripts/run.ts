@@ -7,7 +7,8 @@
  *   --epub <path>              EPUB to ingest. Required.
  *   --workspace <path>         Workspace root. Default: a fresh directory under the OS temp dir.
  *   --job-id <id>              Job ID. Default: pipeline-demo-<timestamp>.
- *   --chapters <n>             Keep at most N chapters. Default: 1.
+ *   --from-chapter <n>         Start at domain chapter N (1-based). Default: 1.
+ *   --chapters <n>             Keep at most N chapters, counting from --from-chapter. Default: 1.
  *   --passages <n>             Keep at most N passages per chapter. Default: 3.
  *   --characters <a,b>         Character speaker IDs to cast. Default: none (narration only).
  *   --transports fake|real     Default: fake. `real` loads actual models; see below.
@@ -23,6 +24,10 @@
  * so this is safe to run anywhere and in CI. Real transports load Gemma and Qwen for real and must be
  * asked for explicitly.
  *
+ * `--from-chapter` and `--chapters` are a window, not a prefix: `--from-chapter 3 --chapters 1` renders
+ * chapter 3 alone. Every slice bound is bound into the extractor identity, so changing one produces a
+ * different job rather than silently handing back an earlier run's audio.
+ *
  * In real mode this driver *owns* the llama.cpp process: it is spawned once Gemma holds the GPU lease
  * and reaped before the lease is released, which is what keeps the two models from being co-resident.
  * There is no `--director-key`; a key is generated per run and passed to the server by file.
@@ -36,6 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import { runPipeline } from '../src/driver.js'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
+import type { SliceLimits } from '../src/slice.js'
 import {
   createFakeTransports,
   createRealTransports,
@@ -78,6 +84,15 @@ const characterSpeakerIds = (flag('characters') ?? '')
   .map((value) => value.trim())
   .filter((value) => value.length > 0)
 
+// Only bound when the flag is present, so the identity of an unqualified prefix run is unchanged.
+const limits: SliceLimits = {
+  maxChapters: positiveInteger('chapters', 1),
+  maxPassagesPerChapter: positiveInteger('passages', 3),
+  ...(flag('from-chapter') === undefined
+    ? {}
+    : { firstChapter: positiveInteger('from-chapter', 1) }),
+}
+
 const directorServer = mode === 'fake' ? new NarrationEchoDirectorServer() : undefined
 await directorServer?.start()
 
@@ -102,7 +117,7 @@ const transports =
       })
 
 process.stderr.write(
-  `[driver] mode=${mode} workspace=${workspaceRoot} chapters<=${positiveInteger('chapters', 1)} passages<=${positiveInteger('passages', 3)}\n`,
+  `[driver] mode=${mode} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
 )
 
 try {
@@ -112,10 +127,7 @@ try {
     workspaceRoot,
     repositoryRoot: REPOSITORY_ROOT,
     transports,
-    limits: {
-      maxChapters: positiveInteger('chapters', 1),
-      maxPassagesPerChapter: positiveInteger('passages', 3),
-    },
+    limits,
     characterSpeakerIds,
     onDirectorProgress: (event) => {
       process.stderr.write(
