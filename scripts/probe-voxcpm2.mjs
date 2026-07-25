@@ -49,6 +49,11 @@ const runtimeEnvironment = {
   PATH: `${cudaHome}/bin:${process.env.PATH}`,
   LD_LIBRARY_PATH: `${cudaHome}/lib64${process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : ''}`,
 }
+const longSyntheticInput = Array.from(
+  { length: 24 },
+  (_, index) =>
+    `Synthetic lifecycle sentence ${index + 1} describes a calm lantern beside a quiet window.`,
+).join(' ')
 const ownedServers = new Set()
 const ownedMonitors = new Set()
 let artifacts
@@ -485,7 +490,7 @@ async function runCli() {
 async function observeClientInterruption(instance, mode) {
   const long = lock.probe.longRequest
   const body = {
-    input: `A deliberately long synthetic ${mode} lifecycle measurement.`,
+    input: longSyntheticInput,
     max_steps: long.maxSteps,
     inference_timesteps: long.inferenceTimesteps,
     seed: mode === 'manual-abort' ? 7001 : 7002,
@@ -884,7 +889,7 @@ async function main() {
   const parameterEffects = deriveParameterEffects(parameters)
 
   const longControl = await speech({
-    input: 'A deliberately long synthetic control lifecycle measurement.',
+    input: longSyntheticInput,
     max_steps: lock.probe.longRequest.maxSteps,
     inference_timesteps: lock.probe.longRequest.inferenceTimesteps,
     seed: 7000,
@@ -930,7 +935,7 @@ async function main() {
   try {
     const result = await speech(
       {
-        input: 'A deliberately long synthetic configured timeout measurement.',
+        input: longSyntheticInput,
         max_steps: lock.probe.longRequest.maxSteps,
         inference_timesteps: lock.probe.longRequest.inferenceTimesteps,
         seed: 7100,
