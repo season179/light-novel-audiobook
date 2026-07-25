@@ -62,8 +62,8 @@ describe('OwnedLlamaLifecycle', () => {
       if (remaining <= 0) respond()
       else setTimeout(respond, remaining)
     })
-    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
-    const port = (server.address() as AddressInfo).port
+    await new Promise<void>((resolveListen) => server?.listen(0, '127.0.0.1', resolveListen))
+    const address = server.address() as AddressInfo
 
     const lifecycle = new OwnedLlamaLifecycle({
       binaryPath: process.execPath,
@@ -71,8 +71,8 @@ describe('OwnedLlamaLifecycle', () => {
       args: ['-e', 'setInterval(() => undefined, 1000)'],
       apiKey: API_KEY,
       keyPath: join(root, 'llama.key'),
-      origin: `http://127.0.0.1:${port}`,
-      port,
+      origin: `http://127.0.0.1:${address.port}`,
+      port: address.port,
       startupTimeoutMs: 10_000,
     })
 
