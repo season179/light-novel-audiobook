@@ -1,8 +1,8 @@
-import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OwnedLlamaLifecycle } from '../scripts/real-smoke.js'
 
