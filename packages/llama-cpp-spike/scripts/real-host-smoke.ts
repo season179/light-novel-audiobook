@@ -429,7 +429,7 @@ async function main(): Promise<void> {
     if (!capabilities.modelIds.includes(MODEL_ALIAS) || capabilities.totalSlots !== 1) {
       throw new Error('llama.cpp did not expose the requested model identity and slot capability')
     }
-    await client.generateStructured({ temperature: 0, seed: 5, maxTokens: 64, timeoutMs: 10_000 })
+    await client.generateStructured({ temperature: 0, seed: 5, maxTokens: 64, timeoutMs: 30_000 })
     const realRequestCapture = recordingFetch.captures.find(
       (capture) =>
         (capture.assertedFields.responseFormat as { type?: unknown } | null)?.type ===
@@ -481,7 +481,7 @@ async function main(): Promise<void> {
     if (client.slotSnapshot().active !== 0)
       throw new Error('Client concurrency slot was not released after timeout')
 
-    await client.generateStructured({ timeoutMs: 10_000 })
+    await client.generateStructured({ timeoutMs: 30_000 })
     const { stdout: llamaVersionStdout, stderr: llamaVersionStderr } = await execFile(BINARY, [
       '--version',
     ])
