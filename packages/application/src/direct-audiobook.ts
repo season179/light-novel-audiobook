@@ -73,7 +73,6 @@ export class DirectAudiobook {
 
   commandIdentity(command: DirectAudiobookCommand): string {
     return createGenerationCommandIdentity({
-      epubPath: command.epubPath,
       epubSha256: command.epubSha256,
       voices: command.voices,
       epubExtractorIdentity: this.epubExtractor.identity,
