@@ -19,9 +19,18 @@ stay outside Git. See [`docs/spikes/voxcpm2-runtime.md`](../docs/spikes/voxcpm2-
 
 ## Synthetic voice bootstrap spike
 
-`pnpm voices:verify` checks pinned eSpeak NG GPL/source/voice provenance. `pnpm voices:setup`
-builds eSpeak NG 1.52.0 from source outside Git with MBROLA disabled. `pnpm voices:probe` creates
-three deterministic formant references, reuses each across serialized non-streaming VoxCPM2
-lines, and emits create-new external manifests plus sanitized evidence. Normal setup and CI run
-only portable tests and never build eSpeak, start VoxCPM2, or create audio. See
+The old `voices:*` harness is retained only as historical, testable evidence. Its external eSpeak
+NG and VoxCPM2 installs were deleted after failed human listening and must not be recreated or
+rerun. Normal setup and CI retain the portable tests but never build eSpeak, start VoxCPM2, or
+create audio. See
 [`docs/spikes/synthetic-voice-bootstrap.md`](../docs/spikes/synthetic-voice-bootstrap.md).
+
+## Qwen3-TTS issue #8 extension
+
+`pnpm qwen3-tts:verify` checks the exact CustomVoice model, complete snapshot metadata, PyPI
+wheel, matching source, and licenses. `pnpm qwen3-tts:setup` creates a locked uv/Python 3.12 SDPA
+environment and downloads every pinned snapshot file to ext4 outside Git. `pnpm qwen3-tts:probe`
+runs the stock-seeded and safely disabled-sampling matrices in an isolated child, records
+resource and strict WAV checks, and writes external audio/manifests/review assets plus sanitized
+committed evidence. No reference audio is used. See
+[`docs/spikes/qwen3-tts-custom-voice.md`](../docs/spikes/qwen3-tts-custom-voice.md).

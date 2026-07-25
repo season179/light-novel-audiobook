@@ -115,3 +115,21 @@ preserved. The technical experiment record is retained rather than rewritten, wh
 listening decision is NO-GO. See
 [`spikes/synthetic-voice-bootstrap.md`](spikes/synthetic-voice-bootstrap.md) and
 [`evidence/issue-8-human-listening-2026-07-25.json`](evidence/issue-8-human-listening-2026-07-25.json).
+
+## Qwen3-TTS issue #8 extension
+
+The independent replacement experiment is opt-in and restricted to the pinned
+`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` snapshot:
+
+```sh
+pnpm qwen3-tts:verify
+pnpm qwen3-tts:setup
+pnpm qwen3-tts:probe -- --output docs/evidence/issue-8-qwen3-tts-custom-voice-wsl2.json
+```
+
+Setup installs a complete locked uv/CPython 3.12 environment and 4.52 GB model snapshot on WSL
+ext4 outside Git. Inference is offline from that local path, uses PyTorch SDPA, and supplies no
+reference audio. The harness fails if the retired eSpeak/VoxCPM2 paths reappear. Normal setup and
+CI run only portable adversarial tests and do not install the environment, download weights, or
+create audio. Read [`spikes/qwen3-tts-custom-voice.md`](spikes/qwen3-tts-custom-voice.md) before
+running it.

@@ -10,6 +10,7 @@
 - Decision: **GO for synthetic bootstrap technical feasibility only**
 - Human listening decision: **NO-GO** — all nine primary outputs were judged “unacceptable / extremely bad quality”
 - Decision record: [`../evidence/issue-8-human-listening-2026-07-25.json`](../evidence/issue-8-human-listening-2026-07-25.json)
+- Independent replacement: [`qwen3-tts-custom-voice.md`](qwen3-tts-custom-voice.md)
 
 ## Purpose and boundary
 
