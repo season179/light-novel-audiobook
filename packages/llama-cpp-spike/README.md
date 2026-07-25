@@ -90,11 +90,13 @@ when upstream provides them. Raw responses are never written by the package.
 
 ## Real host run
 
-Before any mutation, the setup script canonicalizes the proposed external root, verifies its
-nearest existing ancestor is ext4, rejects overlap with the Git worktree, and rejects runtime
-symlinks. It then recreates a clean exact standard llama.cpp checkout and build, verifies the
-pinned Apache-2.0 model and complete model-card chain, and writes an external build manifest with
-the binary SHA-256. Interrupted download/build temporary files are removed. All source, binaries,
+Before any mutation, both host scripts canonicalize the proposed external root, require ext4,
+reject overlap in either direction with the repository, current worktree, and Git directory, and reject symlink
+components or escapes for every runtime, source, binary, model, manifest, license, and temporary
+path. The setup script then recreates a clean exact standard llama.cpp checkout and build, verifies
+the pinned Apache-2.0 model and complete model-card chain, and writes an external build manifest
+with the binary SHA-256. Its exit trap removes interrupted source/download/license and
+`host-build.json.tmp` files. All source, binaries,
 weights, metadata, and license evidence stay under
 `${XDG_CACHE_HOME:-$HOME/.cache}/light-novel-audiobook/issue-5`, outside Git and isolated from
 llama.cpp-omni.
@@ -118,17 +120,20 @@ harness default remains `127.0.0.1:8080`; evidence records port 18080 openly.
 
 The real smoke:
 
-1. requires a clean Git implementation commit and clean exact external checkout/build;
-2. verifies ext4, source/model/build pins, binary hash, and a loopback-only listener;
-3. starts llama.cpp with a random key file, restricted CORS, no credentials, and logging disabled;
+1. validates and records a sanitized proof that every external path is canonical, ext4,
+   outside Git in both directions, and free of symlink escapes before any mutation;
+2. requires a clean Git implementation commit and clean exact external checkout/build, then
+   verifies source/model/build pins, binary hash, and a loopback-only listener;
+3. creates the random key and spawns llama.cpp inside one enclosing ownership `try/finally`, with
+   restricted CORS, no credentials, logging disabled, child `error` handling, and drained streams;
 4. proves attacker-origin/no-key OPTIONS and POST traffic cannot infer or occupy a slot;
 5. probes health, models, properties, and slots with the server-side client;
 6. records and forwards the exact real structured-request bytes, retaining only body/schema hashes,
    sanitized asserted fields, redacted Authorization metadata, and backend status;
 7. proves real cancellation and a real deadline both abort/release llama.cpp and client slots;
 8. proves a follow-up structured request succeeds after each terminal path;
-9. handles already-emitted, exit-code, and signal-code child exits without hanging, closing all
-   owned process/socket/file resources and deleting the key;
+9. handles spawn errors and already-emitted exit-code/signal-code child exits without hanging,
+   closing process streams and deleting the key on every startup, probe, or cleanup failure;
 10. proves the configured port is free before atomically replacing sanitized evidence.
 
 ## Evidence commit protocol

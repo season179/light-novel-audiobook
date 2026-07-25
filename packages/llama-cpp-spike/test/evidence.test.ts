@@ -101,6 +101,7 @@ describe('committed spike provenance and host evidence', () => {
         'packages/llama-cpp-spike/src/errors.ts',
         'packages/llama-cpp-spike/src/slot-pool.ts',
         'packages/llama-cpp-spike/scripts/real-host-smoke.ts',
+        'packages/llama-cpp-spike/scripts/host-runtime-safety.ts',
         'packages/llama-cpp-spike/scripts/prepare-host.sh',
         'packages/llama-cpp-spike/package.json',
         'packages/llama-cpp-spike/provenance.json',
@@ -122,6 +123,25 @@ describe('committed spike provenance and host evidence', () => {
       runtime: {
         cleanSourceCheckout: true,
         cleanRebuild: true,
+        ext4: true,
+        externalRootProof: {
+          canonicalized: true,
+          ext4: true,
+          outsideWorktree: true,
+          outsideRepository: true,
+          outsideGitDirectory: true,
+          overlapCheckedBothDirections: true,
+          symlinkComponentsRejected: true,
+          validatedPathClasses: expect.arrayContaining([
+            'binary',
+            'license',
+            'manifest',
+            'model',
+            'runtime',
+            'source',
+            'temporary',
+          ]),
+        },
       },
       security: {
         apiKey: {
