@@ -30,6 +30,8 @@ file_hash() {
   sha256sum "$1" | cut -d ' ' -f 1
 }
 
+issue7_evidence_file="$repo_root/$(json 'x.voxcpm2.issue7EvidencePath')"
+[[ -f "$issue7_evidence_file" ]] || fail "missing issue #7 evidence: $issue7_evidence_file"
 espeak_revision="$(json 'x.espeakNg.revision')"
 data_root="${SYNTH_VOICE_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/light-novel-audiobook}"
 state_root="${SYNTH_VOICE_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/light-novel-audiobook}"
@@ -65,6 +67,7 @@ build_base="${SYNTH_VOICE_BUILD_ROOT:-$HOME/.i8-builds}/${build_identity:0:16}"
 source_identity="$({
   printf 'config:%s\n' "$(file_hash "$lock_file")"
   printf 'core:%s\n' "$(file_hash "$core_file")"
+  printf 'issue7Evidence:%s\n' "$(file_hash "$issue7_evidence_file")"
   printf 'probe:%s\n' "$(file_hash "$probe_file")"
   printf 'shell:%s\n' "$(file_hash "$shell_file")"
   printf 'voxConfig:%s\n' "$(file_hash "$vox_lock_file")"
@@ -77,6 +80,7 @@ vox_runtime_revision="$(vox_json 'x.runtime.revision')"
 vox_model_revision="$(vox_json 'x.ggufModel.revision')"
 vox_runtime_root="${VOXCPM2_RUNTIME_ROOT:-$data_root/runtimes/tts/llama.cpp-omni/$vox_runtime_revision}"
 vox_model_root="${VOXCPM2_MODEL_ROOT:-$data_root/models/tts/voxcpm2/$vox_model_revision}"
+vox_build_manifest="$state_root/spikes/issue-7/builds/$(json 'x.voxcpm2.approvedBuild.sourceIdentity')/$(json 'x.voxcpm2.approvedBuild.runId')/manifest.json"
 brain_root="${BRAIN_RUNTIME_ROOT:-$data_root/runtimes/brain/llama.cpp}"
 
 canonical() {
@@ -164,7 +168,8 @@ verify_upstream() {
     [[ "$(sha256_url "$base/$source_path")" == "$expected" ]] || fail "eSpeak NG voice source checksum mismatch: $source_path"
   done < <(node -e "const x=require(process.argv[1]); for(const v of x.espeakNg.voiceSources) console.log(v.path+'\\t'+v.sha256)" "$lock_file")
   [[ "$(file_hash "$vox_lock_file")" == "$(json 'x.voxcpm2.lockSha256')" ]] || fail 'issue #7 VoxCPM2 lock checksum mismatch'
-  printf 'Verified pinned GPL source, formant voice files, and issue #7 lock.\n'
+  [[ "$(file_hash "$issue7_evidence_file")" == "$(json 'x.voxcpm2.issue7EvidenceSha256')" ]] || fail 'issue #7 evidence checksum mismatch'
+  printf 'Verified pinned GPL source, formant voice files, and issue #7 evidence.\n'
 }
 
 checkout_source() {
@@ -330,6 +335,7 @@ case "$command_name" in
       SYNTH_VOICE_AUDIO_BASE="$audio_base" SYNTH_VOICE_RAW_BASE="$raw_base" \
       SYNTH_VOICE_SOURCE_IDENTITY="$source_identity" \
       VOXCPM2_RUNTIME_ROOT="$vox_runtime_root" VOXCPM2_MODEL_ROOT="$vox_model_root" \
+      VOXCPM2_BUILD_MANIFEST="$vox_build_manifest" \
       node "$probe_file" "${@:2}"
     ;;
   *)

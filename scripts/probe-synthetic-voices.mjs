@@ -13,6 +13,7 @@ import {
   directoryTreeHash,
   loadBootstrapLock,
   stableJsonHash,
+  validateApprovedVoxIdentity,
 } from './synthetic-voices/core.mjs'
 import {
   deriveSourceIdentity,
@@ -31,12 +32,13 @@ const corePath = join(repositoryRoot, 'scripts/synthetic-voices/core.mjs')
 const voxCorePath = join(repositoryRoot, 'scripts/voxcpm2/core.mjs')
 const shellPath = join(repositoryRoot, 'scripts/synthetic-voice-bootstrap.sh')
 const lock = await loadBootstrapLock(lockPath)
+const issue7EvidencePath = join(repositoryRoot, lock.voxcpm2.issue7EvidencePath)
 const voxLock = await loadVoxLock(voxLockPath)
 const outputIndex = process.argv.indexOf('--output')
 const evidencePath =
   outputIndex >= 0
     ? resolve(process.argv[outputIndex + 1])
-    : join(repositoryRoot, 'docs/evidence/issue-8-synthetic-voices-wsl2.json')
+    : join(repositoryRoot, 'docs/evidence/issue-8-synthetic-voices-wsl2-v2.json')
 const espeakInstallRoot = requiredPath('SYNTH_VOICE_ESPEAK_INSTALL_ROOT')
 const espeakSourceRoot = requiredPath('SYNTH_VOICE_ESPEAK_SOURCE_ROOT')
 const audioBase = requiredPath('SYNTH_VOICE_AUDIO_BASE')
@@ -44,6 +46,7 @@ const rawBase = requiredPath('SYNTH_VOICE_RAW_BASE')
 const expectedSourceIdentity = requiredValue('SYNTH_VOICE_SOURCE_IDENTITY')
 const runtimeRoot = requiredPath('VOXCPM2_RUNTIME_ROOT')
 const modelRoot = requiredPath('VOXCPM2_MODEL_ROOT')
+const voxBuildManifestPath = requiredPath('VOXCPM2_BUILD_MANIFEST')
 const espeak = join(espeakInstallRoot, 'bin/espeak-ng')
 const server = join(runtimeRoot, 'build/bin/llama-tts-server')
 const baseModel = join(modelRoot, voxLock.ggufModel.assets[0].name)
@@ -144,6 +147,7 @@ async function validateHarnessRevision() {
   const sourceFiles = {
     config: [lockPath, 'config/synthetic-voice-bootstrap.lock.json'],
     core: [corePath, 'scripts/synthetic-voices/core.mjs'],
+    issue7Evidence: [issue7EvidencePath, lock.voxcpm2.issue7EvidencePath],
     probe: [probePath, 'scripts/probe-synthetic-voices.mjs'],
     shell: [shellPath, 'scripts/synthetic-voice-bootstrap.sh'],
     voxConfig: [voxLockPath, 'config/voxcpm2-spike.lock.json'],
@@ -232,16 +236,45 @@ async function validateVoxAssets() {
   if ((await sha256File(voxLockPath)) !== lock.voxcpm2.lockSha256) {
     throw new Error('issue #7 VoxCPM2 lock changed')
   }
-  for (const asset of voxLock.ggufModel.assets) {
+  const issue7Evidence = JSON.parse(await readFile(issue7EvidencePath, 'utf8'))
+  const buildManifest = JSON.parse(await readFile(voxBuildManifestPath, 'utf8'))
+  const runtimeSource = join(runtimeRoot, 'source')
+  if (command('git', ['-C', runtimeSource, 'status', '--porcelain']) !== '') {
+    throw new Error('approved VoxCPM2 runtime source is modified')
+  }
+  const actual = {
+    issue7EvidenceSha256: await sha256File(issue7EvidencePath),
+    buildManifestSha256: await sha256File(voxBuildManifestPath),
+    runtimeRevision: command('git', ['-C', runtimeSource, 'rev-parse', 'HEAD']),
+    runtimeTree: command('git', ['-C', runtimeSource, 'rev-parse', 'HEAD^{tree}']),
+    cmakeCacheSha256: await sha256File(join(runtimeRoot, 'build/CMakeCache.txt')),
+    buildMetadataSha256: await sha256File(
+      join(dirname(voxBuildManifestPath), 'build-metadata.txt'),
+    ),
+    serverBinarySha256: await sha256File(server),
+  }
+  const approval = validateApprovedVoxIdentity(lock, issue7Evidence, buildManifest, actual)
+  if (
+    issue7Evidence.provenance.runtime.repository !==
+      command('git', ['-C', runtimeSource, 'remote', 'get-url', 'origin']) ||
+    !exactJson(issue7Evidence.provenance.ggufModel.assets, voxLock.ggufModel.assets)
+  ) {
+    throw new Error('issue #7 runtime/model provenance does not match the approved checkout')
+  }
+  for (const asset of issue7Evidence.provenance.ggufModel.assets) {
     const path = join(modelRoot, asset.name)
     if ((await stat(path)).size !== asset.size || (await sha256File(path)) !== asset.sha256) {
       throw new Error(`VoxCPM2 model mismatch: ${asset.name}`)
     }
   }
   return {
-    serverBinarySha256: await sha256File(server),
-    modelAssets: voxLock.ggufModel.assets,
+    approval,
+    modelAssets: issue7Evidence.provenance.ggufModel.assets,
   }
+}
+
+function exactJson(left, right) {
+  return stableJsonHash(left) === stableJsonHash(right)
 }
 
 function sampleGpu() {
@@ -575,14 +608,46 @@ async function generateVoxLines(references, startTimeTicks) {
   return outputs
 }
 
-async function artifactFileHashes(references, outputs, manualReviewSha256) {
+function reviewHtml(lockValue, outputs) {
+  const escapeHtml = (value) =>
+    String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+  const sections = lockValue.candidates
+    .map((candidate) => {
+      const lines = outputs
+        .filter(({ candidateId, repetition }) => candidateId === candidate.id && repetition === 0)
+        .map(
+          ({ file, lineId, text }) =>
+            `<li><strong>${escapeHtml(lineId)}</strong>: ${escapeHtml(text)}<br><audio controls preload="none" src="${escapeHtml(file)}"></audio></li>`,
+        )
+        .join('\n')
+      return `<section><h2>${escapeHtml(candidate.id)} (${escapeHtml(candidate.role)})</h2><p>Reference: ${escapeHtml(candidate.transcript)}</p><audio controls preload="none" src="references/${escapeHtml(candidate.id)}/reference.wav"></audio><ol>${lines}</ol></section>`
+    })
+    .join('\n')
+  return `<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Issue #8 manual listening review</title>
+<body><h1>Issue #8 manual listening review — PENDING</h1>
+<p>Listen on ordinary headphones. Compare every clip with its exact transcript, then edit <code>manual-review.json</code>. Rate intelligibility and stability for each line, plus candidate distinction and cross-line consistency. Add reviewer/date and set listeningApproval only after all entries are complete.</p>
+<p>This is experimental serialized non-streaming evidence, not production/M2 approval.</p>
+${sections}</body></html>\n`
+}
+
+async function artifactFileHashes(references, outputs, reviewAssets) {
   return {
     references: references.flatMap((reference) => [
       { file: reference.file, sha256: reference.sha256 },
       { file: reference.repeatFile, sha256: reference.repeatSha256 },
     ]),
     outputs: outputs.map(({ file, sha256: outputSha256 }) => ({ file, sha256: outputSha256 })),
-    manualReview: { file: 'manual-review.json', sha256: manualReviewSha256 },
+    manualReview: { file: 'manual-review.json', sha256: reviewAssets.manualReviewSha256 },
+    reviewHtml: { file: 'review.html', sha256: reviewAssets.reviewHtmlSha256 },
+    reviewInstructions: {
+      file: 'review-instructions.txt',
+      sha256: reviewAssets.reviewInstructionsSha256,
+    },
   }
 }
 
@@ -603,6 +668,7 @@ async function main() {
     rawBase,
     runtimeRoot,
     modelRoot,
+    voxBuildManifestPath,
   ])
   const harness = await validateHarnessRevision()
   artifacts = await allocateArtifacts(harness.sourceIdentity)
@@ -631,6 +697,32 @@ async function main() {
       `${JSON.stringify(manualReview, null, 2)}\n`,
     )
     const manualReviewSha256 = await sha256File(join(artifacts.audioRoot, 'manual-review.json'))
+    await writeNew(join(artifacts.audioRoot, 'review.html'), reviewHtml(lock, outputs))
+    const quotedReviewRoot = `'${artifacts.audioRoot.replaceAll("'", "'\\''")}'`
+    const reviewInstructions = [
+      `Review root: ${artifacts.audioRoot}`,
+      `Review form: ${join(artifacts.audioRoot, 'manual-review.json')}`,
+      `Audio root: ${join(artifacts.audioRoot, 'outputs')}`,
+      '',
+      'Playback:',
+      `  cd ${quotedReviewRoot}`,
+      '  python3 -m http.server 8098 --bind 127.0.0.1',
+      '  Open http://localhost:8098/review.html in the local browser.',
+      '',
+      'Closure:',
+      '  Listen to every primary line on ordinary headphones.',
+      '  Edit manual-review.json: fill every null rating, reviewer, reviewedAt, and listeningApproval.',
+      '  Manual listening is still PENDING and is required before any human closure.',
+      '',
+    ].join('\n')
+    await writeNew(join(artifacts.audioRoot, 'review-instructions.txt'), reviewInstructions)
+    const reviewAssets = {
+      manualReviewSha256,
+      reviewHtmlSha256: await sha256File(join(artifacts.audioRoot, 'review.html')),
+      reviewInstructionsSha256: await sha256File(
+        join(artifacts.audioRoot, 'review-instructions.txt'),
+      ),
+    }
     const gracefulExit = await stopServer()
     if (gracefulExit.code !== 0 || gracefulExit.signal !== null)
       throw new Error('VoxCPM2 server did not stop gracefully')
@@ -642,7 +734,7 @@ async function main() {
       sourceIdentity: harness.sourceIdentity,
       immutable: true,
       generatedAt: capturedAt,
-      files: await artifactFileHashes(references, outputs, manualReviewSha256),
+      files: await artifactFileHashes(references, outputs, reviewAssets),
     }
     await writeNew(
       join(artifacts.audioRoot, 'artifact-manifest.json'),
@@ -708,8 +800,9 @@ async function main() {
         },
         voxcpm2: {
           issue7LockSha256: lock.voxcpm2.lockSha256,
-          runtimeRevision: voxLock.runtime.revision,
-          serverBinarySha256: voxProvenance.serverBinarySha256,
+          runtimeRevision: voxProvenance.approval.runtimeRevision,
+          runtimeApproval: voxProvenance.approval,
+          serverBinarySha256: voxProvenance.approval.serverBinarySha256,
           ggufRepository: voxLock.ggufModel.repository,
           ggufRevision: voxLock.ggufModel.revision,
           modelAssets: voxProvenance.modelAssets,
@@ -738,8 +831,16 @@ async function main() {
         manualReady: {
           status: manualReview.status,
           sha256: manualReviewSha256,
+          reviewHtmlSha256: reviewAssets.reviewHtmlSha256,
+          reviewInstructionsSha256: reviewAssets.reviewInstructionsSha256,
           audioAndTranscriptEntries: outputs.filter(({ repetition }) => repetition === 0).length,
-          absolutePath: 'omitted',
+          closureGate: 'REQUIRED human listening; not completed',
+          relativeReviewForm: 'manual-review.json',
+          relativeReviewPage: 'review.html',
+          relativeAudioRoot: 'outputs/',
+          playback:
+            'cd <external-run-root> && python3 -m http.server 8098 --bind 127.0.0.1; open http://localhost:8098/review.html',
+          absolutePath: 'omitted from committed evidence; printed by the local probe',
         },
       },
       decision: objectiveReview.decision,
@@ -762,6 +863,13 @@ async function main() {
     await writeNew(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`)
     process.stdout.write(`Synthetic voice run: ${artifacts.runId}\n`)
     process.stdout.write(`Decision: ${evidence.decision.result}\n`)
+    process.stdout.write('Manual listening closure: PENDING (required)\n')
+    process.stdout.write(`Review form: ${join(artifacts.audioRoot, 'manual-review.json')}\n`)
+    process.stdout.write(`Review page: ${join(artifacts.audioRoot, 'review.html')}\n`)
+    process.stdout.write(`Audio root: ${join(artifacts.audioRoot, 'outputs')}\n`)
+    process.stdout.write(
+      `Playback: cd ${quotedReviewRoot} && python3 -m http.server 8098 --bind 127.0.0.1\n`,
+    )
   } catch (error) {
     await stopServer().catch(() => undefined)
     if (artifacts) {

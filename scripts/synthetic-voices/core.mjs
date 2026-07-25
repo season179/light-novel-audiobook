@@ -18,6 +18,11 @@ export async function loadBootstrapLock(path) {
     lock.espeakNg.readmeSha256,
     lock.espeakNg.voiceDocumentationSha256,
     lock.voxcpm2.lockSha256,
+    lock.voxcpm2.issue7EvidenceSha256,
+    lock.voxcpm2.approvedBuild.manifestSha256,
+    lock.voxcpm2.approvedBuild.cmakeCacheSha256,
+    lock.voxcpm2.approvedBuild.buildMetadataSha256,
+    lock.voxcpm2.approvedBuild.serverBinarySha256,
     ...lock.espeakNg.voiceSources.map((source) => source.sha256),
   ]
   if (hashes.some((hash) => !SHA256.test(hash))) throw new Error('invalid pinned SHA-256')
@@ -28,6 +33,19 @@ export async function loadBootstrapLock(path) {
   }
   if (lock.voxcpm2.endpointPath !== '/v1/audio/speech') {
     throw new Error('only the non-streaming speech endpoint is allowed')
+  }
+  for (const revision of [
+    lock.voxcpm2.requiredIssue7GeneratedFromCommit,
+    lock.voxcpm2.approvedBuild.runtimeRevision,
+    lock.voxcpm2.approvedBuild.runtimeTree,
+  ]) {
+    if (!REVISION.test(revision)) throw new Error('invalid approved VoxCPM2 revision')
+  }
+  if (
+    !SHA256.test(lock.voxcpm2.approvedBuild.sourceIdentity) ||
+    !lock.voxcpm2.approvedBuild.runId.startsWith('build-')
+  ) {
+    throw new Error('invalid approved VoxCPM2 build identity')
   }
   if (lock.candidates.length !== 3 || new Set(lock.candidates.map(({ id }) => id)).size !== 3) {
     throw new Error('exactly three unique candidates are required')
@@ -59,6 +77,13 @@ export async function loadBootstrapLock(path) {
   if (!lock.lines.some(({ id }) => id === lock.generation.repeatLineId)) {
     throw new Error('repeat line is not in the fixed line set')
   }
+  if (
+    !Number.isFinite(lock.reviewGates.maximumCrossLinePitchCoefficientOfVariation) ||
+    lock.reviewGates.maximumCrossLinePitchCoefficientOfVariation <= 0 ||
+    lock.reviewGates.maximumCrossLinePitchCoefficientOfVariation > 0.15
+  ) {
+    throw new Error('cross-line pitch variation gate must be fixed at or below 0.15')
+  }
   return lock
 }
 
@@ -75,6 +100,103 @@ export function stableJsonHash(value) {
     return item
   }
   return sha256(JSON.stringify(normalize(value)))
+}
+
+export function validateApprovedVoxIdentity(lock, issue7Evidence, buildManifest, actual) {
+  const approved = lock.voxcpm2.approvedBuild
+  const mismatches = []
+  const requireEqual = (name, left, right) => {
+    if (left !== right) mismatches.push(name)
+  }
+  requireEqual(
+    'issue7 evidence SHA-256',
+    actual.issue7EvidenceSha256,
+    lock.voxcpm2.issue7EvidenceSha256,
+  )
+  requireEqual(
+    'issue7 generatedFromCommit',
+    issue7Evidence.provenance?.generatedFromCommit,
+    lock.voxcpm2.requiredIssue7GeneratedFromCommit,
+  )
+  requireEqual(
+    'issue7 source identity',
+    issue7Evidence.run?.sourceIdentity,
+    approved.sourceIdentity,
+  )
+  requireEqual(
+    'issue7 decision',
+    issue7Evidence.decision?.result,
+    lock.voxcpm2.requiredIssue7Decision,
+  )
+  requireEqual(
+    'issue7 experimental mode',
+    issue7Evidence.decision?.experimentalMode,
+    'Issue #8 may proceed only in serialized, non-streaming experimental mode',
+  )
+  requireEqual('issue7 production gate', issue7Evidence.productionMilestoneUnblocked, false)
+  requireEqual('build manifest SHA-256', actual.buildManifestSha256, approved.manifestSha256)
+  requireEqual('build run ID', buildManifest.runId, approved.runId)
+  requireEqual('build source identity', buildManifest.sourceIdentity, approved.sourceIdentity)
+  requireEqual('build clean flag', buildManifest.cleanBuild, true)
+  requireEqual('runtime revision', actual.runtimeRevision, approved.runtimeRevision)
+  requireEqual('runtime tree', actual.runtimeTree, approved.runtimeTree)
+  requireEqual(
+    'manifest runtime revision',
+    buildManifest.runtimeSource?.revision,
+    approved.runtimeRevision,
+  )
+  requireEqual('manifest runtime tree', buildManifest.runtimeSource?.tree, approved.runtimeTree)
+  requireEqual('CMake cache SHA-256', actual.cmakeCacheSha256, approved.cmakeCacheSha256)
+  requireEqual(
+    'manifest CMake cache SHA-256',
+    buildManifest.configuration?.cmakeCacheSha256,
+    approved.cmakeCacheSha256,
+  )
+  requireEqual('build metadata SHA-256', actual.buildMetadataSha256, approved.buildMetadataSha256)
+  requireEqual(
+    'manifest build metadata SHA-256',
+    buildManifest.configuration?.buildMetadataSha256,
+    approved.buildMetadataSha256,
+  )
+  requireEqual('server binary SHA-256', actual.serverBinarySha256, approved.serverBinarySha256)
+  requireEqual(
+    'manifest server binary SHA-256',
+    buildManifest.binaries?.['llama-tts-server'],
+    approved.serverBinarySha256,
+  )
+  requireEqual(
+    'issue7 current server binary SHA-256',
+    issue7Evidence.build?.currentBinaryHashes?.['llama-tts-server'],
+    approved.serverBinarySha256,
+  )
+  requireEqual(
+    'issue7 embedded server binary SHA-256',
+    issue7Evidence.build?.manifest?.binaries?.['llama-tts-server'],
+    approved.serverBinarySha256,
+  )
+  if (!exactJsonValue(issue7Evidence.build?.manifest, buildManifest)) {
+    mismatches.push('external and issue7 embedded build manifests')
+  }
+  if (mismatches.length > 0) {
+    throw new Error(`VoxCPM2 approved build identity mismatch: ${mismatches.join(', ')}`)
+  }
+  return {
+    issue7EvidenceSha256: actual.issue7EvidenceSha256,
+    issue7GeneratedFromCommit: issue7Evidence.provenance.generatedFromCommit,
+    sourceIdentity: approved.sourceIdentity,
+    buildRunId: approved.runId,
+    buildManifestSha256: actual.buildManifestSha256,
+    runtimeRevision: actual.runtimeRevision,
+    runtimeTree: actual.runtimeTree,
+    cmakeCacheSha256: actual.cmakeCacheSha256,
+    buildMetadataSha256: actual.buildMetadataSha256,
+    serverBinarySha256: actual.serverBinarySha256,
+    independentlyMatchedIssue7EvidenceAndExternalBuild: true,
+  }
+}
+
+function exactJsonValue(left, right) {
+  return stableJsonHash(left) === stableJsonHash(right)
 }
 
 export async function directoryTreeHash(root) {
@@ -224,83 +346,247 @@ function coefficientOfVariation(values) {
 
 export function deriveObjectiveReview(lock, references, outputs) {
   const gates = lock.reviewGates
+  const exactJson = (left, right) => stableJsonHash(left) === stableJsonHash(right)
+  const candidateIds = lock.candidates.map(({ id }) => id)
+  const referenceIds = references.map(({ candidateId }) => candidateId)
+  const referenceCandidateMatrix =
+    references.length === lock.candidates.length &&
+    new Set(referenceIds).size === references.length &&
+    candidateIds.every((id) => referenceIds.includes(id))
   const referenceById = new Map(references.map((reference) => [reference.candidateId, reference]))
-  const referenceRepeatable = references.every(
-    (reference) => reference.sha256 === reference.repeatSha256,
-  )
-  const referenceAudioHealthy = references.every(
-    ({ analysis }) =>
-      analysis.objective.clippedSampleFraction <= gates.maximumClippedSampleFraction &&
-      analysis.objective.activeFrameFraction >= gates.minimumActiveFrameFraction &&
-      Number.isFinite(analysis.objective.estimatedMedianPitchHz),
-  )
+  const referenceIdentity =
+    referenceCandidateMatrix &&
+    lock.candidates.every((candidate) => {
+      const reference = referenceById.get(candidate.id)
+      return (
+        reference?.candidateId === candidate.id &&
+        reference.role === candidate.role &&
+        reference.voice === candidate.voice &&
+        reference.transcript === candidate.transcript &&
+        reference.transcriptSha256 === candidate.transcriptSha256 &&
+        reference.seed === candidate.seed &&
+        exactJson(reference.parameters, candidate.parameters) &&
+        reference.file === `references/${candidate.id}/reference.wav` &&
+        reference.repeatFile === `references/${candidate.id}/reference-repeat.wav` &&
+        SHA256.test(reference.sha256) &&
+        SHA256.test(reference.repeatSha256) &&
+        reference.analysis?.audio?.sha256 === reference.sha256
+      )
+    })
+  const referenceRepeatable =
+    referenceCandidateMatrix &&
+    references.every((reference) => reference.sha256 === reference.repeatSha256)
+  const referenceHashesDistinct =
+    referenceCandidateMatrix &&
+    new Set(references.map(({ sha256: hash }) => hash)).size === references.length
+  const referenceAudioHealthy =
+    referenceIdentity &&
+    references.every(
+      ({ analysis }) =>
+        analysis.objective.clippedSampleFraction <= gates.maximumClippedSampleFraction &&
+        analysis.objective.activeFrameFraction >= gates.minimumActiveFrameFraction &&
+        Number.isFinite(analysis.objective.estimatedMedianPitchHz),
+    )
   const pairwiseReferencePitchRatios = []
-  for (let left = 0; left < references.length; left += 1) {
-    for (let right = left + 1; right < references.length; right += 1) {
-      const leftPitch = references[left].analysis.objective.estimatedMedianPitchHz
-      const rightPitch = references[right].analysis.objective.estimatedMedianPitchHz
-      pairwiseReferencePitchRatios.push({
-        candidates: [references[left].candidateId, references[right].candidateId],
-        ratio: Math.max(leftPitch, rightPitch) / Math.min(leftPitch, rightPitch),
-      })
+  if (referenceCandidateMatrix) {
+    for (let left = 0; left < references.length; left += 1) {
+      for (let right = left + 1; right < references.length; right += 1) {
+        const leftPitch = references[left].analysis?.objective?.estimatedMedianPitchHz
+        const rightPitch = references[right].analysis?.objective?.estimatedMedianPitchHz
+        pairwiseReferencePitchRatios.push({
+          candidates: [references[left].candidateId, references[right].candidateId],
+          ratio:
+            Number.isFinite(leftPitch) && Number.isFinite(rightPitch)
+              ? Math.max(leftPitch, rightPitch) / Math.min(leftPitch, rightPitch)
+              : null,
+        })
+      }
     }
   }
-  const referencesDistinguishable = pairwiseReferencePitchRatios.every(
-    ({ ratio }) => ratio >= gates.minimumReferencePitchRatio,
-  )
-  const expectedOutputCount = lock.candidates.length * (lock.lines.length + 1)
-  const fixedReferenceReused = outputs.every(
-    (output) => output.referenceSha256 === referenceById.get(output.candidateId)?.sha256,
-  )
-  const outputAudioHealthy = outputs.every(({ analysis, text, repetition }) => {
-    const words = text.trim().split(/\s+/u).length
-    const secondsPerWord = analysis.audio.durationSeconds / words
-    return (
-      analysis.objective.clippedSampleFraction <= gates.maximumClippedSampleFraction &&
-      analysis.objective.activeFrameFraction >= gates.minimumActiveFrameFraction &&
-      secondsPerWord >= gates.minimumOutputSecondsPerWord &&
-      secondsPerWord <= gates.maximumOutputSecondsPerWord &&
-      (repetition === 0 || repetition === 1)
+  const referencesDistinguishable =
+    pairwiseReferencePitchRatios.length === (references.length * (references.length - 1)) / 2 &&
+    pairwiseReferencePitchRatios.every(
+      ({ ratio }) => Number.isFinite(ratio) && ratio >= gates.minimumReferencePitchRatio,
     )
-  })
-  const voxcpmRepeatable = lock.candidates.every((candidate) => {
-    const repeated = outputs.filter(
-      ({ candidateId, lineId }) =>
-        candidateId === candidate.id && lineId === lock.generation.repeatLineId,
+
+  const expectedParameters = {
+    model: lock.generation.model,
+    responseFormat: lock.generation.responseFormat,
+    cfgValue: lock.generation.cfgValue,
+    temperature: lock.generation.temperature,
+    inferenceTimesteps: lock.generation.inferenceTimesteps,
+    maxSteps: lock.generation.maxSteps,
+  }
+  const expectedCases = []
+  for (const candidate of lock.candidates) {
+    for (const line of lock.lines) expectedCases.push({ candidate, line, repetition: 0 })
+    expectedCases.push({
+      candidate,
+      line: lock.lines.find(({ id }) => id === lock.generation.repeatLineId),
+      repetition: 1,
+    })
+  }
+  const caseKey = ({ candidateId, lineId, repetition }) =>
+    `${candidateId}\0${lineId}\0${repetition}`
+  const outputBuckets = new Map()
+  for (const output of outputs) {
+    const key = caseKey(output)
+    const bucket = outputBuckets.get(key) ?? []
+    bucket.push(output)
+    outputBuckets.set(key, bucket)
+  }
+  const expectedKeys = new Set(
+    expectedCases.map(({ candidate, line, repetition }) =>
+      caseKey({ candidateId: candidate.id, lineId: line.id, repetition }),
+    ),
+  )
+  const primaryMatrixExact =
+    outputs.filter(({ repetition }) => repetition === 0).length ===
+      lock.candidates.length * lock.lines.length &&
+    lock.candidates.every((candidate) =>
+      lock.lines.every(
+        (line) =>
+          outputBuckets.get(caseKey({ candidateId: candidate.id, lineId: line.id, repetition: 0 }))
+            ?.length === 1,
+      ),
     )
-    return repeated.length === 2 && repeated[0].sha256 === repeated[1].sha256
-  })
+  const repeatMatrixExact =
+    outputs.filter(({ repetition }) => repetition === 1).length === lock.candidates.length &&
+    lock.candidates.every(
+      (candidate) =>
+        outputBuckets.get(
+          caseKey({
+            candidateId: candidate.id,
+            lineId: lock.generation.repeatLineId,
+            repetition: 1,
+          }),
+        )?.length === 1,
+    )
+  const outputExactMatrix =
+    outputs.length === expectedCases.length &&
+    outputBuckets.size === expectedKeys.size &&
+    [...outputBuckets.keys()].every((key) => expectedKeys.has(key)) &&
+    primaryMatrixExact &&
+    repeatMatrixExact
+  const expectedFile = (candidateId, lineId, repetition) =>
+    `outputs/${candidateId}/${lineId}${repetition === 1 ? '-repeat' : ''}.wav`
+  const outputIdentity =
+    outputExactMatrix &&
+    expectedCases.every(({ candidate, line, repetition }, index) => {
+      const output = outputBuckets.get(
+        caseKey({ candidateId: candidate.id, lineId: line.id, repetition }),
+      )?.[0]
+      return (
+        output?.sequence === index + 1 &&
+        output.candidateId === candidate.id &&
+        output.lineId === line.id &&
+        output.repetition === repetition &&
+        output.text === line.text &&
+        output.textSha256 === line.textSha256 &&
+        output.seed === line.seed &&
+        exactJson(output.parameters, expectedParameters) &&
+        output.referenceSha256 === referenceById.get(candidate.id)?.sha256 &&
+        output.file === expectedFile(candidate.id, line.id, repetition) &&
+        output.status === 200 &&
+        output.contentType === 'audio/wav' &&
+        SHA256.test(output.sha256) &&
+        output.analysis?.audio?.sha256 === output.sha256
+      )
+    })
+  const fileIdentitiesUnique =
+    outputExactMatrix && new Set(outputs.map(({ file }) => file)).size === outputs.length
+  const fixedReferenceReused =
+    outputIdentity &&
+    outputs.every(
+      (output) => output.referenceSha256 === referenceById.get(output.candidateId)?.sha256,
+    )
+  const primaryOutputs = outputs.filter(({ repetition }) => repetition === 0)
+  const conditionedPrimaryHashesDistinct =
+    primaryMatrixExact &&
+    primaryOutputs.every(({ sha256: hash }) => SHA256.test(hash)) &&
+    new Set(primaryOutputs.map(({ sha256: hash }) => hash)).size === primaryOutputs.length
+  const outputAudioHealthy =
+    outputIdentity &&
+    outputs.every(({ analysis, text }) => {
+      const words = text.trim().split(/\s+/u).length
+      const secondsPerWord = analysis.audio.durationSeconds / words
+      return (
+        analysis.objective.clippedSampleFraction <= gates.maximumClippedSampleFraction &&
+        analysis.objective.activeFrameFraction >= gates.minimumActiveFrameFraction &&
+        Number.isFinite(analysis.objective.estimatedMedianPitchHz) &&
+        secondsPerWord >= gates.minimumOutputSecondsPerWord &&
+        secondsPerWord <= gates.maximumOutputSecondsPerWord
+      )
+    })
+  const voxcpmRepeatable =
+    outputIdentity &&
+    lock.candidates.every((candidate) => {
+      const primary = outputBuckets.get(
+        caseKey({
+          candidateId: candidate.id,
+          lineId: lock.generation.repeatLineId,
+          repetition: 0,
+        }),
+      )?.[0]
+      const repeated = outputBuckets.get(
+        caseKey({
+          candidateId: candidate.id,
+          lineId: lock.generation.repeatLineId,
+          repetition: 1,
+        }),
+      )?.[0]
+      return primary?.sha256 === repeated?.sha256
+    })
   const crossLineConsistency = lock.candidates.map((candidate) => {
-    const primary = outputs.filter(
-      ({ candidateId, repetition }) => candidateId === candidate.id && repetition === 0,
-    )
+    const primary = lock.lines
+      .map(
+        (line) =>
+          outputBuckets.get(
+            caseKey({ candidateId: candidate.id, lineId: line.id, repetition: 0 }),
+          )?.[0],
+      )
+      .filter(Boolean)
+    const durations = primary.map(({ analysis }) => analysis.audio.durationSeconds)
+    const pitches = primary.map(({ analysis }) => analysis.objective.estimatedMedianPitchHz)
+    const rmsValues = primary.map(({ analysis }) => analysis.objective.rmsDbfs)
     return {
       candidateId: candidate.id,
       validLineCount: primary.length,
       referenceSha256: referenceById.get(candidate.id)?.sha256,
-      durationSeconds: primary.map(({ analysis }) => analysis.audio.durationSeconds),
-      pitchCoefficientOfVariation: coefficientOfVariation(
-        primary.map(({ analysis }) => analysis.objective.estimatedMedianPitchHz),
-      ),
-      rmsDbfsRange: [
-        Math.min(...primary.map(({ analysis }) => analysis.objective.rmsDbfs)),
-        Math.max(...primary.map(({ analysis }) => analysis.objective.rmsDbfs)),
-      ],
+      durationSeconds: durations,
+      pitchCoefficientOfVariation: coefficientOfVariation(pitches),
+      rmsDbfsRange:
+        rmsValues.length > 0 ? [Math.min(...rmsValues), Math.max(...rmsValues)] : [null, null],
     }
   })
+  const crossLinePitchStable = crossLineConsistency.every(
+    ({ validLineCount, pitchCoefficientOfVariation }) =>
+      validLineCount === lock.lines.length &&
+      Number.isFinite(pitchCoefficientOfVariation) &&
+      pitchCoefficientOfVariation <= gates.maximumCrossLinePitchCoefficientOfVariation,
+  )
   const checks = {
-    candidateCount: references.length === 3,
+    referenceCandidateMatrix,
+    referenceIdentity,
     referenceRepeatable,
+    referenceHashesDistinct,
     referenceAudioHealthy,
     referencesDistinguishable,
-    outputCount: outputs.length === expectedOutputCount,
+    primaryMatrixExact,
+    repeatMatrixExact,
+    outputExactMatrix,
+    outputIdentity,
+    fileIdentitiesUnique,
     fixedReferenceReused,
+    conditionedPrimaryHashesDistinct,
     outputAudioHealthy,
     voxcpmRepeatable,
+    crossLinePitchStable,
   }
   const technicalFeasibility = Object.values(checks).every(Boolean)
   return {
     checks,
+    gates,
     pairwiseReferencePitchRatios,
     crossLineConsistency,
     intelligibilityProxy: {

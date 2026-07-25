@@ -41,9 +41,22 @@
   "voxcpm2": {
     "lockPath": "config/voxcpm2-spike.lock.json",
     "lockSha256": "6b431f34008736a1f808037946915bb0d00bc8d38a790805c6bcd4b607f08650",
+    "issue7EvidencePath": "docs/evidence/issue-7-voxcpm2-wsl2.json",
+    "issue7EvidenceSha256": "119529018e96dc247c8cc6ffb6a3cf19f52be45654d8bb51fd519f9e77e2df17",
+    "requiredIssue7GeneratedFromCommit": "de1b76e3e92ce9146936701bd40a915e0860e016",
     "requiredIssue7Decision": "NO-GO for production SpeechEngine/M2",
     "mode": "serialized-non-streaming-experimental-only",
-    "endpointPath": "/v1/audio/speech"
+    "endpointPath": "/v1/audio/speech",
+    "approvedBuild": {
+      "sourceIdentity": "ac1659bee8aafe41da3c016c4b600a0ab4c4bb4f37cd26115ca6738efc1c65ca",
+      "runId": "build-ac1659bee8aafe41-20260725T015406.080352772Z-8dd107d21d20",
+      "manifestSha256": "1a2d4eb0394312fdf1c8f00bf09ad5a093d013873db474c8b1af74ee5f1f32f6",
+      "runtimeRevision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+      "runtimeTree": "bde392d3a4d92035a67988f57095665c4f5f8c86",
+      "cmakeCacheSha256": "bee4e5d43d69247436578e1bae0b5c13a2d83b803844e28db39035eb7beebfd3",
+      "buildMetadataSha256": "0187a020250b74efcd90326f7632badb64e64ba7074389e1f0b486609147371e",
+      "serverBinarySha256": "89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac"
+    }
   },
   "candidates": [
     {
@@ -53,7 +66,11 @@
       "transcript": "At sunrise, the brass observatory opened its quiet shutters, while three clockwork swallows traced circles above the garden.",
       "transcriptSha256": "a3e84c0fe1ccb982b0a83fb27610e05add6894bb9f8b2692b6223a83628af78e",
       "seed": null,
-      "parameters": { "rateWordsPerMinute": 155, "pitch": 45, "amplitude": 120 }
+      "parameters": {
+        "rateWordsPerMinute": 155,
+        "pitch": 45,
+        "amplitude": 120
+      }
     },
     {
       "id": "character-one",
@@ -62,7 +79,11 @@
       "transcript": "I packed the blue compass, checked every latch, and left a bright chalk arrow beside the northern gate.",
       "transcriptSha256": "ae8f772d1a02dc8e42f20808273aa463df9fef0b5eb1398988db88b31aae1b2c",
       "seed": null,
-      "parameters": { "rateWordsPerMinute": 175, "pitch": 15, "amplitude": 120 }
+      "parameters": {
+        "rateWordsPerMinute": 175,
+        "pitch": 15,
+        "amplitude": 120
+      }
     },
     {
       "id": "character-two",
@@ -71,7 +92,11 @@
       "transcript": "Wait for the second bell; the river path is safer then, and our little lantern will stay hidden beneath my coat.",
       "transcriptSha256": "6d3136c7bca3b4f8d09ec38ad81357424cb26c5138eacb6112c5431ba34f5bc8",
       "seed": null,
-      "parameters": { "rateWordsPerMinute": 185, "pitch": 65, "amplitude": 120 }
+      "parameters": {
+        "rateWordsPerMinute": 185,
+        "pitch": 65,
+        "amplitude": 120
+      }
     }
   ],
   "lines": [
@@ -108,6 +133,7 @@
     "maximumClippedSampleFraction": 0.01,
     "minimumActiveFrameFraction": 0.15,
     "minimumOutputSecondsPerWord": 0.12,
-    "maximumOutputSecondsPerWord": 1.5
+    "maximumOutputSecondsPerWord": 1.5,
+    "maximumCrossLinePitchCoefficientOfVariation": 0.15
   }
 }

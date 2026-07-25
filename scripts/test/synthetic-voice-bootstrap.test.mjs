@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -9,11 +10,35 @@ import {
   deriveObjectiveReview,
   loadBootstrapLock,
   stableJsonHash,
+  validateApprovedVoxIdentity,
 } from '../synthetic-voices/core.mjs'
-import { sha256 } from '../voxcpm2/core.mjs'
+import { deriveSourceIdentity, sha256 } from '../voxcpm2/core.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const lockPath = join(root, 'config/synthetic-voice-bootstrap.lock.json')
+
+function gitShow(commit, path) {
+  const result = spawnSync('git', ['-C', root, 'show', `${commit}:${path}`])
+  if (result.status !== 0) throw new Error(`cannot read historical source ${commit}:${path}`)
+  return result.stdout
+}
+
+function verifyHistoricalSourceIdentity(evidence, sourcePaths) {
+  const commit = evidence.provenance.generatedFromCommit
+  const commitCheck = spawnSync('git', ['-C', root, 'cat-file', '-e', `${commit}^{commit}`])
+  assert.equal(commitCheck.status, 0, 'generatedFromCommit must exist')
+  const recomputed = {}
+  for (const [name, path] of Object.entries(sourcePaths)) {
+    recomputed[name] = sha256(gitShow(commit, path))
+  }
+  assert.deepEqual(evidence.provenance.sourceHashes, recomputed)
+  const identity = deriveSourceIdentity(recomputed)
+  if (evidence.provenance.sourceIdentity !== undefined) {
+    assert.equal(evidence.provenance.sourceIdentity, identity)
+  }
+  assert.equal(evidence.run.sourceIdentity, identity)
+  return JSON.parse(gitShow(commit, sourcePaths.config))
+}
 
 function sineWav({ frequency = 150, seconds = 1, sampleRateHz = 16000, amplitude = 8000 } = {}) {
   const frames = Math.round(seconds * sampleRateHz)
@@ -39,9 +64,9 @@ function sineWav({ frequency = 150, seconds = 1, sampleRateHz = 16000, amplitude
   return buffer
 }
 
-function mockAnalysis(pitch, durationSeconds = 3) {
+function mockAnalysis(pitch, hash, durationSeconds = 3) {
   return {
-    audio: { durationSeconds },
+    audio: { durationSeconds, sha256: hash },
     objective: {
       clippedSampleFraction: 0,
       activeFrameFraction: 0.95,
@@ -51,34 +76,71 @@ function mockAnalysis(pitch, durationSeconds = 3) {
   }
 }
 
+function expectedParameters(lock) {
+  return {
+    model: lock.generation.model,
+    responseFormat: lock.generation.responseFormat,
+    cfgValue: lock.generation.cfgValue,
+    temperature: lock.generation.temperature,
+    inferenceTimesteps: lock.generation.inferenceTimesteps,
+    maxSteps: lock.generation.maxSteps,
+  }
+}
+
 async function passingFixture() {
   const lock = await loadBootstrapLock(lockPath)
   const pitches = [100, 140, 210]
-  const references = lock.candidates.map((candidate, index) => ({
-    candidateId: candidate.id,
-    sha256: `${index + 1}`.repeat(64),
-    repeatSha256: `${index + 1}`.repeat(64),
-    analysis: mockAnalysis(pitches[index], 7),
-  }))
+  const references = lock.candidates.map((candidate, index) => {
+    const hash = `${index + 1}`.repeat(64)
+    return {
+      candidateId: candidate.id,
+      role: candidate.role,
+      voice: candidate.voice,
+      transcript: candidate.transcript,
+      transcriptSha256: candidate.transcriptSha256,
+      seed: candidate.seed,
+      parameters: candidate.parameters,
+      file: `references/${candidate.id}/reference.wav`,
+      repeatFile: `references/${candidate.id}/reference-repeat.wav`,
+      sha256: hash,
+      repeatSha256: hash,
+      analysis: mockAnalysis(pitches[index], hash, 7),
+    }
+  })
   const outputs = []
+  let sequence = 0
   for (const [candidateIndex, candidate] of lock.candidates.entries()) {
     for (const line of lock.lines) {
+      const hash = sha256(`${candidate.id}:${line.id}`)
+      sequence += 1
       outputs.push({
+        sequence,
         candidateId: candidate.id,
         lineId: line.id,
         repetition: 0,
         text: line.text,
+        textSha256: line.textSha256,
+        seed: line.seed,
+        parameters: expectedParameters(lock),
         referenceSha256: references[candidateIndex].sha256,
-        sha256: sha256(`${candidate.id}:${line.id}`),
-        analysis: mockAnalysis(pitches[candidateIndex], 3),
+        sha256: hash,
+        analysis: mockAnalysis(pitches[candidateIndex], hash, 3),
         file: `outputs/${candidate.id}/${line.id}.wav`,
+        status: 200,
+        contentType: 'audio/wav',
       })
     }
     const repeated = outputs.find(
       ({ candidateId, lineId }) =>
         candidateId === candidate.id && lineId === lock.generation.repeatLineId,
     )
-    outputs.push({ ...repeated, repetition: 1, file: repeated.file.replace('.wav', '-repeat.wav') })
+    sequence += 1
+    outputs.push({
+      ...structuredClone(repeated),
+      sequence,
+      repetition: 1,
+      file: repeated.file.replace('.wav', '-repeat.wav'),
+    })
   }
   return { lock, references, outputs }
 }
@@ -95,7 +157,65 @@ test('the lock pins GPL source, formant voices, authored transcripts, and issue 
   assert.ok(lock.candidates.every(({ seed }) => seed === null))
   assert.equal(lock.voxcpm2.mode, 'serialized-non-streaming-experimental-only')
   assert.equal(lock.voxcpm2.endpointPath, '/v1/audio/speech')
+  assert.equal(
+    lock.voxcpm2.approvedBuild.serverBinarySha256,
+    '89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac',
+  )
+  assert.equal(lock.reviewGates.maximumCrossLinePitchCoefficientOfVariation, 0.15)
   assert.equal(stableJsonHash(lock.espeakNg.build).length, 64)
+})
+
+test('approved VoxCPM2 identity rejects source, CMake, manifest, evidence, and binary substitution', async () => {
+  const lock = await loadBootstrapLock(lockPath)
+  const issue7Buffer = await readFile(join(root, lock.voxcpm2.issue7EvidencePath))
+  const issue7Evidence = JSON.parse(issue7Buffer)
+  const buildManifest = structuredClone(issue7Evidence.build.manifest)
+  const approved = lock.voxcpm2.approvedBuild
+  const actual = {
+    issue7EvidenceSha256: sha256(issue7Buffer),
+    buildManifestSha256: approved.manifestSha256,
+    runtimeRevision: approved.runtimeRevision,
+    runtimeTree: approved.runtimeTree,
+    cmakeCacheSha256: approved.cmakeCacheSha256,
+    buildMetadataSha256: approved.buildMetadataSha256,
+    serverBinarySha256: approved.serverBinarySha256,
+  }
+  assert.equal(
+    validateApprovedVoxIdentity(lock, issue7Evidence, buildManifest, actual)
+      .independentlyMatchedIssue7EvidenceAndExternalBuild,
+    true,
+  )
+  for (const field of [
+    'issue7EvidenceSha256',
+    'buildManifestSha256',
+    'runtimeRevision',
+    'runtimeTree',
+    'cmakeCacheSha256',
+    'buildMetadataSha256',
+    'serverBinarySha256',
+  ]) {
+    assert.throws(
+      () =>
+        validateApprovedVoxIdentity(lock, issue7Evidence, buildManifest, {
+          ...actual,
+          [field]: field.includes('Revision') ? '0'.repeat(40) : '0'.repeat(64),
+        }),
+      /approved build identity mismatch/u,
+      field,
+    )
+  }
+  const substitutedEvidence = structuredClone(issue7Evidence)
+  substitutedEvidence.decision.result = 'GO'
+  assert.throws(
+    () => validateApprovedVoxIdentity(lock, substitutedEvidence, buildManifest, actual),
+    /issue7 decision/u,
+  )
+  const substitutedManifest = structuredClone(buildManifest)
+  substitutedManifest.binaries['llama-tts-server'] = '0'.repeat(64)
+  assert.throws(
+    () => validateApprovedVoxIdentity(lock, issue7Evidence, substitutedManifest, actual),
+    /manifest server binary/u,
+  )
 })
 
 test('objective PCM analysis measures speech activity, clipping, and distinguishable pitch', () => {
@@ -123,6 +243,168 @@ test('review derivation requires deterministic references, fixed reuse, serializ
   assert.match(rejected.decision.result, /^NO-GO/u)
 })
 
+test('review rejects adversarial matrix, identity, hash, parameter, and stability substitutions', async () => {
+  const fixture = await passingFixture()
+  const outputCases = [
+    [
+      'duplicate primary key',
+      'primaryMatrixExact',
+      (items) => {
+        items[1].lineId = items[0].lineId
+      },
+    ],
+    ['missing output', 'outputExactMatrix', (items) => items.pop()],
+    [
+      'extra candidate ID',
+      'outputExactMatrix',
+      (items) => {
+        items[0].candidateId = 'intruder'
+      },
+    ],
+    [
+      'extra line ID',
+      'outputExactMatrix',
+      (items) => {
+        items[0].lineId = 'line-extra'
+      },
+    ],
+    [
+      'wrong repeat line',
+      'repeatMatrixExact',
+      (items) => {
+        items.find(({ repetition }) => repetition === 1).lineId = 'line-02'
+      },
+    ],
+    [
+      'duplicate repeat',
+      'outputExactMatrix',
+      (items) => {
+        items.push(structuredClone(items.find(({ repetition }) => repetition === 1)))
+      },
+    ],
+    [
+      'text substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].text = 'substituted'
+      },
+    ],
+    [
+      'text hash substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].textSha256 = 'f'.repeat(64)
+      },
+    ],
+    [
+      'seed substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].seed += 1
+      },
+    ],
+    [
+      'model substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].parameters.model = 'substitute'
+      },
+    ],
+    [
+      'parameter substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].parameters.cfgValue = 999
+      },
+    ],
+    [
+      'reference substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].referenceSha256 = 'f'.repeat(64)
+      },
+    ],
+    [
+      'file substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].file = 'outputs/wrong.wav'
+      },
+    ],
+    [
+      'sequence substitution',
+      'outputIdentity',
+      (items) => {
+        items[0].sequence = 12
+      },
+    ],
+    [
+      'conditioned hash collision',
+      'conditionedPrimaryHashesDistinct',
+      (items) => {
+        const primary = items.filter(({ repetition }) => repetition === 0)
+        primary[3].sha256 = primary[0].sha256
+        primary[3].analysis.audio.sha256 = primary[0].sha256
+      },
+    ],
+    [
+      'cross-line pitch drift',
+      'crossLinePitchStable',
+      (items) => {
+        const primary = items.filter(
+          ({ candidateId, repetition }) => candidateId === 'narrator' && repetition === 0,
+        )
+        for (const [index, pitch] of [70, 100, 140].entries()) {
+          primary[index].analysis.objective.estimatedMedianPitchHz = pitch
+        }
+      },
+    ],
+  ]
+  for (const [name, expectedCheck, mutate] of outputCases) {
+    const outputs = structuredClone(fixture.outputs)
+    mutate(outputs)
+    const review = deriveObjectiveReview(fixture.lock, fixture.references, outputs)
+    assert.equal(review.checks[expectedCheck], false, name)
+    assert.match(review.decision.result, /^NO-GO/u, name)
+  }
+
+  const referenceCases = [
+    [
+      'duplicate candidate reference',
+      (items) => {
+        items[1].candidateId = items[0].candidateId
+      },
+    ],
+    ['missing candidate reference', (items) => items.pop()],
+    ['extra candidate reference', (items) => items.push(structuredClone(items[0]))],
+    [
+      'reference transcript substitution',
+      (items) => {
+        items[0].transcript = 'substituted'
+      },
+    ],
+    [
+      'reference parameter substitution',
+      (items) => {
+        items[0].parameters.pitch += 1
+      },
+    ],
+    [
+      'reference file substitution',
+      (items) => {
+        items[0].file = 'references/wrong.wav'
+      },
+    ],
+  ]
+  for (const [name, mutate] of referenceCases) {
+    const references = structuredClone(fixture.references)
+    mutate(references)
+    const review = deriveObjectiveReview(fixture.lock, references, fixture.outputs)
+    assert.equal(Object.values(review.checks).every(Boolean), false, name)
+    assert.match(review.decision.result, /^NO-GO/u, name)
+  }
+})
+
 test('manual review is transcript-aligned, unrated, and cannot imply listening approval', async () => {
   const { lock, references, outputs } = await passingFixture()
   const objective = deriveObjectiveReview(lock, references, outputs)
@@ -148,6 +430,8 @@ test('operational harness is external, immutable, loopback-only, serialized, and
   assert.match(shell, /immutable install target appeared during build/u)
   assert.match(shell, /voice-selection/u)
   assert.match(shell, /installed voice selection mismatch/u)
+  assert.match(shell, /issue #7 evidence checksum mismatch/u)
+  assert.match(shell, /VOXCPM2_BUILD_MANIFEST/u)
   assert.match(shell, /source_identity/u)
   assert.match(shell, /artifact roots overlap/u)
   assert.match(probe, /flag: 'wx'/u)
@@ -157,12 +441,14 @@ test('operational harness is external, immutable, loopback-only, serialized, and
   assert.match(probe, /evidence output already exists/u)
   assert.match(probe, /fixed-buffer limit/u)
   assert.match(probe, /candidate-separated generation passes/u)
+  assert.match(probe, /validateApprovedVoxIdentity/u)
+  assert.match(probe, /review-instructions\.txt/u)
   assert.doesNotMatch(probe, /\/v1\/audio\/speech\/stream/u)
   assert.doesNotMatch(`${shell}\n${probe}`, /--host['"\s,]+0\.0\.0\.0/u)
 })
 
-test('committed host evidence, when present, remains sanitized and non-production', async () => {
-  const evidencePath = join(root, 'docs/evidence/issue-8-synthetic-voices-wsl2.json')
+test('latest committed evidence deeply recomputes historical provenance, matrices, and decision', async () => {
+  const evidencePath = join(root, 'docs/evidence/issue-8-synthetic-voices-wsl2-v2.json')
   let evidence
   try {
     evidence = JSON.parse(await readFile(evidencePath, 'utf8'))
@@ -170,13 +456,54 @@ test('committed host evidence, when present, remains sanitized and non-productio
     if (error.code === 'ENOENT') return
     throw error
   }
+  const historicalLock = verifyHistoricalSourceIdentity(evidence, {
+    config: 'config/synthetic-voice-bootstrap.lock.json',
+    core: 'scripts/synthetic-voices/core.mjs',
+    issue7Evidence: 'docs/evidence/issue-7-voxcpm2-wsl2.json',
+    probe: 'scripts/probe-synthetic-voices.mjs',
+    shell: 'scripts/synthetic-voice-bootstrap.sh',
+    voxConfig: 'config/voxcpm2-spike.lock.json',
+    voxCore: 'scripts/voxcpm2/core.mjs',
+  })
+  assert.equal(evidence.provenance.configurationSha256, evidence.provenance.sourceHashes.config)
   assert.equal(evidence.issue, 8)
-  assert.equal(evidence.candidates.length, 3)
+  assert.equal(evidence.candidates.length, historicalLock.candidates.length)
+  for (const candidate of historicalLock.candidates) {
+    assert.equal(sha256(candidate.transcript), candidate.transcriptSha256)
+  }
+  for (const line of historicalLock.lines) assert.equal(sha256(line.text), line.textSha256)
+  const recomputedReview = deriveObjectiveReview(
+    historicalLock,
+    evidence.candidates,
+    evidence.voxcpm2Outputs,
+  )
+  assert.ok(Object.values(recomputedReview.checks).every(Boolean))
+  assert.deepEqual(evidence.review.objective, recomputedReview)
+  assert.deepEqual(evidence.decision, recomputedReview.decision)
   assert.equal(evidence.isolation.maximumInFlightRequests, 1)
   assert.equal(evidence.isolation.allRequestsNonStreaming, true)
   assert.equal(evidence.provenance.humanOrCopyrightedReferenceAudioUsed, false)
   assert.equal(evidence.review.manualReady.status, 'pending')
-  assert.match(evidence.decision.result, /^GO for synthetic bootstrap/u)
+  assert.equal(evidence.review.manualReady.closureGate, 'REQUIRED human listening; not completed')
   assert.match(evidence.decision.productionReadiness, /NOT ASSESSED/u)
   assert.doesNotMatch(JSON.stringify(evidence), /\/(?:home|mnt)\//u)
+
+  const issue7Buffer = await readFile(join(root, historicalLock.voxcpm2.issue7EvidencePath))
+  const issue7Evidence = JSON.parse(issue7Buffer)
+  verifyHistoricalSourceIdentity(issue7Evidence, {
+    config: 'config/voxcpm2-spike.lock.json',
+    core: 'scripts/voxcpm2/core.mjs',
+    probe: 'scripts/probe-voxcpm2.mjs',
+    shell: 'scripts/voxcpm2-spike.sh',
+  })
+  const approval = evidence.provenance.voxcpm2.runtimeApproval
+  validateApprovedVoxIdentity(historicalLock, issue7Evidence, issue7Evidence.build.manifest, {
+    issue7EvidenceSha256: sha256(issue7Buffer),
+    buildManifestSha256: approval.buildManifestSha256,
+    runtimeRevision: approval.runtimeRevision,
+    runtimeTree: approval.runtimeTree,
+    cmakeCacheSha256: approval.cmakeCacheSha256,
+    buildMetadataSha256: approval.buildMetadataSha256,
+    serverBinarySha256: approval.serverBinarySha256,
+  })
 })

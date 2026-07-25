@@ -32,7 +32,7 @@ export CUDA_HOME=/usr/local/cuda
 
 pnpm voices:verify
 pnpm voices:setup
-pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2.json
+pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2-v2.json
 pnpm test:voices
 pnpm check
 pnpm build
@@ -49,7 +49,13 @@ runtime trees remain separate from the brain runtime. Source and installed-tool 
 immutable; each build and experiment gets a create-new run directory. Every audio write and
 manifest uses a new path, and committed evidence omits absolute paths and process IDs.
 
-The probe starts the pinned issue #7 server on exactly `127.0.0.1:8081`, checks the exact
+The probe does not trust copied lock claims alone. It checksum-verifies issue #7's committed
+evidence, matches its embedded clean-build manifest to the immutable external manifest, and
+checks the actual source revision/tree, CMake cache, build metadata, and exact approved
+`llama-tts-server` binary hash before launch. Any source, manifest, CMake, evidence, or binary
+substitution fails closed.
+
+The probe starts that approved issue #7 server on exactly `127.0.0.1:8081`, checks the exact
 listener, and calls only `/v1/audio/speech`. An in-process guard permits exactly one in-flight
 request. All complete responses receive strict RIFF/PCM validation. Cleanup requires graceful
 server exit and a free port. No interruption or streaming behavior is exercised.
@@ -66,12 +72,21 @@ For each candidate, the harness:
 6. records transcript, source, binary, configuration, seed/seed non-applicability, model,
    reference, and output hashes.
 
-Portable objective checks cover valid audio, clipping, active-speech fraction,
-duration-per-word bounds, reference pitch separation, fixed-reference reuse, repeatability, and
-per-candidate cross-line acoustic summaries. These checks are only an intelligibility proxy;
-they cannot establish word accuracy. The external run therefore includes an immutable,
-transcript-aligned manual listening form with intelligibility, stability, distinguishability,
-and cross-line consistency fields left explicitly pending.
+Portable objective checks require the exact candidate × locked-line primary matrix and exactly
+one locked repeat per candidate. They fail on duplicate, missing, or extra IDs; transcript,
+text-hash, seed, model, parameter, reference, sequence, or file-identity drift; conditioned
+primary hash collisions; invalid audio; clipping; insufficient speech activity; duration drift;
+reference pitch overlap; or repeat mismatch.
+
+Cross-line pitch coefficient of variation is locked at **0.15 maximum**. This threshold was
+fixed from the earlier measured maximum of 0.106, leaving about 41% relative headroom for small
+measurement variation while still rejecting a material identity/stability shift. It is a drift
+gate, not a naturalness or listening-quality claim.
+
+These checks are only an intelligibility proxy; they cannot establish word accuracy. The
+external run therefore includes an immutable transcript-aligned form and local HTML playback
+page with intelligibility, stability, distinguishability, and cross-line consistency fields left
+explicitly pending. Human listening remains a required closure gate.
 
 ## Measured results
 
