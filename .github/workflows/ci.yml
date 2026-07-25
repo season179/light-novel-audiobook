@@ -12,6 +12,9 @@ jobs:
     name: Node 24 validation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FFMPEG_ARCHIVE_SHA256: abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
+      FFMPEG_ARCHIVE_URL: https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
 
     steps:
       - name: Check out repository
@@ -30,6 +33,44 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
+
+      - name: Cache pinned FFmpeg archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/light-novel-audiobook/ffmpeg/ffmpeg-release-amd64-static.tar.xz
+          key: ffmpeg-${{ runner.os }}-amd64-${{ env.FFMPEG_ARCHIVE_SHA256 }}
+
+      - name: Install pinned FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_directory="$HOME/.cache/light-novel-audiobook/ffmpeg"
+          archive="$archive_directory/ffmpeg-release-amd64-static.tar.xz"
+          download="$archive.download"
+          install_directory="$HOME/.local/share/light-novel-audiobook/tools/ffmpeg/current"
+          mkdir -p "$archive_directory"
+
+          if [[ ! -f "$archive" ]]; then
+            rm -f "$download"
+            curl --fail --location --retry 3 --retry-all-errors --proto '=https' --tlsv1.2 \
+              "$FFMPEG_ARCHIVE_URL" --output "$download"
+            mv "$download" "$archive"
+          fi
+
+          printf '%s  %s\n' "$FFMPEG_ARCHIVE_SHA256" "$archive" | sha256sum --check --strict
+          rm -rf "$install_directory"
+          mkdir -p "$install_directory"
+          tar -xJf "$archive" -C "$install_directory" --strip-components=1
+          test -x "$install_directory/ffmpeg"
+          test -x "$install_directory/ffprobe"
+
+          ffmpeg_output="$("$install_directory/ffmpeg" -hide_banner -version)"
+          ffprobe_output="$("$install_directory/ffprobe" -hide_banner -version)"
+          ffmpeg_version="${ffmpeg_output%%$'\n'*}"
+          ffprobe_version="${ffprobe_output%%$'\n'*}"
+          printf '%s\n%s\n' "$ffmpeg_version" "$ffprobe_version"
+          [[ "$ffmpeg_version" == "ffmpeg version 7.0.2"* ]]
+          [[ "$ffprobe_version" == "ffprobe version 7.0.2"* ]]
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
