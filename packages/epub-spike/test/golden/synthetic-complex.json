@@ -2,7 +2,8 @@
   "identity": {
     "archive_parser": "fflate@0.8.3",
     "xml_parser": "saxes@6.0.0",
-    "extraction_rules": "epub-source-text@2"
+    "extraction_rules": "epub-source-text@2",
+    "cover_rules": "m4b-raster-cover@1"
   },
   "offset_unit": "unicode-scalar-value",
   "publication_content_sha256": "b69463d237cfffbdf7a418b97298002eb0e198d7ab0e8cf0c6736095be73c013",
@@ -48,12 +49,7 @@
     "date": "2026-07-25",
     "modified": "2026-07-25T00:00:00Z"
   },
-  "cover": {
-    "path": "EPUB/images/lantern.svg",
-    "media_type": "image/svg+xml",
-    "content_sha256": "6a5c95dae3edd5281eb4a6730bfd499baf8aad62aa927d5fc28d2b441b8b0b97",
-    "bytes_base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAxMCI+PHRpdGxlPlN5bnRoZXRpYyBsYW50ZXJuIGljb248L3RpdGxlPjxjaXJjbGUgY3g9IjUiIGN5PSI1IiByPSI0Ii8+PC9zdmc+Cg=="
-  },
+  "cover": null,
   "navigation": {
     "package_version": "3.0",
     "spine_paths": [
@@ -606,6 +602,11 @@
   ],
   "findings": [
     {
+      "kind": "unusable-cover",
+      "locators": ["EPUB/images/lantern.svg"],
+      "detail": "EPUB cover is not a supported M4B raster cover (image/svg+xml): EPUB/images/lantern.svg: Unsupported raster cover media type: image/svg+xml The publication was ingested without a cover; M4B assembly will continue without it unless a supported cover is supplied."
+    },
+    {
       "kind": "navigation-spine-conflict",
       "locators": [],
       "detail": "Spine order is authoritative; conflicting sources: epub3-nav, ncx."
@@ -649,5 +650,5 @@
       "detail": "Retained with hints: nonlinear-spine-item, requires-review"
     }
   ],
-  "extraction_sha256": "399cee04b51e2488ee9de3d798a253589369ef8b748a428d45a4ab0b5571b125"
+  "extraction_sha256": "97403b95b7ab0c695d0eea8458b1c96b4f181407e0b99a47cf4c997623c80650"
 }
