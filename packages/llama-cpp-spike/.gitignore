@@ -1,0 +1,6 @@
+# Host-only secrets, logs, sockets, and interrupted atomic writes
+*.log
+*.sock
+*.socket
+*.tmp
+evidence/*.tmp
