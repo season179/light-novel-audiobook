@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "issue": 8,
+  "decisionDate": "2026-07-25",
+  "scope": {
+    "experiment": "prior eSpeak NG references conditioned through serialized non-streaming VoxCPM2",
+    "evidence": "docs/evidence/issue-8-synthetic-voices-wsl2-v2.json",
+    "primaryOutputCount": 9,
+    "coveredOutputs": [
+      "narrator/line-01",
+      "narrator/line-02",
+      "narrator/line-03",
+      "character-one/line-01",
+      "character-one/line-02",
+      "character-one/line-03",
+      "character-two/line-01",
+      "character-two/line-02",
+      "character-two/line-03"
+    ]
+  },
+  "humanReview": {
+    "status": "completed-without-numeric-scores",
+    "judgmentAppliesToAllCoveredOutputs": true,
+    "judgment": "unacceptable / extremely bad quality",
+    "decision": "NO-GO for prior eSpeak NG plus VoxCPM2 listening quality",
+    "numericPerClipScoresProvided": false,
+    "numericPerClipScores": null,
+    "reviewerIdentity": "omitted",
+    "source": "user-supplied review decision"
+  },
+  "interpretation": {
+    "technicalEvidenceRetained": true,
+    "technicalFeasibilityDecisionDeletedOrRewritten": false,
+    "productionOrM2Readiness": false,
+    "manualListeningClosure": "NO-GO"
+  },
+  "retirement": {
+    "status": "installed engines retired by orchestrator",
+    "retiredExternalComponents": [
+      "VoxCPM2 weights and runtime",
+      "eSpeak NG source, build, and install"
+    ],
+    "approximateReclaimedBytes": "about 4 GB",
+    "historicalGeneratedWavCountRetained": 12,
+    "historicalExternalManifestsRetained": true,
+    "historicalExternalReviewBundleRetained": true,
+    "historicalRepositoryCodeAndEvidenceRetained": true,
+    "oldHarnessRerunAllowed": false
+  },
+  "redaction": {
+    "absolutePaths": "omitted",
+    "reviewerIdentity": "omitted",
+    "inventedScores": "none"
+  }
+}

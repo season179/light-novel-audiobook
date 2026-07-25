@@ -8,7 +8,8 @@
 - Latest host evidence: [`../evidence/issue-8-synthetic-voices-wsl2-v2.json`](../evidence/issue-8-synthetic-voices-wsl2-v2.json)
 - Superseded evidence: `issue-8-synthetic-voices-wsl2.json` (retained historically; do not use for review)
 - Decision: **GO for synthetic bootstrap technical feasibility only**
-- Listening approval: **PENDING**
+- Human listening decision: **NO-GO** — all nine primary outputs were judged “unacceptable / extremely bad quality”
+- Decision record: [`../evidence/issue-8-human-listening-2026-07-25.json`](../evidence/issue-8-human-listening-2026-07-25.json)
 
 ## Purpose and boundary
 
@@ -126,9 +127,11 @@ From that run root, start `python3 -m http.server 8098 --bind 127.0.0.1`, open
 `manual-review.json`, including reviewer, date, and listening approval. The probe prints the
 exact external paths after each run.
 
-The intelligibility, stability, distinguishability, and cross-line-consistency ratings remain
-deliberately unset. **Manual listening is a required, incomplete human closure gate.** Objective
-duration/activity bounds are not word-accuracy evidence.
+The reviewer supplied no numeric per-clip scores, so the form's numeric fields remain unset and
+no scores are inferred. The sanitized 2026-07-25 decision applies to all nine primary outputs:
+**NO-GO for prior eSpeak NG plus VoxCPM2 listening quality** because the outputs were judged
+“unacceptable / extremely bad quality.” Objective duration/activity bounds were not
+word-accuracy or listening-quality evidence.
 
 ## Go/no-go decision
 
@@ -137,7 +140,14 @@ the pinned eSpeak NG 1.52.0 source build with deterministic formant voices and M
 It is justified because it creates reproducible, distinguishable, non-human reference assets
 without requiring a user recording or a network service.
 
-This is **not** production listening approval. The external manual review remains pending, and
-issue #7 remains **NO-GO for production `SpeechEngine`/M2**. This experiment does not approve a
-production adapter, streaming, concurrency, cancellation, deadlines, voice naturalness, or M2
-readiness.
+This technical GO did **not** become production listening approval. Human listening closed as
+**NO-GO**, and issue #7 remains **NO-GO for production `SpeechEngine`/M2**. This experiment does
+not approve a production adapter, streaming, concurrency, cancellation, deadlines, voice
+naturalness, or M2 readiness.
+
+## Installed-engine retirement
+
+After the human rejection, the orchestrator removed the external VoxCPM2 weights/runtime and
+eSpeak NG source/build/install (about 4 GB). The 12 historical WAVs, immutable manifests,
+review bundle, repository harness, and committed evidence remain preserved. The retired engines
+must not be reinstalled or the old harness rerun for the independent Qwen evaluation.

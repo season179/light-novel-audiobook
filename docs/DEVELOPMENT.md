@@ -105,17 +105,13 @@ known streaming crash and is not approved for a production adapter.
 
 ## Synthetic voice bootstrap spike
 
-Issue #8 adds a second opt-in host experiment:
+Issue #8's eSpeak NG plus VoxCPM2 experiment is historical and retired. Human review judged all
+nine primary outputs “unacceptable / extremely bad quality,” with no numeric per-clip scores
+supplied. The orchestrator removed the installed eSpeak NG source/build/install and VoxCPM2
+weights/runtime; do **not** run `voices:setup`, `voices:probe`, or reinstall those engines.
 
-```sh
-pnpm voices:verify
-pnpm voices:setup
-pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2-v2.json
-```
-
-Setup builds pinned GPL-licensed eSpeak NG source outside Git with MBROLA disabled. The probe
-uses only project-authored text and deterministic formant voices, stores every WAV externally,
-and reuses each frozen reference over serialized calls to the non-streaming VoxCPM2 endpoint.
-CI runs only `pnpm test:voices`; it does not build either engine or generate audio. This
-experiment does not change issue #7's production/M2 NO-GO. See
-[`spikes/synthetic-voice-bootstrap.md`](spikes/synthetic-voice-bootstrap.md).
+The 12 historical WAVs, manifests, review bundle, repository code, and sanitized evidence remain
+preserved. The technical experiment record is retained rather than rewritten, while its human
+listening decision is NO-GO. See
+[`spikes/synthetic-voice-bootstrap.md`](spikes/synthetic-voice-bootstrap.md) and
+[`evidence/issue-8-human-listening-2026-07-25.json`](evidence/issue-8-human-listening-2026-07-25.json).
