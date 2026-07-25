@@ -193,6 +193,55 @@ async function spawnLeaseHoldingCaller(lockFilePath: string): Promise<ChildProce
 }
 
 /**
+ * Runs one lease interaction in a process that has **no stdio handles of its own** and reports the
+ * outcome by writing a file, never through a stream. That is what makes the event-loop hazard
+ * observable: with nothing else able to keep the loop alive, a coordinator that detaches the holder
+ * too early drains the loop while `acquire()` is still waiting, and the process exits 0 having
+ * written nothing at all. Resolves to the file's contents, or `''` if the process wrote nothing.
+ */
+async function runDetachedLeaseCaller(
+  script: readonly string[],
+  lockFilePath: string,
+): Promise<{
+  readonly outcome: string
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+}> {
+  const outcomePath = `${lockFilePath}.outcome`
+  const child = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      [
+        "const { writeFileSync } = await import('node:fs')",
+        'const { FileGpuLeaseCoordinator } = await import(process.argv[3])',
+        'const coordinator = () =>',
+        '  new FileGpuLeaseCoordinator({',
+        '    lockFilePath: process.argv[1],',
+        '    inspectExistingComputeProcesses: false,',
+        '  })',
+        'const record = (outcome) => writeFileSync(process.argv[2], outcome)',
+        ...script,
+      ].join('\n'),
+      lockFilePath,
+      outcomePath,
+      new URL('../src/index.ts', import.meta.url).href,
+    ],
+    // No pipes, no inherited terminal: the holder must be the only handle in play.
+    { stdio: ['ignore', 'ignore', 'ignore'] },
+  )
+  children.push(child)
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveExit) => {
+      child.once('exit', (code, exitSignal) => resolveExit({ code, signal: exitSignal }))
+    },
+  )
+  const outcome = await readFile(outcomePath, 'utf8').catch(() => '')
+  return { outcome, ...result }
+}
+
+/**
  * Retries the non-blocking acquire until an unattended holder has actually released, with a real
  * deadline: nothing here is allowed to wait forever.
  */
@@ -381,6 +430,35 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       expect(outcome.error).toBeUndefined()
     },
   )
+
+  itFs('settles a contended acquire in a caller with nothing else on its event loop', async () => {
+    const root = await makeRoot('gpu-flock-loop-drain', base)
+    const path = join(root, 'exclusive.lock')
+    const lease = await coordinator(path).acquire('gemma')
+
+    // Pins where the holder may be detached from the event loop. Detaching at spawn instead of after
+    // the handshake makes this caller exit 0 having written nothing, with acquire() never settling.
+    const contended = await runDetachedLeaseCaller(
+      [
+        "try { const lease = await coordinator().acquire('qwen3-tts'); await lease.release(); record('acquired') }",
+        "catch (error) { record('rejected:' + error.code) }",
+      ],
+      path,
+    )
+    expect(contended).toMatchObject({ outcome: 'rejected:busy', code: 0 })
+    await lease.release()
+
+    // Release awaits the holder's exit, so it has to survive the same hazard.
+    const uncontended = await runDetachedLeaseCaller(
+      [
+        "const held = await coordinator().acquire('qwen3-tts')",
+        'await held.release()',
+        "record('released')",
+      ],
+      path,
+    )
+    expect(uncontended).toMatchObject({ outcome: 'released', code: 0 })
+  })
 
   itFs('does not leave a detached holder behind when the caller process is killed', async () => {
     const root = await makeRoot('gpu-flock-caller-death', base)

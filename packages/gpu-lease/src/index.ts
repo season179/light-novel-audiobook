@@ -119,6 +119,25 @@ function isProcessGroupAlive(groupId: number | undefined): boolean {
   }
 }
 
+/**
+ * Stops a detached holder from being the only thing keeping the caller's event loop alive.
+ *
+ * **The placement of the call matters more than the call.** It must run only after the handshake has
+ * settled and nothing is awaiting a holder event any more. Called at spawn instead, it removes the
+ * last thing that can wake the loop while `acquire()` is still waiting for `'exit'` - the stdio
+ * pipes all close when the direct child exits - so a contended acquire drains the loop and the
+ * process exits 0 with `acquire()` never settling: no error, no log, no failed job. Measured with the
+ * call hoisted to spawn: 1 silent exit in 25 contended acquisitions under load, and a test that fails
+ * deterministically. With the call here: 30/30 contended acquisitions settled.
+ * `#stopHolder` re-refs the handle for the same reason, so release never waits on a detached holder.
+ */
+function detachHolderFromEventLoop(child: ChildProcessWithoutNullStreams): void {
+  child.unref()
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    ;(stream as { unref?: () => void }).unref?.()
+  }
+}
+
 /** Fail-closed: only a PID provably inside this process tree is treated as our own. */
 async function isOwnProcessTree(pid: number): Promise<boolean> {
   if (pid === process.pid) return true
@@ -191,9 +210,6 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         detached: true,
       },
     )
-    // A detached holder must never be the only reason a caller's event loop stays alive; release
-    // re-refs the handle so it can still observe exit.
-    child.unref()
     // Node destroys this pipe as soon as the direct child exits, so the unconditional EOF in
     // release can surface an asynchronous stream error that is not a release failure.
     child.stdin.on('error', () => {})
@@ -251,6 +267,9 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
       }
       if (this.#inspectExistingComputeProcesses) await this.#diagnoseExistingCompute(signal)
 
+      // Only here, once nothing is awaiting a holder event any more. See the function's comment: the
+      // placement of this call is load-bearing and must stay after the handshake.
+      detachHolderFromEventLoop(child)
       let released = false
       return {
         owner,
@@ -397,7 +416,9 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     child: ChildProcessWithoutNullStreams,
     exit: Promise<HolderExit>,
   ): Promise<void> {
-    // The holder was unref'd at spawn; release has to be able to observe its exit.
+    // The holder was detached from the loop once the lease was handed over; release awaits its exit,
+    // so the handle has to keep the loop alive again for as long as that wait lasts. Node closes it
+    // when the child is reaped, so this cannot outlive the release itself.
     child.ref()
     this.#endHolderStdin(child)
     let result = await this.#awaitSubtreeExit(child, exit, this.#releaseGraceMs)
