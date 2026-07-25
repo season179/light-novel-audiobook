@@ -1,15 +1,25 @@
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { DirectorModel as ApplicationDirectorModel } from '@light-novel-audiobook/application'
 import { Book, Chapter, ExactSourceCoverage, SourcePassage } from '@light-novel-audiobook/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  createGemmaDirectorIdentity,
   type DirectionRequest,
   DirectorError,
   DirectorFidelityError,
   type DirectorProgressEvent,
   type DirectorProgressStore,
   type DirectorRuntimeLifecycle,
+  type ExclusiveGpuLeaseCoordinator,
+  FileGpuLeaseCoordinator,
   GemmaDirectorEndpoint,
   GemmaDirectorModel,
+  type GpuLease,
+  GpuLeaseError,
+  type GpuOwner,
+  gemmaDirectorIdentityMaterial,
   SELECTED_GEMMA_PROFILE,
   validateDirectionOutput,
 } from '../src/index.js'
@@ -29,8 +39,38 @@ class MemoryProgressStore implements DirectorProgressStore {
 class FakeLifecycle implements DirectorRuntimeLifecycle {
   releaseCalls = 0
 
+  constructor(private readonly events: string[] = []) {}
+
   async release(): Promise<void> {
     this.releaseCalls += 1
+    this.events.push('runtime-released')
+  }
+}
+
+class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
+  acquireCalls = 0
+  releaseCalls = 0
+
+  constructor(
+    readonly lockFilePath = '/fixture/shared-gpu/exclusive.lock',
+    private readonly events: string[] = [],
+  ) {}
+
+  async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
+    this.acquireCalls += 1
+    if (signal?.aborted) throw new GpuLeaseError('cancelled', 'Fixture lease cancelled')
+    this.events.push(`lease-acquired:${owner}`)
+    let released = false
+    return {
+      owner,
+      lockFilePath: this.lockFilePath,
+      release: async () => {
+        if (released) return
+        released = true
+        this.releaseCalls += 1
+        this.events.push('lease-released')
+      },
+    }
   }
 }
 
@@ -159,17 +199,33 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     await server.stop()
   })
 
-  const create = (): {
+  const create = (
+    overrides: {
+      confidenceThreshold?: number
+      gpuLeaseCoordinator?: ExclusiveGpuLeaseCoordinator
+      gpuLeaseLockFilePath?: string
+      lifecycleEvents?: string[]
+    } = {},
+  ): {
     model: GemmaDirectorModel
     progress: MemoryProgressStore
     lifecycle: FakeLifecycle
+    gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
   } => {
     const progress = new MemoryProgressStore()
-    const lifecycle = new FakeLifecycle()
+    const lifecycle = new FakeLifecycle(overrides.lifecycleEvents)
+    const gpuLeaseCoordinator =
+      overrides.gpuLeaseCoordinator ??
+      new FakeGpuLeaseCoordinator(overrides.gpuLeaseLockFilePath, overrides.lifecycleEvents)
+    const gpuLeaseLockFilePath =
+      overrides.gpuLeaseLockFilePath ??
+      (gpuLeaseCoordinator instanceof FakeGpuLeaseCoordinator
+        ? gpuLeaseCoordinator.lockFilePath
+        : '/fixture/shared-gpu/exclusive.lock')
     const model = new GemmaDirectorModel({
       baseUrl: server.baseUrl,
       apiKey: API_KEY,
-      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      confidenceThreshold: overrides.confidenceThreshold ?? CONFIDENCE_THRESHOLD,
       contextProvider: {
         forChapter: async () => ({
           speakers: validationRequest.speakers,
@@ -182,16 +238,18 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       },
       progressStore: progress,
       lifecycle,
+      gpuLeaseCoordinator,
+      gpuLeaseLockFilePath,
     })
     models.push(model)
-    return { model, progress, lifecycle }
+    return { model, progress, lifecycle, gpuLeaseCoordinator }
   }
 
   it('implements directChapter(Book, Chapter) with exact issue #29 DirectedChapter mapping', async () => {
     const book = makeBook()
     const { model, progress } = create()
     const contract: ApplicationDirectorModel = model
-    expect(contract.identity).toContain(SELECTED_GEMMA_PROFILE.id)
+    expect(contract.identity).toMatch(/^[a-f0-9]{64}$/)
     await expect(model.health()).resolves.toEqual({
       status: 'ok',
       selectedModelAvailable: true,
@@ -232,6 +290,7 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
     ).not.toThrow()
     const concrete = await model.directChapter(book, book.chapters[0] as Chapter)
+    expect(concrete.directorIdentity).toBe(model.identity)
     expect(concrete.modelIdentity.profileId).toBe(SELECTED_GEMMA_PROFILE.id)
     expect(concrete.warnings).toEqual([
       expect.objectContaining({
@@ -256,6 +315,60 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       warningCount: 1,
     })
     expect(JSON.stringify(progress.events)).not.toContain('Rain.')
+  })
+
+  it('binds adapter, model, prompt, schema, runtime, generation, and GPU lease settings in identity', () => {
+    const first = create().model
+    const second = create().model
+    const changedThreshold = create({ confidenceThreshold: 0.7 }).model
+    const changedLease = create({
+      gpuLeaseLockFilePath: '/fixture/other-gpu/exclusive.lock',
+    }).model
+
+    expect(first.identity).toBe(second.identity)
+    expect(changedThreshold.identity).not.toBe(first.identity)
+    expect(changedLease.identity).not.toBe(first.identity)
+    expect(
+      createGemmaDirectorIdentity({
+        baseUrl: 'http://127.0.0.1:18080/v1',
+        confidenceThreshold: CONFIDENCE_THRESHOLD,
+        gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+      }),
+    ).not.toBe(first.identity)
+    const material = gemmaDirectorIdentityMaterial({
+      baseUrl: server.baseUrl,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+    })
+    expect(material).toMatchObject({
+      adapter: {
+        id: 'tanstack-ai-openai-compatible',
+        tanstackAiVersion: '0.42.0',
+        tanstackOpenAiVersion: '0.17.1',
+      },
+      model: {
+        profileId: SELECTED_GEMMA_PROFILE.id,
+        revision: SELECTED_GEMMA_PROFILE.revision,
+        sha256: SELECTED_GEMMA_PROFILE.sha256,
+      },
+      prompt: { version: 'gemma-director@2', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      outputSchema: {
+        version: 'gemma-direction-output@2',
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      runtime: {
+        commit: SELECTED_GEMMA_PROFILE.llamaCppCommit,
+        baseUrl: server.baseUrl,
+        contextSize: 32768,
+        gpuLayers: 35,
+        gpuLease: {
+          protocol: 'flock-exclusive-nonblock@1',
+          lockFilePath: '/fixture/shared-gpu/exclusive.lock',
+          releaseOrder: 'runtime-exit-before-lease-release',
+        },
+      },
+      generation: { confidenceThreshold: 0.8, seed: 42, maxTokens: 8192 },
+    })
   })
 
   it('sends exact source passages, split-range schema, fixed parameters, and system prompt', async () => {
@@ -389,19 +502,83 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     })
   })
 
-  it('release cancels active work, waits for it, invokes lifecycle once, and is idempotent', async () => {
+  it('cannot race a Qwen process holding the shared cross-process lease', async () => {
+    const root = join(tmpdir(), `gemma-qwen-contention-${crypto.randomUUID()}`)
+    const lockFilePath = join(root, 'exclusive.lock')
+    const qwenCoordinator = new FileGpuLeaseCoordinator({
+      lockFilePath,
+      inspectExistingComputeProcesses: false,
+    })
+    const gemmaCoordinator = new FileGpuLeaseCoordinator({
+      lockFilePath,
+      inspectExistingComputeProcesses: false,
+    })
+    const qwenLease = await qwenCoordinator.acquire('qwen3-tts')
+    try {
+      const book = makeBook()
+      const { model } = create({
+        gpuLeaseCoordinator: gemmaCoordinator,
+        gpuLeaseLockFilePath: lockFilePath,
+      })
+      await expect(model.directChapter(book, book.chapters[0] as Chapter)).rejects.toMatchObject({
+        code: 'gpu_busy',
+        retryable: true,
+      })
+      expect(server.requests).toHaveLength(0)
+    } finally {
+      await qwenLease.release()
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  it('cancels before acquiring the shared GPU lease or reaching llama.cpp', async () => {
+    const root = join(tmpdir(), `gemma-lease-cancel-${crypto.randomUUID()}`)
+    const lockFilePath = join(root, 'exclusive.lock')
+    try {
+      const book = makeBook()
+      const { model } = create({
+        gpuLeaseCoordinator: new FileGpuLeaseCoordinator({
+          lockFilePath,
+          inspectExistingComputeProcesses: false,
+        }),
+        gpuLeaseLockFilePath: lockFilePath,
+      })
+      const controller = new AbortController()
+      controller.abort(new DOMException('lease cancellation', 'AbortError'))
+      await expect(
+        model.directChapter(book, book.chapters[0] as Chapter, { signal: controller.signal }),
+      ).rejects.toMatchObject({ code: 'cancelled' })
+      expect(server.requests).toHaveLength(0)
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  it('release cancels work and releases the lease only after runtime exit, exactly once', async () => {
     server.setMode('delay')
     const book = makeBook()
-    const { model, lifecycle } = create()
+    const events: string[] = []
+    const gpuLeaseCoordinator = new FakeGpuLeaseCoordinator(
+      '/fixture/shared-gpu/exclusive.lock',
+      events,
+    )
+    const { model, lifecycle } = create({
+      lifecycleEvents: events,
+      gpuLeaseCoordinator,
+    })
     const direction = model.directChapter(book, book.chapters[0] as Chapter)
     await waitFor(() => server.requests.length > 0)
 
+    expect(gpuLeaseCoordinator.acquireCalls).toBe(1)
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(0)
     const firstRelease = model.release()
     const secondRelease = model.release()
     expect(secondRelease).toBe(firstRelease)
     await expect(direction).rejects.toMatchObject({ code: 'cancelled' })
     await firstRelease
     expect(lifecycle.releaseCalls).toBe(1)
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
+    expect(events).toEqual(['lease-acquired:gemma', 'runtime-released', 'lease-released'])
     await waitFor(() => server.abortedRequests > 0)
     expect(() => model.directChapter(book, book.chapters[0] as Chapter)).toThrow(/released/)
     await model.release()

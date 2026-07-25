@@ -13,9 +13,13 @@ it does not add another benchmark or provider framework.
 - A required `DirectorRuntimeLifecycle` owns or delegates model shutdown. `release()` first cancels
   and settles active direction calls, invokes lifecycle release exactly once, and is safe to call
   repeatedly. Calls after release fail closed.
+- Required `DirectorModel.identity` is a deterministic SHA-256 over canonical adapter/TanStack
+  versions, model repository/revision/file/size/hash, prompt and JSON-schema versions/hashes,
+  llama.cpp commit/endpoint/context/offload/cache/batch/thread settings, sampling parameters,
+  confidence threshold, and GPU-lease protocol/path/release order.
 - The selected model ID/revision/SHA, seed 42, temperature 0, top-p 1, maximum tokens, prompt, and
-  schema versions are fixed. The configured confidence threshold is included in adapter identity
-  and every concrete result.
+  schema versions are fixed. The configured confidence threshold is also recorded in every
+  concrete result.
 - The model receives exact passage IDs/text. It may return multiple ordered fragments per passage,
   allowing narration/dialogue/thought changes inside a paragraph. Every fragment carries inclusive
   `source_start` and exclusive `source_end` UTF-16 offsets.
@@ -26,8 +30,12 @@ it does not add another benchmark or provider framework.
 - Explicit unresolved speakers and known-speaker assignments below the configured threshold map to
   domain `speakerId: null`, forcing issue #29 fallback voice semantics. The concrete result also
   exposes review-required warnings with source ranges, candidate speaker, confidence, and threshold.
+- Gemma and Qwen use the same `@light-novel-audiobook/gpu-lease` kernel-`flock` protocol and stable
+  configurable path (`~/.local/state/light-novel-audiobook/gpu/exclusive.lock`). The first chapter
+  acquires owner `gemma`; contention fails before llama.cpp is called. The lease remains held across
+  chapters and is released only after `DirectorRuntimeLifecycle.release()` confirms model exit.
 - Every run writes text-free progress and safe terminal errors through `DirectorProgressStore`.
-  Caller cancellation, release cancellation, and deadlines abort TanStack AI's request.
+  Caller cancellation, lease cancellation, release cancellation, and deadlines abort work.
 - The endpoint is server-side only and accepts only `http://127.0.0.1:<port>/v1`.
 
 The package intentionally does not claim representative Gemma accuracy. Existing issue #6 evidence
@@ -42,16 +50,18 @@ pnpm --filter @light-novel-audiobook/gemma-director test
 
 The contract suite covers the real issue #29 port, exact split-fragment mapping, confidence fallback,
 schema/request shape, malformed and transport failures, progress, cancellation, release ordering and
-idempotence, and source-fidelity attacks. Separate smoke-safety tests reject substituted process
-identity, model argv, PID/listener binding, unsafe Origin/fetch-metadata responses, CORS permission,
-and inference-slot occupation.
+idempotence, deterministic identity, cross-process Gemma/Qwen contention, lease cancellation and
+release ordering, and source-fidelity attacks. Separate smoke-safety tests reject substituted
+process identity, model argv, PID/listener binding, unsafe Origin/fetch-metadata responses, CORS
+permission, and inference-slot occupation.
 
 ## Opt-in owned real smoke (do not run during normal checks)
 
 `config/real-smoke.json` contains only public profile settings, loopback URL, external runtime
 location, confidence threshold, and deadlines. The command does **not** trust an existing endpoint:
-it refuses an occupied port, hashes the complete installed GGUF and binary, creates an ephemeral
-mode-`0600` API-key file, and launches the verified binary itself with the verified model path. It
+it refuses an occupied port, hashes the complete installed GGUF and binary, acquires the shared GPU
+lease before any model process starts, creates an ephemeral mode-`0600` API-key file, and launches
+the verified binary itself with the verified model path. It
 then proves `/proc/<pid>/exe`, exact process argv, and the sole `ss` loopback listener/PID all match
 that owned process before making any inference claim.
 
@@ -62,7 +72,7 @@ this production-boundary gate; that is a truthful failed smoke, not successful e
 gate passes, it directs only two public synthetic passages. Stdout contains sanitized
 counts, classifications, hashes, ownership/browser-boundary results, and progress states—never
 source text, API keys, provider bodies, or absolute paths. `finally` unloads/stops the owned server,
-removes its key, and proves the port was released.
+removes its key, proves the port was released, and only then releases the GPU lease.
 
 Exact later invocation:
 
@@ -76,6 +86,7 @@ Optional external-runtime/config override:
 ```sh
 GEMMA_DIRECTOR_REAL_SMOKE=1 \
 GEMMA_DIRECTOR_RUNTIME_ROOT="$HOME/.cache/light-novel-audiobook/issue-6-brain" \
+GEMMA_DIRECTOR_GPU_LEASE_PATH="$HOME/.local/state/light-novel-audiobook/gpu/exclusive.lock" \
 pnpm --filter @light-novel-audiobook/gemma-director smoke:real -- \
   --config packages/gemma-director/config/real-smoke.json
 ```

@@ -7,6 +7,15 @@ export type {
   Chapter,
   DirectedSegment,
 } from '@light-novel-audiobook/domain'
+export {
+  type ExclusiveGpuLeaseCoordinator,
+  FileGpuLeaseCoordinator,
+  type FileGpuLeaseCoordinatorConfig,
+  type GpuLease,
+  GpuLeaseError,
+  type GpuLeaseErrorCode,
+  type GpuOwner,
+} from '@light-novel-audiobook/gpu-lease'
 export { canonicalJson, canonicalSha256 } from './canonical-json.js'
 export { DEFAULT_GEMMA_DIRECTOR_BASE_URL, GemmaDirectorEndpoint } from './config.js'
 export {
@@ -18,6 +27,13 @@ export {
   GemmaDirectorModel,
   type GemmaDirectorModelOptions,
 } from './gemma-director-model.js'
+export {
+  createGemmaDirectorIdentity,
+  GEMMA_DIRECTOR_IDENTITY_SCHEMA,
+  type GemmaDirectorIdentitySettings,
+  GPU_LEASE_PROTOCOL,
+  gemmaDirectorIdentityMaterial,
+} from './identity.js'
 export {
   DIRECTOR_SEGMENT_KINDS,
   type DirectedAnnotation,

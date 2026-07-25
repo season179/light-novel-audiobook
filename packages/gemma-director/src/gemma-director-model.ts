@@ -1,14 +1,21 @@
+import { resolve } from 'node:path'
 import type { DirectorModel as ApplicationDirectorModel } from '@light-novel-audiobook/application'
 import type {
   Book,
   Chapter,
   DirectedSegment as DomainDirectedSegment,
 } from '@light-novel-audiobook/domain'
+import {
+  type ExclusiveGpuLeaseCoordinator,
+  type GpuLease,
+  GpuLeaseError,
+} from '@light-novel-audiobook/gpu-lease'
 import { chat } from '@tanstack/ai'
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
-import { canonicalJson, canonicalSha256 } from './canonical-json.js'
+import { canonicalSha256 } from './canonical-json.js'
 import { GemmaDirectorEndpoint } from './config.js'
 import { classifyDirectorError, DirectorError } from './errors.js'
+import { createGemmaDirectorIdentity } from './identity.js'
 import type {
   DirectionOptions,
   DirectionRequest,
@@ -42,6 +49,11 @@ export interface GemmaDirectorModelOptions {
   readonly progressStore: DirectorProgressStore
   /** Must unload/stop the runtime owned by the caller or launcher. */
   readonly lifecycle: DirectorRuntimeLifecycle
+  readonly gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
+  /** Must be the same stable file used by Qwen3-TTS (normally .../gpu/exclusive.lock). */
+  readonly gpuLeaseLockFilePath: string
+  /** Used only when a composition root acquired the lease before starting an owned server. */
+  readonly initialGpuLease?: GpuLease
   readonly fetch?: typeof globalThis.fetch
 }
 
@@ -58,9 +70,13 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private readonly contextProvider: DirectorContextProvider
   private readonly progressStore: DirectorProgressStore
   private readonly lifecycle: DirectorRuntimeLifecycle
+  private readonly gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
+  private readonly gpuLeaseLockFilePath: string
   private readonly fetchImplementation: typeof globalThis.fetch
   private readonly shutdownController = new AbortController()
   private readonly activeOperations = new Set<Promise<unknown>>()
+  private gpuLease: GpuLease | undefined
+  private gpuLeaseAcquisition: Promise<GpuLease> | undefined
   private releasePromise: Promise<void> | undefined
   private released = false
 
@@ -81,16 +97,25 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     this.contextProvider = options.contextProvider
     this.progressStore = options.progressStore
     this.lifecycle = options.lifecycle
+    this.gpuLeaseCoordinator = options.gpuLeaseCoordinator
+    this.gpuLeaseLockFilePath = resolve(options.gpuLeaseLockFilePath)
+    if (options.gpuLeaseLockFilePath.trim().length === 0) {
+      throw new Error('Gemma Director GPU lease lock file path is required')
+    }
+    if (options.initialGpuLease !== undefined) {
+      if (
+        options.initialGpuLease.owner !== 'gemma' ||
+        resolve(options.initialGpuLease.lockFilePath) !== this.gpuLeaseLockFilePath
+      ) {
+        throw new Error('Initial GPU lease does not match the configured Gemma lock contract')
+      }
+      this.gpuLease = options.initialGpuLease
+    }
     this.fetchImplementation = options.fetch ?? globalThis.fetch
-    this.identity = canonicalJson({
-      ...this.modelIdentity,
-      parameters: {
-        confidenceThreshold: this.confidenceThreshold,
-        maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
-        seed: SELECTED_GEMMA_PROFILE.seed,
-        temperature: SELECTED_GEMMA_PROFILE.temperature,
-        topP: SELECTED_GEMMA_PROFILE.topP,
-      },
+    this.identity = createGemmaDirectorIdentity({
+      baseUrl: this.endpoint.baseUrl,
+      confidenceThreshold: this.confidenceThreshold,
+      gpuLeaseLockFilePath: this.gpuLeaseLockFilePath,
     })
   }
 
@@ -179,6 +204,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     this.releasePromise = (async () => {
       await Promise.allSettled(active)
       await this.lifecycle.release()
+      await this.gpuLease?.release()
     })()
     return this.releasePromise
   }
@@ -188,6 +214,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     chapter: Chapter,
     options: DirectionOptions,
   ): Promise<GemmaDirectedChapter> {
+    await this.ensureGpuLease(options.signal)
     const context = await this.contextProvider.forChapter(book, chapter)
     const requestId = `direction-${canonicalSha256({
       bookId: book.id,
@@ -229,7 +256,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     })
     const requestPayload = this.requestPayload(request)
     const requestSha256 = canonicalSha256({
-      identity: this.modelIdentity,
+      directorIdentity: this.identity,
       parameters,
       request: requestPayload,
     })
@@ -363,6 +390,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         requestId: request.requestId,
         requestSha256,
         outputSha256: canonicalSha256(output),
+        directorIdentity: this.identity,
         modelIdentity: this.modelIdentity,
         parameters,
         segments: Object.freeze(segments),
@@ -434,6 +462,60 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       systemPrompts: [GEMMA_DIRECTOR_SYSTEM_PROMPT],
       messages: [{ role: 'user', content: JSON.stringify(userInput) }],
     }
+  }
+
+  private async ensureGpuLease(signal?: AbortSignal): Promise<GpuLease> {
+    if (this.gpuLease !== undefined) return this.gpuLease
+    if (this.gpuLeaseAcquisition !== undefined) return await this.gpuLeaseAcquisition
+    const leaseSignal =
+      signal === undefined
+        ? this.shutdownController.signal
+        : AbortSignal.any([signal, this.shutdownController.signal])
+    const acquisition = this.gpuLeaseCoordinator
+      .acquire('gemma', leaseSignal)
+      .then(async (lease) => {
+        if (lease.owner !== 'gemma' || resolve(lease.lockFilePath) !== this.gpuLeaseLockFilePath) {
+          await lease.release()
+          throw new DirectorError(
+            'gpu_busy',
+            'GPU lease coordinator returned a mismatched lock contract',
+          )
+        }
+        this.gpuLease = lease
+        return lease
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DirectorError) throw error
+        if (error instanceof GpuLeaseError) {
+          if (error.code === 'cancelled') {
+            throw new DirectorError(
+              'cancelled',
+              'Gemma GPU lease acquisition was cancelled',
+              false,
+              {
+                cause: error,
+              },
+            )
+          }
+          throw new DirectorError(
+            'gpu_busy',
+            'Cannot acquire the shared cross-process GPU lease for Gemma',
+            error.code === 'busy',
+            { cause: error },
+          )
+        }
+        throw new DirectorError(
+          'gpu_busy',
+          'Cannot acquire the shared cross-process GPU lease for Gemma',
+          true,
+          { cause: error },
+        )
+      })
+      .finally(() => {
+        if (this.gpuLeaseAcquisition === acquisition) this.gpuLeaseAcquisition = undefined
+      })
+    this.gpuLeaseAcquisition = acquisition
+    return await acquisition
   }
 
   private trackOperation<T>(operation: Promise<T>): Promise<T> {

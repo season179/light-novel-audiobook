@@ -8,6 +8,7 @@ export type DirectorErrorCode =
   | 'malformed_output'
   | 'schema_validation'
   | 'fidelity'
+  | 'gpu_busy'
   | 'progress'
   | 'released'
   | 'unexpected'

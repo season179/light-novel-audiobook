@@ -116,6 +116,7 @@ export interface GemmaDirectedChapter extends DirectedChapter {
   readonly requestId: string
   readonly requestSha256: string
   readonly outputSha256: string
+  readonly directorIdentity: string
   readonly modelIdentity: DirectorModelIdentity
   readonly parameters: DirectorParameters
   readonly warnings: readonly DirectorWarning[]

@@ -26,6 +26,10 @@ temperature = 0.0
 seed = 42
 top_p = 1.0
 
+[gpu]
+# One stable kernel-flock path shared by Gemma, Qwen, and the final composition root.
+lease_path = "/home/<wsl-user>/.local/state/light-novel-audiobook/gpu/exclusive.lock"
+
 [tts]
 base_url = "http://127.0.0.1:8081"
 model = "voxcpm"

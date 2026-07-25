@@ -15,6 +15,7 @@ import {
   type DirectorProgressEvent,
   type DirectorProgressStore,
   type DirectorRuntimeLifecycle,
+  FileGpuLeaseCoordinator,
   GemmaDirectorEndpoint,
   GemmaDirectorModel,
   probeBrowserBoundary,
@@ -29,6 +30,7 @@ const configSchema = z.strictObject({
   profileId: z.literal(SELECTED_GEMMA_PROFILE.id),
   baseUrl: z.string().url(),
   runtimeRoot: z.string().min(1),
+  gpuLeasePath: z.string().min(1),
   startupTimeoutMs: z.int().min(1).max(1_800_000),
   requestTimeoutMs: z.int().min(1).max(3_600_000),
   confidenceThreshold: z.number().min(0).max(1),
@@ -244,8 +246,9 @@ async function main(): Promise<void> {
 
   const apiKey = randomBytes(32).toString('base64url')
   const keyPath = resolve(runtimeRoot, `.gemma-director-smoke-key-${process.pid}`)
-  await writeFile(keyPath, `${apiKey}\n`, { flag: 'wx', mode: 0o600 })
-  await chmod(keyPath, 0o600)
+  const gpuLeasePath = expandHome(process.env.GEMMA_DIRECTOR_GPU_LEASE_PATH ?? config.gpuLeasePath)
+  const gpuLeaseCoordinator = new FileGpuLeaseCoordinator({ lockFilePath: gpuLeasePath })
+  const gpuLease = await gpuLeaseCoordinator.acquire('gemma')
   const args = [
     '--model',
     modelPath,
@@ -286,16 +289,39 @@ async function main(): Promise<void> {
     '--slots',
     '--log-disable',
   ]
-  const child = spawn(canonicalBinary, args, { stdio: ['ignore', 'ignore', 'ignore'] })
+  let child: ChildProcess | undefined
+  let lifecycle: OwnedLlamaLifecycle | undefined
+  let model: GemmaDirectorModel | undefined
+  let sanitizedResult: Record<string, unknown> | undefined
   let childError: Error | undefined
   const onChildError = (error: Error): void => {
     childError = error
   }
-  child.on('error', onChildError)
-  const lifecycle = new OwnedLlamaLifecycle(child, keyPath, endpoint.port)
-  let model: GemmaDirectorModel | undefined
-  let sanitizedResult: Record<string, unknown> | undefined
   try {
+    await writeFile(keyPath, `${apiKey}\n`, { flag: 'wx', mode: 0o600 })
+    await chmod(keyPath, 0o600)
+    child = spawn(canonicalBinary, args, { stdio: ['ignore', 'ignore', 'ignore'] })
+    child.on('error', onChildError)
+    lifecycle = new OwnedLlamaLifecycle(child, keyPath, endpoint.port)
+    const progress = new SanitizedProgressStore()
+    model = new GemmaDirectorModel({
+      baseUrl: endpoint.baseUrl,
+      apiKey,
+      confidenceThreshold: config.confidenceThreshold,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [{ id: 'mira', aliases: ['Mira'] }],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+          storyContext: 'Mira speaks the second supplied passage.',
+        }),
+      },
+      progressStore: progress,
+      lifecycle,
+      gpuLeaseCoordinator,
+      gpuLeaseLockFilePath: gpuLeasePath,
+      initialGpuLease: gpuLease,
+    })
     await waitForHealth({
       origin: endpoint.origin,
       apiKey,
@@ -322,23 +348,6 @@ async function main(): Promise<void> {
       apiKey,
       modelId: SELECTED_GEMMA_PROFILE.modelId,
     })
-
-    const progress = new SanitizedProgressStore()
-    model = new GemmaDirectorModel({
-      baseUrl: endpoint.baseUrl,
-      apiKey,
-      confidenceThreshold: config.confidenceThreshold,
-      contextProvider: {
-        forChapter: async () => ({
-          speakers: [{ id: 'mira', aliases: ['Mira'] }],
-          narratorSpeakerId: 'narrator',
-          fallbackSpeakerId: 'fallback-dialogue',
-          storyContext: 'Mira speaks the second supplied passage.',
-        }),
-      },
-      progressStore: progress,
-      lifecycle,
-    })
     const health = await model.health({ timeoutMs: 5_000 })
     if (health.status !== 'ok' || !health.selectedModelAvailable) {
       throw new Error('Owned endpoint does not expose the selected Gemma profile alias')
@@ -354,7 +363,9 @@ async function main(): Promise<void> {
       ownedEndpoint: true,
       ownedProcessIdVerified: true,
       loopbackListenerVerified: true,
+      gpuLeaseProtocolVerified: true,
       profileId: result.modelIdentity.profileId,
+      directorIdentity: model.identity,
       modelRevision: manifest.modelRevision,
       modelSha256: manifest.modelSha256,
       binarySha256: manifest.binarySha256,
@@ -372,13 +383,22 @@ async function main(): Promise<void> {
     }
   } finally {
     try {
-      if (model !== undefined) await model.release()
-      else await lifecycle.release()
+      if (model !== undefined) {
+        await model.release()
+      } else if (lifecycle !== undefined) {
+        await lifecycle.release()
+        await gpuLease.release()
+      } else {
+        await rm(keyPath, { force: true })
+        await gpuLease.release()
+      }
     } finally {
-      child.removeListener('error', onChildError)
+      child?.removeListener('error', onChildError)
     }
   }
-  if (!lifecycle.cleanupComplete) throw new Error('Owned llama-server cleanup was not verified')
+  if (lifecycle?.cleanupComplete !== true) {
+    throw new Error('Owned llama-server cleanup was not verified')
+  }
   if (sanitizedResult === undefined) throw new Error('Real smoke did not produce a valid result')
   console.log(JSON.stringify({ ...sanitizedResult, cleanupVerified: true }, null, 2))
 }
