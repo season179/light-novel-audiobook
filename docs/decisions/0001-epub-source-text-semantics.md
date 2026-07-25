@@ -227,3 +227,17 @@ Before this approach becomes production ingestion, resolve or explicitly review:
 The spike's `fflate` object API also cannot by itself prove that duplicate ZIP central-directory
 names were not collapsed. Production must scan and reject duplicates before constructing the
 entry map. These are unresolved risks, not permission to silently normalize or omit content.
+
+## Production follow-up
+
+Issue #28 promoted the unchanged rules-v2 text traversal into `packages/epub-ingestion`. The
+production-small adapter now scans the ZIP central/local records before `fflate` map construction,
+rejects duplicate/case-colliding names, symlinks, ZIP/encryption.xml encryption, ZIP64, unsupported
+compression, and configured size/ratio excesses, and verifies decompressed sizes and CRCs. XML
+bytes, decoded characters, nodes, depth, and per-element attributes are bounded. It preserves
+structured title/creator refinements, validates declared cover media against raster/SVG bytes, and
+uses a two-phase, fsynced external-workspace commit that rejects child-path symlink escapes. The
+issue #29 adapter maps only non-empty spine documents to one-based domain Chapters; zero-passage
+items remain explicit audited non-story documents. The broader uncommon-EPUB and visual/CSS
+semantics listed above remain review or future-format gates; the adapter continues to fail closed
+where it cannot preserve source semantics.

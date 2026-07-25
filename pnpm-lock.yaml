@@ -96,8 +96,26 @@ importers:
 
   packages/domain: {}
 
+  packages/epub-ingestion:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
+
   packages/epub-spike:
     dependencies:
+      '@light-novel-audiobook/epub-ingestion':
+        specifier: workspace:*
+        version: link:../epub-ingestion
       fflate:
         specifier: 0.8.3
         version: 0.8.3
