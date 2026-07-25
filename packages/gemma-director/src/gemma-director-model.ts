@@ -13,10 +13,19 @@ import {
 import { chat } from '@tanstack/ai'
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
 import { canonicalSha256 } from './canonical-json.js'
+import {
+  type DirectionChunkingSettings,
+  estimateWindowPrompt,
+  planWindow,
+  resolveChunkingSettings,
+  shrinkSettings,
+  windowBudgetError,
+} from './chunking.js'
 import { GemmaDirectorEndpoint } from './config.js'
 import { classifyDirectorError, DirectorError } from './errors.js'
 import { createGemmaDirectorIdentity } from './identity.js'
 import type {
+  DirectedAnnotation,
   DirectionOptions,
   DirectionRequest,
   DirectorContextProvider,
@@ -26,6 +35,7 @@ import type {
   DirectorProgressStore,
   DirectorRunState,
   DirectorRuntimeLifecycle,
+  DirectorWarning,
   GemmaDirectedChapter,
 } from './port.js'
 import {
@@ -38,7 +48,7 @@ import {
   directionWireOutputSchema,
   parseDirectionRequest,
 } from './schema.js'
-import { validateDirectionOutput } from './validation.js'
+import { type ValidatedDirection, validateDirectionOutput } from './validation.js'
 
 export interface GemmaDirectorModelOptions {
   readonly baseUrl?: string
@@ -56,6 +66,11 @@ export interface GemmaDirectorModelOptions {
   /** Must be the same stable file used by Qwen3-TTS (normally .../gpu/exclusive.lock). */
   readonly gpuLeaseLockFilePath: string
   readonly fetch?: typeof globalThis.fetch
+  /**
+   * Issue #53 passage-window budgets. Window boundaries can change fragmentation, so the resolved
+   * values are bound into this adapter's identity.
+   */
+  readonly chunking?: Partial<DirectionChunkingSettings>
 }
 
 interface ModelsResponse {
@@ -109,6 +124,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private readonly gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
   private readonly gpuLeaseLockFilePath: string
   private readonly fetchImplementation: typeof globalThis.fetch
+  private readonly chunking: DirectionChunkingSettings
   private readonly shutdownController = new AbortController()
   private readonly activeOperations = new Set<Promise<unknown>>()
   private gpuLease: GpuLease | undefined
@@ -140,10 +156,12 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       throw new Error('Gemma Director GPU lease lock file path is required')
     }
     this.fetchImplementation = options.fetch ?? globalThis.fetch
+    this.chunking = resolveChunkingSettings(options.chunking)
     this.identity = createGemmaDirectorIdentity({
       baseUrl: this.endpoint.baseUrl,
       confidenceThreshold: this.confidenceThreshold,
       gpuLeaseLockFilePath: this.gpuLeaseLockFilePath,
+      chunking: this.chunking,
     })
   }
 
@@ -258,6 +276,14 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     return this.releasePromise
   }
 
+  /**
+   * Issue #53: a chapter is directed as an ordered sequence of contiguous passage windows,
+   * because one request per chapter cannot fit the pinned context once the wire schema's
+   * verbatim source-text echo is accounted for. Each window is validated by the same
+   * deterministic fidelity proof as a whole chapter was, and the stitched annotations are
+   * concatenated in window order; `ExactSourceCoverage` at the application boundary re-proves
+   * the whole chapter independently.
+   */
   private async directChapterInternal(
     book: Book,
     chapter: Chapter,
@@ -265,37 +291,18 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   ): Promise<GemmaDirectedChapter> {
     await this.ensureRuntimeReady(options.signal)
     const context = await this.contextProvider.forChapter(book, chapter)
-    const requestId = `direction-${canonicalSha256({
+    const baseRequestId = `direction-${canonicalSha256({
       bookId: book.id,
       bookSourceSha256: book.source.sha256,
       chapterId: chapter.id,
       identity: this.identity,
     }).slice(0, 32)}`
-    const request = parseDirectionRequest({
-      requestId,
-      bookId: book.id,
-      bookTitle: book.title,
-      bookAuthor: book.author,
-      bookSourceSha256: book.source.sha256,
-      chapterId: chapter.id,
-      chapterPosition: chapter.position,
-      chapterTitle: chapter.title,
-      passages: chapter.sourcePassages.map((passage) => ({
-        id: passage.id,
-        text: passage.sourceText,
-      })),
-      speakers: context.speakers,
-      narratorSpeakerId: context.narratorSpeakerId,
-      fallbackSpeakerId: context.fallbackSpeakerId,
-      ...(context.storyContext === undefined ? {} : { storyContext: context.storyContext }),
-    })
-    return await this.executeDirection(request, options)
-  }
+    const passages = chapter.sourcePassages.map((passage) => ({
+      id: passage.id,
+      text: passage.sourceText,
+    }))
+    const totalPassages = passages.length
 
-  private async executeDirection(
-    request: DirectionRequest,
-    options: DirectionOptions,
-  ): Promise<GemmaDirectedChapter> {
     const parameters: DirectorParameters = Object.freeze({
       seed: SELECTED_GEMMA_PROFILE.seed,
       temperature: SELECTED_GEMMA_PROFILE.temperature,
@@ -303,13 +310,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
       confidenceThreshold: this.confidenceThreshold,
     })
-    const requestPayload = this.requestPayload(request)
-    const requestSha256 = canonicalSha256({
-      directorIdentity: this.identity,
-      parameters,
-      request: requestPayload,
-    })
-    const totalPassages = request.passages.length
+
     let sequence = 0
     const emit = async (
       state: DirectorRunState,
@@ -317,12 +318,14 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       message: string,
       error?: DirectorProgressEvent['error'],
       warningCount?: number,
+      eventRequestId?: string,
+      eventRequestSha256?: string,
     ): Promise<void> => {
       sequence += 1
       const event: DirectorProgressEvent = {
-        requestId: request.requestId,
-        chapterId: request.chapterId,
-        requestSha256,
+        requestId: eventRequestId ?? baseRequestId,
+        chapterId: chapter.id,
+        requestSha256: eventRequestSha256 ?? chapterEventSha256,
         sequence,
         occurredAt: new Date().toISOString(),
         state,
@@ -340,6 +343,280 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         })
       }
     }
+    // Chapter-level progress events carry this deterministic stand-in; per-window events carry
+    // their own window request hash.
+    const chapterEventSha256 = canonicalSha256({ requestId: baseRequestId })
+
+    // Shared by every window request: the system prompt plus the request envelope without the
+    // passage payload. Measured once so each window's prompt pre-flight uses real sizes.
+    const fixedPromptChars =
+      GEMMA_DIRECTOR_SYSTEM_PROMPT.length +
+      JSON.stringify(
+        this.requestPayload({
+          requestId: baseRequestId,
+          bookId: book.id,
+          bookTitle: book.title,
+          bookAuthor: book.author,
+          bookSourceSha256: book.source.sha256,
+          chapterId: chapter.id,
+          chapterPosition: chapter.position,
+          chapterTitle: chapter.title,
+          passages: [],
+          speakers: context.speakers,
+          narratorSpeakerId: context.narratorSpeakerId,
+          fallbackSpeakerId: context.fallbackSpeakerId,
+          ...(context.storyContext === undefined ? {} : { storyContext: context.storyContext }),
+        }).messages,
+      ).length
+
+    const annotations: DirectedAnnotation[] = []
+    const warnings: DirectorWarning[] = []
+    const windowRequestSha256s: string[] = []
+    const windowOutputs: DirectionWireOutput[] = []
+    const sentWindows: Array<{ readonly start: number; readonly end: number }> = []
+    let settings = this.chunking
+    let shrinks = 0
+    let nextIndex = 0
+    let windowIndex = 0
+
+    await emit('started', 0, `Direction started for ${totalPassages} passages`)
+    try {
+      while (nextIndex < totalPassages) {
+        windowIndex += 1
+        let window = planWindow(passages, nextIndex, settings)
+        // Pre-flight the prompt budget with measured sizes. A window that cannot fit is shrunk
+        // before any request is sent; a single passage that still cannot fit is an explicit
+        // configuration failure, never a silent truncation. Only shrinks that actually reduce
+        // the window count against the budget: halving from a large configured budget can take
+        // several steps before the plan moves, and those steps are free of model calls.
+        let request: DirectionRequest | undefined
+        while (request === undefined) {
+          const candidate = parseDirectionRequest({
+            requestId: `${baseRequestId}-w${String(windowIndex).padStart(3, '0')}`,
+            bookId: book.id,
+            bookTitle: book.title,
+            bookAuthor: book.author,
+            bookSourceSha256: book.source.sha256,
+            chapterId: chapter.id,
+            chapterPosition: chapter.position,
+            chapterTitle: chapter.title,
+            passages: passages.slice(window.start, window.end),
+            speakers: context.speakers,
+            narratorSpeakerId: context.narratorSpeakerId,
+            fallbackSpeakerId: context.fallbackSpeakerId,
+            ...(context.storyContext === undefined ? {} : { storyContext: context.storyContext }),
+          })
+          const estimate = estimateWindowPrompt(
+            fixedPromptChars,
+            candidate,
+            SELECTED_GEMMA_PROFILE.contextSize,
+            parameters.maxTokens,
+            settings,
+          )
+          if (estimate.estimatedPromptTokens <= estimate.promptTokenBudget) {
+            request = candidate
+            break
+          }
+          if (window.end - window.start <= 1) {
+            throw windowBudgetError(
+              `A single source passage with the current roster and story context estimates ${estimate.estimatedPromptTokens} prompt tokens against a budget of ${estimate.promptTokenBudget}`,
+              passages.slice(window.start, window.end).map((passage) => passage.id),
+            )
+          }
+          shrinks += 1
+          if (shrinks > this.chunking.maxWindowShrinks) {
+            throw windowBudgetError(
+              'Direction windows could not be shrunk into the prompt budget',
+              passages.slice(window.start, window.end).map((passage) => passage.id),
+            )
+          }
+          let reduced = window
+          do {
+            settings = shrinkSettings(settings)
+            reduced = planWindow(passages, nextIndex, settings)
+          } while (
+            reduced.end === window.end &&
+            (settings.windowCharBudget > 500 || settings.windowPassageBudget > 1)
+          )
+          window = reduced
+        }
+
+        try {
+          const result = await this.executeWindowDirection(
+            request,
+            parameters,
+            { completed: nextIndex, total: totalPassages },
+            emit,
+            options,
+          )
+          annotations.push(...result.validated.annotations)
+          warnings.push(...result.validated.warnings)
+          windowRequestSha256s.push(result.requestSha256)
+          windowOutputs.push(result.output)
+          sentWindows.push(window)
+          nextIndex = window.end
+        } catch (error: unknown) {
+          // A truncated response on a single-passage window cannot be fixed by shrinking.
+          if (
+            this.isTruncationSignature(error) &&
+            window.end - window.start > 1 &&
+            shrinks < this.chunking.maxWindowShrinks
+          ) {
+            // The response was cut off (or the prompt overflowed despite the estimate): halve
+            // the window and retry the same chapter position. Shrinks persist for the chapter,
+            // so one oversized window tightens every later window instead of re-failing.
+            shrinks += 1
+            const previousEnd = window.end
+            let reduced = window
+            do {
+              settings = shrinkSettings(settings)
+              reduced = planWindow(passages, nextIndex, settings)
+            } while (
+              reduced.end === previousEnd &&
+              (settings.windowCharBudget > 500 || settings.windowPassageBudget > 1)
+            )
+            window = reduced
+            windowIndex -= 1
+            continue
+          }
+          throw error
+        }
+      }
+    } catch (error: unknown) {
+      const classified =
+        error instanceof DirectorError
+          ? error
+          : classifyDirectorError(error, { operation: 'Gemma Director direction request' })
+      try {
+        await emit(
+          classified.code === 'cancelled' ? 'cancelled' : 'failed',
+          nextIndex,
+          classified.message,
+          {
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+          },
+        )
+      } catch {
+        // Preserve the original classified failure when terminal progress cannot be persisted.
+      }
+      throw classified
+    }
+
+    // The sent windows must tile the chapter exactly. planWindow guarantees this by
+    // construction; the assertion exists so a future change to planning or adaptive shrinking
+    // cannot silently break stitching. ExactSourceCoverage independently re-proves coverage
+    // from the fragments themselves at the application boundary.
+    const tiledCorrectly =
+      sentWindows.length === windowOutputs.length &&
+      sentWindows.length > 0 &&
+      sentWindows[0]?.start === 0 &&
+      sentWindows[sentWindows.length - 1]?.end === totalPassages &&
+      sentWindows.every(
+        (window, index) => index === 0 || sentWindows[index - 1]?.end === window.start,
+      )
+    if (!tiledCorrectly) {
+      throw new DirectorError(
+        'fidelity',
+        'Gemma Director window plan does not tile the chapter; refusing to stitch',
+      )
+    }
+
+    // Only fallback-bearing warnings drop the speaker; review-only warnings keep the voice.
+    const warningRanges = new Set(
+      warnings
+        .filter((warning) => warning.usesFallback)
+        .map(
+          (warning) =>
+            `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+        ),
+    )
+    const segments = annotations.map((annotation): DomainDirectedSegment => {
+      const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
+      const useNarrator = annotation.kind === 'narration' || annotation.kind === 'sound_cue'
+      return Object.freeze({
+        sourcePassageId: annotation.sourcePassageId,
+        sourceText: annotation.sourceText,
+        kind: annotation.kind,
+        speakerId: useNarrator || warningRanges.has(rangeKey) ? null : annotation.speakerId,
+        confidence: annotation.confidence,
+        delivery: annotation.delivery,
+      })
+    })
+    const result: GemmaDirectedChapter = {
+      chapterId: chapter.id,
+      requestId: baseRequestId,
+      requestSha256: canonicalSha256({ requestId: baseRequestId, windows: windowRequestSha256s }),
+      outputSha256: canonicalSha256(
+        windowOutputs.length === 1 ? windowOutputs[0] : { windows: windowOutputs },
+      ),
+      directorIdentity: this.identity,
+      modelIdentity: this.modelIdentity,
+      parameters,
+      segments: Object.freeze(segments),
+      warnings: Object.freeze(warnings),
+    }
+    await emit(
+      'completed',
+      totalPassages,
+      `Directed ${segments.length} fragments from ${totalPassages} passages`,
+      undefined,
+      warnings.length,
+    )
+    return Object.freeze(result)
+  }
+
+  /**
+   * A response cut at max_tokens surfaces as unparseable structured output; a prompt that
+   * overflowed the context despite the pre-flight estimate surfaces as a model rejection
+   * mentioning the context. Both mean exactly one thing here: the window was too large.
+   */
+  private isTruncationSignature(error: unknown): boolean {
+    if (!(error instanceof DirectorError)) return false
+    if (error.code === 'malformed_output') return true
+    return error.code === 'model' && /context/i.test(error.message)
+  }
+
+  private async executeWindowDirection(
+    request: DirectionRequest,
+    parameters: DirectorParameters,
+    progressBase: { readonly completed: number; readonly total: number },
+    emit: (
+      state: DirectorRunState,
+      completedPassages: number,
+      message: string,
+      error?: DirectorProgressEvent['error'],
+      warningCount?: number,
+      eventRequestId?: string,
+      eventRequestSha256?: string,
+    ) => Promise<void>,
+    options: DirectionOptions,
+  ): Promise<{
+    validated: ValidatedDirection
+    output: DirectionWireOutput
+    requestSha256: string
+  }> {
+    const requestPayload = this.requestPayload(request)
+    const requestSha256 = canonicalSha256({
+      directorIdentity: this.identity,
+      parameters,
+      request: requestPayload,
+    })
+    const emitWindow = (
+      state: DirectorRunState,
+      windowCompletedPassages: number,
+      message: string,
+    ): Promise<void> =>
+      emit(
+        state,
+        progressBase.completed + windowCompletedPassages,
+        message,
+        undefined,
+        undefined,
+        request.requestId,
+        requestSha256,
+      )
 
     const progress = new StreamedPassageProgress(request.passages.map((passage) => passage.id))
     const control = this.abortControl(
@@ -348,8 +625,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       'direction request',
     )
     try {
-      await emit('started', 0, `Direction started for ${totalPassages} passages`)
-      await emit('requesting', 0, 'Waiting for the local Gemma director')
+      await emitWindow('requesting', 0, 'Waiting for the local Gemma director')
       const adapter = openaiCompatibleText(this.modelIdentity.modelId, {
         name: 'llama.cpp-gemma-director',
         baseURL: this.endpoint.baseUrl,
@@ -379,17 +655,17 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         if (event.type === 'TEXT_MESSAGE_CONTENT') {
           if (!responseStarted) {
             responseStarted = true
-            await emit(
+            await emitWindow(
               'response_started',
               progress.completedPassages,
               'Gemma response streaming started',
             )
           }
           if (progress.observe(event.delta)) {
-            await emit(
+            await emitWindow(
               'streaming',
               progress.completedPassages,
-              `Directed ${progress.completedPassages} of ${totalPassages} passages`,
+              `Directed ${progressBase.completed + progress.completedPassages} of ${progressBase.total} passages`,
             )
           }
         }
@@ -428,73 +704,19 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         throw new DirectorError('malformed_output', 'Gemma Director response did not complete')
       }
 
-      await emit(
+      await emitWindow(
         'validating',
         progress.completedPassages,
         'Validating exact source ranges and speaker semantics',
       )
       const validated = validateDirectionOutput(output, request, this.confidenceThreshold)
-      // Only fallback-bearing warnings drop the speaker; review-only warnings keep the voice.
-      const warningRanges = new Set(
-        validated.warnings
-          .filter((warning) => warning.usesFallback)
-          .map(
-            (warning) =>
-              `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
-          ),
-      )
-      const segments = validated.annotations.map((annotation): DomainDirectedSegment => {
-        const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
-        const useNarrator = annotation.kind === 'narration' || annotation.kind === 'sound_cue'
-        return Object.freeze({
-          sourcePassageId: annotation.sourcePassageId,
-          sourceText: annotation.sourceText,
-          kind: annotation.kind,
-          speakerId: useNarrator || warningRanges.has(rangeKey) ? null : annotation.speakerId,
-          confidence: annotation.confidence,
-          delivery: annotation.delivery,
-        })
-      })
-      const result: GemmaDirectedChapter = {
-        chapterId: request.chapterId,
-        requestId: request.requestId,
-        requestSha256,
-        outputSha256: canonicalSha256(output),
-        directorIdentity: this.identity,
-        modelIdentity: this.modelIdentity,
-        parameters,
-        segments: Object.freeze(segments),
-        warnings: validated.warnings,
-      }
-      await emit(
-        'completed',
-        totalPassages,
-        `Directed ${segments.length} fragments from ${totalPassages} passages`,
-        undefined,
-        validated.warnings.length,
-      )
-      return Object.freeze(result)
+      return { validated, output, requestSha256 }
     } catch (error: unknown) {
-      const classified = classifyDirectorError(error, {
+      throw classifyDirectorError(error, {
         timedOut: control.timedOut(),
         callerCancelled: control.cancelled(),
         operation: 'Gemma Director direction request',
       })
-      try {
-        await emit(
-          classified.code === 'cancelled' ? 'cancelled' : 'failed',
-          progress.completedPassages,
-          classified.message,
-          {
-            code: classified.code,
-            message: classified.message,
-            retryable: classified.retryable,
-          },
-        )
-      } catch {
-        // Preserve the original classified failure when terminal progress cannot be persisted.
-      }
-      throw classified
     } finally {
       control.dispose()
     }

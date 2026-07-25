@@ -1,5 +1,6 @@
 export type DirectorErrorCode =
   | 'cancelled'
+  | 'configuration'
   | 'timeout'
   | 'unavailable'
   | 'http'

@@ -24,10 +24,24 @@ export interface DirectedChapter {
   readonly segments: readonly DirectedSegment[]
 }
 
+export interface DirectChapterOptions {
+  /** Cancellation for the whole chapter direction, including every underlying window request. */
+  readonly signal?: AbortSignal
+  /**
+   * Per-request timeout in milliseconds. Adapters that direct a chapter as several window
+   * requests apply it to each request, not to the chapter as a whole.
+   */
+  readonly timeoutMs?: number
+}
+
 /** Implemented by issue #30. identity binds model, prompt/schema, and direction settings. */
 export interface DirectorModel {
   readonly identity: string
-  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter>
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter>
   release(): Promise<void>
 }
 
