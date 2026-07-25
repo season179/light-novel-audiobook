@@ -3,6 +3,7 @@ import type {
   CompletedSegmentAudio,
   SpeechRenderRequest,
 } from '@light-novel-audiobook/application'
+import type { FallbackReason } from '@light-novel-audiobook/domain'
 import type { QwenManagedBatch, QwenTtsSpeechEngine } from './engine.js'
 import { canonicalJson, sha256 } from './manifest.js'
 import type { FallbackApproval, SpeechRenderOptions } from './types.js'
@@ -10,9 +11,20 @@ import { SpeechEngineError } from './types.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
+/** One persisted human decision, bound to the exact segment whose speaker was unresolved. */
+export interface FallbackApprovalRecord extends FallbackApproval {
+  readonly segmentId: string
+  readonly speakerId: string | null
+  readonly fallbackReason: FallbackReason
+}
+
 export interface QwenApplicationSpeechEngineOptions extends SpeechRenderOptions {
-  /** Persisted human decision authorizing unresolved-speaker fallback use. */
-  readonly fallbackApproval?: FallbackApproval
+  /**
+   * Persisted human decisions authorizing fallback use, one per approved segment. A single
+   * batch-wide approval is deliberately not accepted: PLAN stage 7 requires the human to approve
+   * *an unresolved speaker*, so approving speaker A must never render speaker B's dialogue.
+   */
+  readonly fallbackApprovals?: ReadonlyArray<FallbackApprovalRecord>
 }
 
 /** Implements the finalized issue #29 begin/render/end SpeechEngine port. */
@@ -20,17 +32,38 @@ export class QwenApplicationSpeechEngine implements ApplicationSpeechEngine {
   readonly identity: string
   readonly #engine: QwenTtsSpeechEngine
   readonly #options: QwenApplicationSpeechEngineOptions
+  readonly #approvals: ReadonlyMap<string, FallbackApprovalRecord>
   #batch: QwenManagedBatch | undefined
   #rendering = false
 
   constructor(engine: QwenTtsSpeechEngine, options: QwenApplicationSpeechEngineOptions = {}) {
     this.#engine = engine
     this.#options = options
+    const approvals = new Map<string, FallbackApprovalRecord>()
+    for (const record of options.fallbackApprovals ?? []) {
+      if (approvals.has(record.segmentId)) {
+        throw new SpeechEngineError(
+          'configuration',
+          `Duplicate fallback approval for ${record.segmentId}`,
+          { segmentId: record.segmentId },
+        )
+      }
+      approvals.set(record.segmentId, record)
+    }
+    this.#approvals = approvals
     this.identity = sha256(
       canonicalJson({
-        bridge: { id: 'qwen-issue-29-speech-engine', version: 1 },
+        bridge: { id: 'qwen-issue-29-speech-engine', version: 2 },
         engine: engine.identity,
-        fallbackApproval: options.fallbackApproval ?? null,
+        fallbackApprovals: [...approvals.values()]
+          .map((record) => ({
+            segmentId: record.segmentId,
+            speakerId: record.speakerId,
+            fallbackReason: record.fallbackReason,
+            approvalId: record.approvalId,
+            approvalSha256: record.approvalSha256,
+          }))
+          .sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1)),
       }),
     )
   }
@@ -75,21 +108,20 @@ export class QwenApplicationSpeechEngine implements ApplicationSpeechEngine {
       )
     }
     const selectedProfileId = this.#engine.selectedVoiceProfile(request.voice)
-    if (usesFallback && this.#options.fallbackApproval === undefined) {
-      throw new SpeechEngineError(
-        'configuration',
-        `Fallback segment ${request.segment.id} has no explicit human approval identity`,
-        { segmentId: request.segment.id },
-      )
-    }
+    const approval = usesFallback
+      ? this.#approveFallback(request, assignment.fallbackReason, selectedProfileId)
+      : undefined
 
     this.#rendering = true
     try {
       const result = await this.#batch.render({
         segmentId: request.segment.id,
         text: request.segment.sourceText,
-        ...(usesFallback ? {} : { voiceProfileId: selectedProfileId }),
-        ...(usesFallback ? { fallbackApproval: this.#options.fallbackApproval } : {}),
+        // A fallback render always uses the configured fallback profile, which #approveFallback
+        // has already proven is the very profile the human approved for this speaker.
+        ...(approval === undefined
+          ? { voiceProfileId: selectedProfileId }
+          : { fallbackApproval: approval }),
         applicationInputIdentity: request.inputIdentity,
         delivery: request.segment.delivery,
       })
@@ -106,6 +138,45 @@ export class QwenApplicationSpeechEngine implements ApplicationSpeechEngine {
     } finally {
       this.#rendering = false
     }
+  }
+
+  /**
+   * Resolves the human decision for one fallback segment. The cast's approved voice must be the
+   * configured fallback profile: the adapter renders `fallbackVoiceProfileId`, so accepting any
+   * other approved profile here would silently voice the segment with a speaker nobody approved.
+   */
+  #approveFallback(
+    request: SpeechRenderRequest,
+    fallbackReason: FallbackReason | null,
+    selectedProfileId: string,
+  ): FallbackApproval {
+    const segmentId = request.segment.id
+    if (selectedProfileId !== this.#engine.fallbackVoiceProfileId) {
+      throw new SpeechEngineError(
+        'configuration',
+        `Fallback segment ${segmentId} approves ${selectedProfileId} but the adapter renders the configured fallback ${this.#engine.fallbackVoiceProfileId}`,
+        { segmentId },
+      )
+    }
+    const record = this.#approvals.get(segmentId)
+    if (record === undefined) {
+      throw new SpeechEngineError(
+        'configuration',
+        `Fallback segment ${segmentId} has no explicit human approval identity`,
+        { segmentId },
+      )
+    }
+    if (
+      record.speakerId !== request.segment.speakerId ||
+      record.fallbackReason !== fallbackReason
+    ) {
+      throw new SpeechEngineError(
+        'configuration',
+        `Fallback approval for ${segmentId} does not match its unresolved speaker decision`,
+        { segmentId },
+      )
+    }
+    return { approvalId: record.approvalId, approvalSha256: record.approvalSha256 }
   }
 
   async endBatch(): Promise<void> {

@@ -203,8 +203,16 @@ export class QwenWorkerSession {
   }
 
   async finish(): Promise<void> {
+    // We closed the child ourselves when the caller cancelled; never report that as a crash.
+    if (this.#options.signal?.aborted) {
+      this.#terminate()
+      await this.#exit
+      this.#dispose()
+      throw new SpeechEngineError('cancelled', 'Qwen render batch was cancelled')
+    }
     if (this.#closed) {
       const exit = await this.#exit
+      this.#dispose()
       if (exit.code === 0) return
       throw this.#processFailure(exit)
     }

@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { LoadedProductionConfig, VoiceProfile } from './config.js'
+import type { LoadedProductionConfig, VoiceProfile, WavRequirements } from './config.js'
+import type { QwenWorkerRuntimeIdentity } from './runtime-identity.js'
 import type {
   FallbackApproval,
+  SpeechAudioIdentity,
   SpeechDeliveryDirection,
   SpeechSegmentRequest,
   SpeechSegmentResult,
@@ -11,10 +13,17 @@ import type {
 import { SpeechEngineError } from './types.js'
 import { validateCanonicalWav } from './wav.js'
 
+const SHA256 = /^[0-9a-f]{64}$/
+
 export interface RenderIdentity {
   readonly adapter: LoadedProductionConfig['value']['adapter']
   readonly model: LoadedProductionConfig['value']['model']
   readonly runtime: LoadedProductionConfig['value']['runtime']
+  /**
+   * Live pinned worker/interpreter identity. `runtime` above is a hardcoded lock and can never
+   * vary, so only this binds the actual waveform-producing code to the reuse decision.
+   */
+  readonly workerRuntime: QwenWorkerRuntimeIdentity
   readonly text: { readonly value: string; readonly sha256: string }
   readonly applicationInputIdentity: string | null
   readonly voice: VoiceProfile & {
@@ -94,6 +103,7 @@ export function createSegmentPlan(
   request: SpeechSegmentRequest,
   outputDirectory: string,
   config: LoadedProductionConfig,
+  runtimeIdentity: QwenWorkerRuntimeIdentity,
 ): SegmentPlan {
   const usedFallback = request.voiceProfileId === undefined
   const profileId = request.voiceProfileId ?? config.value.fallbackVoiceProfileId
@@ -106,6 +116,7 @@ export function createSegmentPlan(
     adapter: config.value.adapter,
     model: config.value.model,
     runtime: config.value.runtime,
+    workerRuntime: runtimeIdentity,
     text: { value: request.text, sha256: sha256(request.text) },
     applicationInputIdentity: request.applicationInputIdentity ?? null,
     voice: {
@@ -146,15 +157,85 @@ async function isRegularFile(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Reads a cached artifact. A vanished file simply invalidates reuse; any other error (EIO, EACCES)
+ * is surfaced so a failing disk never masquerades as a stale segment and triggers a needless GPU
+ * re-render of the whole book.
+ */
+async function readCached(
+  path: string,
+  label: string,
+  segmentId: string,
+): Promise<Buffer | undefined> {
+  try {
+    return await readFile(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw new SpeechEngineError(
+      'audio-validation',
+      `Cannot read cached ${label} for ${segmentId}: ${path}`,
+      { cause: error, segmentId },
+    )
+  }
+}
+
+/**
+ * Structural O(1) check of the recorded audio identity. The deep per-sample health gate already
+ * ran on this exact byte sequence when it was rendered (both here and in the Python worker), so
+ * reuse only has to prove the bytes on disk are still that sequence.
+ */
+function recordedAudioIdentity(
+  manifest: RenderManifest,
+  requirements: WavRequirements,
+): SpeechAudioIdentity | undefined {
+  const audio = manifest.audio as Partial<SpeechAudioIdentity> | undefined
+  if (audio === undefined) return undefined
+  const digest = audio.sha256
+  const frames = audio.frames
+  const bytes = audio.bytes
+  const sampleRateHz = requirements.sampleRateHz
+  const bytesPerFrame = requirements.channels * (requirements.bitsPerSample / 8)
+  if (
+    typeof digest !== 'string' ||
+    !SHA256.test(digest) ||
+    typeof frames !== 'number' ||
+    typeof bytes !== 'number' ||
+    !Number.isSafeInteger(frames) ||
+    frames <= 0 ||
+    audio.sampleRateHz !== sampleRateHz ||
+    audio.channels !== requirements.channels ||
+    audio.bitsPerSample !== requirements.bitsPerSample ||
+    bytes !== 44 + frames * bytesPerFrame ||
+    audio.durationSeconds !== frames / sampleRateHz
+  ) {
+    return undefined
+  }
+  return {
+    sha256: digest,
+    bytes,
+    sampleRateHz,
+    channels: requirements.channels,
+    bitsPerSample: requirements.bitsPerSample,
+    frames,
+    durationSeconds: frames / sampleRateHz,
+  }
+}
+
 export async function tryReuse(
   plan: SegmentPlan,
   config: LoadedProductionConfig,
 ): Promise<SpeechSegmentResult | undefined> {
   if (!(await isRegularFile(plan.manifestPath)) || !(await isRegularFile(plan.wavPath)))
     return undefined
+  const manifestBytes = await readCached(
+    plan.manifestPath,
+    'render manifest',
+    plan.request.segmentId,
+  )
+  if (manifestBytes === undefined) return undefined
   let manifest: RenderManifest
   try {
-    manifest = JSON.parse(await readFile(plan.manifestPath, 'utf8')) as RenderManifest
+    manifest = JSON.parse(manifestBytes.toString('utf8')) as RenderManifest
   } catch {
     return undefined
   }
@@ -167,39 +248,20 @@ export async function tryReuse(
   ) {
     return undefined
   }
-  try {
-    const validated = await validateCanonicalWav(
-      plan.wavPath,
-      config.value.wav,
-      plan.request.text,
-      plan.request.segmentId,
-    )
-    if (
-      canonicalJson(validated.audio) !==
-      canonicalJson({
-        sha256: manifest.audio.sha256,
-        bytes: manifest.audio.bytes,
-        sampleRateHz: manifest.audio.sampleRateHz,
-        channels: manifest.audio.channels,
-        bitsPerSample: manifest.audio.bitsPerSample,
-        frames: manifest.audio.frames,
-        durationSeconds: manifest.audio.durationSeconds,
-      })
-    ) {
-      return undefined
-    }
-    return {
-      segmentId: plan.request.segmentId,
-      status: 'reused',
-      voiceProfileId: plan.profile.id,
-      usedFallback: plan.usedFallback,
-      wavPath: plan.wavPath,
-      manifestPath: plan.manifestPath,
-      renderIdentitySha256: plan.identitySha256,
-      audio: validated.audio,
-    }
-  } catch {
-    return undefined
+  const audio = recordedAudioIdentity(manifest, config.value.wav)
+  if (audio === undefined) return undefined
+  const bytes = await readCached(plan.wavPath, 'WAV', plan.request.segmentId)
+  if (bytes === undefined) return undefined
+  if (bytes.length !== audio.bytes || sha256(bytes) !== audio.sha256) return undefined
+  return {
+    segmentId: plan.request.segmentId,
+    status: 'reused',
+    voiceProfileId: plan.profile.id,
+    usedFallback: plan.usedFallback,
+    wavPath: plan.wavPath,
+    manifestPath: plan.manifestPath,
+    renderIdentitySha256: plan.identitySha256,
+    audio,
   }
 }
 

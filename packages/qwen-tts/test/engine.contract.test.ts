@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { Segment, VoiceProfile } from '@light-novel-audiobook/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   type ExclusiveGpuGate,
+  type FallbackApprovalRecord,
   type GpuLease,
   type GpuOwner,
   prepareEmptySmokeOutputRoot,
@@ -23,11 +25,23 @@ const PRODUCTION_CONFIG = join(REPOSITORY_ROOT, 'config/qwen3-tts-production.jso
 const MODEL_LOCK = join(REPOSITORY_ROOT, 'config/qwen3-tts-custom-voice.lock.json')
 const UV_LOCK = join(REPOSITORY_ROOT, 'scripts/qwen3-tts-runtime/uv.lock')
 const FAKE_WORKER = join(PACKAGE_ROOT, 'test/fixtures/fake-qwen-process.mjs')
+const BOOK = 'book-0123456789abcdef01234567'
 
 const FALLBACK_APPROVAL = {
   approvalId: 'review-fallback-0001',
   approvalSha256: 'a'.repeat(64),
 } as const
+
+const segmentApproval = (
+  segmentId: string,
+  overrides: Partial<FallbackApprovalRecord> = {},
+): FallbackApprovalRecord => ({
+  segmentId,
+  speakerId: null,
+  fallbackReason: 'unresolved_speaker',
+  ...FALLBACK_APPROVAL,
+  ...overrides,
+})
 
 class RecordingGpuGate implements ExclusiveGpuGate {
   acquisitions = 0
@@ -60,39 +74,49 @@ async function makeEngine(
   engineOptions: {
     readonly allowOverwriteExisting?: boolean
     readonly pythonExecutable?: string
+    readonly allowUnscopedSegmentIds?: boolean
+    /** Rebuilds an engine over an existing fixture root, as a restarted process would. */
+    readonly reuseRoot?: string
   } = {},
 ): Promise<{
   engine: QwenTtsSpeechEngine
   root: string
   output: string
   log: string
+  workerScriptPath: string
   gate: RecordingGpuGate
 }> {
-  const root = join(tmpdir(), `qwen-tts-contract-${crypto.randomUUID()}`)
-  roots.push(root)
+  const { reuseRoot, ...overrides } = engineOptions
+  const root = reuseRoot ?? join(tmpdir(), `qwen-tts-contract-${crypto.randomUUID()}`)
   const output = join(root, 'audio')
   const snapshot = join(root, 'snapshot')
   const log = join(root, 'invocations.jsonl')
   const runtimeManifest = join(root, 'runtime-manifest.json')
-  await Promise.all([mkdir(output, { recursive: true }), mkdir(snapshot, { recursive: true })])
-  await writeFile(
-    runtimeManifest,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      immutable: true,
-      pythonVersion: '3.12.13',
-      uvLockSha256: '6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9',
-      packages: [
-        { name: 'qwen-tts', version: '0.1.1' },
-        { name: 'torch', version: '2.9.1' },
-        { name: 'torchaudio', version: '2.9.1' },
-      ],
-    })}\n`,
-  )
+  // Each fixture root owns its worker copy so a test can mutate the pinned worker in isolation.
+  const workerScriptPath = join(root, 'fake-qwen-process.mjs')
+  if (reuseRoot === undefined) {
+    roots.push(root)
+    await Promise.all([mkdir(output, { recursive: true }), mkdir(snapshot, { recursive: true })])
+    await copyFile(FAKE_WORKER, workerScriptPath)
+    await writeFile(
+      runtimeManifest,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        immutable: true,
+        pythonVersion: '3.12.13',
+        uvLockSha256: '6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9',
+        packages: [
+          { name: 'qwen-tts', version: '0.1.1' },
+          { name: 'torch', version: '2.9.1' },
+          { name: 'torchaudio', version: '2.9.1' },
+        ],
+      })}\n`,
+    )
+  }
   const gate = new RecordingGpuGate()
   const engine = await QwenTtsSpeechEngine.create({
     pythonExecutable: process.execPath,
-    workerScriptPath: FAKE_WORKER,
+    workerScriptPath,
     productionConfigPath: PRODUCTION_CONFIG,
     modelLockPath: MODEL_LOCK,
     runtimeManifestPath: runtimeManifest,
@@ -103,9 +127,10 @@ async function makeEngine(
     gpuGate: gate,
     processEnvironment: { FAKE_QWEN_MODE: mode, FAKE_QWEN_LOG: log, ...extraEnvironment },
     cancellationGraceMs: 500,
-    ...engineOptions,
+    allowUnscopedSegmentIds: true,
+    ...overrides,
   })
-  return { engine, root, output, log, gate }
+  return { engine, root, output, log, workerScriptPath, gate }
 }
 
 async function invocations(path: string): Promise<Array<Record<string, unknown>>> {
@@ -149,7 +174,7 @@ afterEach(async () => {
 
 describe('QwenTtsSpeechEngine fake-process contract', () => {
   it('loads one process once, renders the ordered selected profiles serially, and records fallback identity', async () => {
-    const { engine, log, gate, root } = await makeEngine()
+    const { engine, log, gate, root, workerScriptPath } = await makeEngine()
     expect(engine.identity).toMatch(/^[0-9a-f]{64}$/)
     const events: Array<SpeechProgressEvent> = []
     const requests: Array<SpeechSegmentRequest> = [
@@ -193,7 +218,7 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     expect(invocationSegmentIds(calls, 0)).toEqual(requests.map((item) => item.segmentId))
     expect(calls[0]?.workerSha256).toBe(
       createHash('sha256')
-        .update(await readFile(FAKE_WORKER))
+        .update(await readFile(workerScriptPath))
         .digest('hex'),
     )
     expect(calls[0]?.runtimeManifestSha256).toBe(
@@ -568,6 +593,105 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
       code: 'configuration',
     })
   })
+
+  it('rerenders every segment when the pinned Python worker script changes', async () => {
+    const fixture = await makeEngine()
+    const requests: Array<SpeechSegmentRequest> = [
+      {
+        segmentId: 'ch13-0001',
+        text: 'The worker decides this waveform.',
+        voiceProfileId: 'aiden-calm-narrator',
+      },
+    ]
+    const first = await fixture.engine.renderBatch(requests)
+    expect(first.rendered).toBe(1)
+
+    const restarted = await makeEngine('normal', {}, { reuseRoot: fixture.root })
+    expect(await restarted.engine.renderBatch(requests)).toMatchObject({ rendered: 0, reused: 1 })
+
+    // Equivalent to editing PCM scaling, the seeding order, or the generation kwargs mapping.
+    await appendFile(fixture.workerScriptPath, '\n// waveform-affecting worker edit\n')
+    const edited = await makeEngine('normal', {}, { reuseRoot: fixture.root })
+    const afterEdit = await edited.engine.renderBatch(requests)
+
+    expect(afterEdit).toMatchObject({ rendered: 1, reused: 0 })
+    expect(afterEdit.results[0]?.status).toBe('rendered')
+    expect(afterEdit.results[0]?.renderIdentitySha256).not.toBe(
+      first.results[0]?.renderIdentitySha256,
+    )
+    const manifest = JSON.parse(
+      await readFile(afterEdit.results[0]?.manifestPath ?? '', 'utf8'),
+    ) as { renderIdentity: { workerRuntime: { workerSha256: string } } }
+    expect(manifest.renderIdentity.workerRuntime.workerSha256).toBe(
+      createHash('sha256')
+        .update(await readFile(fixture.workerScriptPath))
+        .digest('hex'),
+    )
+  })
+
+  it('refuses unscoped segment IDs that would collide across books in the flat output root', async () => {
+    const fixture = await makeEngine('normal', {}, { allowUnscopedSegmentIds: false })
+    await expectCode(
+      fixture.engine.renderBatch([
+        {
+          segmentId: 'ch03-0042',
+          text: 'Two different books both use this ID.',
+          voiceProfileId: 'aiden-calm-narrator',
+        },
+      ]),
+      'configuration',
+    )
+    expect(fixture.gate.acquisitions).toBe(0)
+
+    const scoped = await fixture.engine.renderBatch([
+      {
+        segmentId: `${BOOK}-ch0003-p000042-s0001`,
+        text: 'Two different books both use this ID.',
+        voiceProfileId: 'aiden-calm-narrator',
+      },
+    ])
+    expect(scoped.rendered).toBe(1)
+  })
+
+  it('returns a completed batch and reports the failure when releasing the GPU lease fails', async () => {
+    const fixture = await makeEngine()
+    fixture.gate.onRelease = () => {
+      throw new Error('holder required SIGKILL')
+    }
+
+    const result = await fixture.engine.renderBatch([
+      {
+        segmentId: 'ch14-0001',
+        text: 'This batch actually rendered.',
+        voiceProfileId: 'aiden-calm-narrator',
+      },
+    ])
+
+    expect(result).toMatchObject({ rendered: 1, reused: 0 })
+    expect(result.results[0]?.status).toBe('rendered')
+    expect(result.leaseReleaseError?.message).toContain('holder required SIGKILL')
+  })
+
+  it('keeps the causative render failure when releasing the GPU lease also fails', async () => {
+    const fixture = await makeEngine('wrong-hash')
+    fixture.gate.onRelease = () => {
+      throw new Error('holder required SIGKILL')
+    }
+
+    const error = await expectCode(
+      fixture.engine.renderBatch([
+        {
+          segmentId: 'ch14-0002',
+          text: 'The protocol error must survive.',
+          voiceProfileId: 'aiden-calm-narrator',
+        },
+      ]),
+      'protocol',
+    )
+
+    const suppressed = (error as Error & { suppressed?: ReadonlyArray<Error> }).suppressed
+    expect(suppressed?.[0]?.message).toContain('holder required SIGKILL')
+  })
 })
 
 const approvedVoice = (
@@ -615,7 +739,7 @@ const applicationSegment = (
 ): Segment => {
   const segment = new Segment({
     id,
-    chapterId: 'book-0123456789abcdef01234567-ch0001',
+    chapterId: `${BOOK}-ch0001`,
     sourcePassageId: `${id.slice(0, id.lastIndexOf('-s'))}`,
     order: Number(id.slice(-4)),
     sourceText: text,
@@ -642,7 +766,7 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
     const fixture = await makeEngine()
     const events: SpeechProgressEvent[] = []
     const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
-      fallbackApproval: FALLBACK_APPROVAL,
+      fallbackApprovals: [segmentApproval(`${BOOK}-ch0001-p000003-s0001`)],
       onProgress: (event) => {
         events.push(event)
       },
@@ -723,7 +847,7 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
     await expect(
       adapter.render({
         segment: applicationSegment(
-          'book-0123456789abcdef01234567-ch0001-p000004-s0001',
+          `${BOOK}-ch0001-p000004-s0001`,
           'Who is speaking?',
           fallback,
           true,
@@ -733,5 +857,137 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
       }),
     ).rejects.toThrow(/no explicit human approval/)
     await adapter.endBatch()
+  })
+
+  it('refuses to substitute a different approved voice for the configured fallback', async () => {
+    const fixture = await makeEngine()
+    // The human approved Ryan energetic for this unresolved speaker, but the adapter can only
+    // render the configured ryan-low-weary fallback.
+    const fallback = approvedVoice('fallback-ryan', 'fallback', 'energetic')
+    const segmentId = `${BOOK}-ch0001-p000005-s0001`
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [segmentApproval(segmentId)],
+    })
+    await adapter.beginBatch()
+
+    const error = await expectCode(
+      adapter.render({
+        segment: applicationSegment(segmentId, 'A different voice was approved.', fallback, true),
+        voice: fallback,
+        inputIdentity: '5'.repeat(64),
+      }),
+      'configuration',
+    )
+
+    expect(error.message).toContain('ryan-energetic-baseline')
+    expect(error.message).toContain('ryan-low-weary')
+    await adapter.endBatch()
+    // Nothing was voiced with a profile the human never approved.
+    expect((await invocations(fixture.log))[0]?.segments).toEqual([])
+  })
+
+  it('gates every unresolved speaker separately instead of once per batch', async () => {
+    const fixture = await makeEngine()
+    const fallback = approvedVoice('fallback-ryan', 'fallback', 'weary')
+    const approved = `${BOOK}-ch0001-p000006-s0001`
+    const unapproved = `${BOOK}-ch0001-p000007-s0001`
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [segmentApproval(approved)],
+    })
+    await adapter.beginBatch()
+
+    const rendered = await adapter.render({
+      segment: applicationSegment(approved, 'The approved speaker talks.', fallback, true),
+      voice: fallback,
+      inputIdentity: '6'.repeat(64),
+    })
+    expect(rendered.segmentId).toBe(approved)
+
+    // A second unresolved speaker is not covered by the first speaker's decision.
+    await expect(
+      adapter.render({
+        segment: applicationSegment(unapproved, 'A different speaker talks.', fallback, true),
+        voice: fallback,
+        inputIdentity: '7'.repeat(64),
+      }),
+    ).rejects.toThrow(/no explicit human approval/)
+    await adapter.endBatch()
+
+    const segments = (await invocations(fixture.log))[0]?.segments as
+      | Array<Record<string, unknown>>
+      | undefined
+    expect(segments?.map((item) => item.segmentId)).toEqual([approved])
+  })
+
+  it('rejects an approval recorded against a different speaker decision', async () => {
+    const fixture = await makeEngine()
+    const fallback = approvedVoice('fallback-ryan', 'fallback', 'weary')
+    const segmentId = `${BOOK}-ch0001-p000008-s0001`
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [
+        segmentApproval(segmentId, { speakerId: 'alice', fallbackReason: 'missing_speaker_voice' }),
+      ],
+    })
+    await adapter.beginBatch()
+
+    await expect(
+      adapter.render({
+        segment: applicationSegment(segmentId, 'Whose decision was this?', fallback, true),
+        voice: fallback,
+        inputIdentity: '8'.repeat(64),
+      }),
+    ).rejects.toThrow(/does not match its unresolved speaker decision/)
+    await adapter.endBatch()
+  })
+
+  it('binds each approval separately into the adapter identity and the segment manifest', async () => {
+    const fixture = await makeEngine()
+    const segmentId = `${BOOK}-ch0001-p000009-s0001`
+    const base = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [segmentApproval(segmentId)],
+    })
+    const revoked = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [
+        segmentApproval(segmentId, { approvalId: 'review-fallback-0002' }),
+        segmentApproval(`${BOOK}-ch0001-p000010-s0001`),
+      ],
+    })
+    expect(base.identity).not.toBe(revoked.identity)
+
+    const fallback = approvedVoice('fallback-ryan', 'fallback', 'weary')
+    await base.beginBatch()
+    const completed = await base.render({
+      segment: applicationSegment(segmentId, 'One approved unresolved speaker.', fallback, true),
+      voice: fallback,
+      inputIdentity: '9'.repeat(64),
+    })
+    await base.endBatch()
+
+    const manifest = JSON.parse(
+      await readFile(completed.wavPath.replace(/\.wav$/u, '.render.json'), 'utf8'),
+    ) as { renderIdentity: { voice: { fallbackApproval: unknown } } }
+    expect(manifest.renderIdentity.voice.fallbackApproval).toEqual(FALLBACK_APPROVAL)
+  })
+
+  it('reports a cancelled batch as cancelled rather than a worker crash', async () => {
+    const cancelLog = join(tmpdir(), `qwen-tts-app-cancel-${crypto.randomUUID()}.log`)
+    roots.push(cancelLog)
+    const fixture = await makeEngine('hang', { FAKE_QWEN_CANCEL_LOG: cancelLog })
+    const controller = new AbortController()
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, { signal: controller.signal })
+    await adapter.beginBatch()
+
+    controller.abort()
+    // Wait for the child to actually exit so endBatch takes the already-closed path.
+    for (let waited = 0; waited < 5_000; waited += 25) {
+      const log = await readFile(cancelLog, 'utf8').catch(() => '')
+      if (log.includes('term-exit')) break
+      await delay(25)
+    }
+    await delay(100)
+
+    const error = await expectCode(adapter.endBatch(), 'cancelled')
+    expect(error.message).not.toContain('exited before clean completion')
+    expect(fixture.gate.releases).toBe(1)
   })
 })

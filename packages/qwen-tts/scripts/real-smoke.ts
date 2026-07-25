@@ -65,19 +65,21 @@ async function main(): Promise<void> {
     gpuGate: new FileGpuLeaseCoordinator({ lockFilePath: lockDirectory }),
     allowOverwriteExisting: false,
   } as const
+  // Book-scoped issue #29 stable IDs; the adapter refuses unscoped IDs outside test fixtures.
+  const SMOKE_BOOK = 'book-5170e0000000000000009901'
   const requests = [
     {
-      segmentId: 'ch99-9001',
+      segmentId: `${SMOKE_BOOK}-ch0099-p000001-s0001`,
       text: 'Morning light crossed the quiet library floor.',
       voiceProfileId: 'aiden-calm-narrator',
     },
     {
-      segmentId: 'ch99-9002',
+      segmentId: `${SMOKE_BOOK}-ch0099-p000002-s0001`,
       text: 'We found it! Hurry, before the doors close!',
       voiceProfileId: 'ryan-energetic-baseline',
     },
     {
-      segmentId: 'ch99-9003',
+      segmentId: `${SMOKE_BOOK}-ch0099-p000003-s0001`,
       text: 'I have carried this promise for far too long.',
       voiceProfileId: 'ryan-low-weary',
     },

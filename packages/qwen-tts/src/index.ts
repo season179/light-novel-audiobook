@@ -7,6 +7,7 @@ export {
   type GpuOwner,
 } from '@light-novel-audiobook/gpu-lease'
 export {
+  type FallbackApprovalRecord,
   QwenApplicationSpeechEngine,
   type QwenApplicationSpeechEngineOptions,
 } from './application-adapter.js'

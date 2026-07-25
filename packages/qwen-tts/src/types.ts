@@ -88,6 +88,11 @@ export interface SpeechBatchResult {
   readonly results: ReadonlyArray<SpeechSegmentResult>
   readonly rendered: number
   readonly reused: number
+  /**
+   * Set when every segment completed but the cross-process GPU lease could not be released
+   * cleanly. The batch is still valid; the kernel flock is freed by the holder's death.
+   */
+  readonly leaseReleaseError?: Error
 }
 
 /**

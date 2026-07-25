@@ -9,6 +9,7 @@ import { loadWorkerRuntimeIdentity } from './runtime-identity.js'
 import type {
   ExclusiveGpuGate,
   GpuLease,
+  SelectedVoiceProfileId,
   SpeechBatchResult,
   SpeechEngine,
   SpeechProgressEvent,
@@ -19,7 +20,10 @@ import type {
 import { SpeechEngineError } from './types.js'
 import { QwenWorkerSession } from './worker-session.js'
 
-const SEGMENT_ID = /^(?:ch[0-9]+-[0-9]+|book-[0-9a-f]{24}-ch[0-9]{4}-p[0-9]{6}-s[0-9]{4})$/
+/** Issue #29 `StableIds`. Book-scoped, so two books can never share one flat output filename. */
+const BOOK_SCOPED_SEGMENT_ID = /^book-[0-9a-f]{24}-ch[0-9]{4}-p[0-9]{6}-s[0-9]{4}$/
+/** Short fixture form. Carries no book prefix, so it is only safe in an isolated output root. */
+const UNSCOPED_SEGMENT_ID = /^ch[0-9]+-[0-9]+$/
 const SHA256 = /^[0-9a-f]{64}$/
 const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
 const FORBIDDEN_PYTHON_ENVIRONMENT = new Set(['PYTHONHOME', 'PYTHONPATH', 'PYTHONSTARTUP'])
@@ -39,6 +43,11 @@ export interface QwenTtsEngineConfig {
   readonly cancellationGraceMs?: number
   /** False for immutable smoke roots. Normal production invalidation atomically replaces stale WAVs. */
   readonly allowOverwriteExisting?: boolean
+  /**
+   * Test fixtures only. Accepts short `chNN-NNNN` IDs, which carry no book prefix and therefore
+   * collide across books in the flat output root. Production callers must use issue #29 stable IDs.
+   */
+  readonly allowUnscopedSegmentIds?: boolean
 }
 
 interface NormalizedPaths {
@@ -79,8 +88,11 @@ async function regularFile(path: string, label: string): Promise<void> {
   }
 }
 
-function validateRequest(segment: SpeechSegmentRequest): void {
-  if (!SEGMENT_ID.test(segment.segmentId)) {
+function validateRequest(segment: SpeechSegmentRequest, allowUnscopedSegmentIds: boolean): void {
+  if (
+    !BOOK_SCOPED_SEGMENT_ID.test(segment.segmentId) &&
+    !(allowUnscopedSegmentIds && UNSCOPED_SEGMENT_ID.test(segment.segmentId))
+  ) {
     throw new SpeechEngineError(
       'configuration',
       `Unsafe or noncanonical segment ID: ${segment.segmentId}`,
@@ -156,10 +168,13 @@ function validateRequest(segment: SpeechSegmentRequest): void {
   }
 }
 
-function validateRequests(segments: ReadonlyArray<SpeechSegmentRequest>): void {
+function validateRequests(
+  segments: ReadonlyArray<SpeechSegmentRequest>,
+  allowUnscopedSegmentIds: boolean,
+): void {
   const ids = new Set<string>()
   for (const segment of segments) {
-    validateRequest(segment)
+    validateRequest(segment, allowUnscopedSegmentIds)
     if (ids.has(segment.segmentId)) {
       throw new SpeechEngineError('configuration', `Duplicate segment ID: ${segment.segmentId}`, {
         segmentId: segment.segmentId,
@@ -171,6 +186,30 @@ function validateRequests(segments: ReadonlyArray<SpeechSegmentRequest>): void {
 
 async function progress(options: SpeechRenderOptions, event: SpeechProgressEvent): Promise<void> {
   await options.onProgress?.(event)
+}
+
+function asError(value: unknown): Error {
+  if (value instanceof Error) return value
+  return new SpeechEngineError('gpu-busy', `GPU lease release failed: ${String(value)}`)
+}
+
+/**
+ * Releases the cross-process GPU lease without ever becoming the primary failure. A release error
+ * is attached to the causative error when there is one, and otherwise returned so a batch that
+ * actually rendered still hands its results back to the caller.
+ */
+async function releaseLease(lease: GpuLease, primaryError?: unknown): Promise<Error | undefined> {
+  try {
+    await lease.release()
+    return undefined
+  } catch (error) {
+    if (primaryError === undefined) return asError(error)
+    if (primaryError instanceof Error) {
+      const holder = primaryError as Error & { suppressed?: unknown[] }
+      holder.suppressed = [...(holder.suppressed ?? []), asError(error)]
+    }
+    return undefined
+  }
 }
 
 export interface QwenManagedBatch {
@@ -185,6 +224,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
   readonly #environment: Readonly<Record<string, string>>
   readonly #cancellationGraceMs: number
   readonly #allowOverwriteExisting: boolean
+  readonly #allowUnscopedSegmentIds: boolean
   readonly #production: LoadedProductionConfig
   readonly #runtimeIdentity: QwenWorkerRuntimeIdentity
 
@@ -208,6 +248,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     this.#environment = config.processEnvironment ?? {}
     this.#cancellationGraceMs = config.cancellationGraceMs ?? 5_000
     this.#allowOverwriteExisting = config.allowOverwriteExisting ?? true
+    this.#allowUnscopedSegmentIds = config.allowUnscopedSegmentIds ?? false
     this.#production = production
     this.#runtimeIdentity = runtimeIdentity
     this.identity = sha256(
@@ -288,7 +329,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     segments: ReadonlyArray<SpeechSegmentRequest>,
     options: SpeechRenderOptions = {},
   ): Promise<SpeechBatchResult> {
-    validateRequests(segments)
+    validateRequests(segments, this.#allowUnscopedSegmentIds)
     if (options.signal?.aborted)
       throw new SpeechEngineError('cancelled', 'Qwen render batch was cancelled')
     if (segments.length === 0) {
@@ -298,7 +339,13 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     }
 
     const plans = segments.map((request, index) =>
-      createSegmentPlan(index + 1, request, this.#paths.outputDirectory, this.#production),
+      createSegmentPlan(
+        index + 1,
+        request,
+        this.#paths.outputDirectory,
+        this.#production,
+        this.#runtimeIdentity,
+      ),
     )
     const reused = new Map<string, SpeechSegmentResult>()
     const stale: SegmentPlan[] = []
@@ -339,9 +386,11 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     }
 
     const rendered = new Map<string, SpeechSegmentResult>()
+    let leaseReleaseError: Error | undefined
     if (stale.length > 0) {
       const lease = await this.#acquireLease(options.signal)
       let session: QwenWorkerSession | undefined
+      let failure: unknown
       try {
         session = await QwenWorkerSession.start(this.#workerConfig(), options, stale.length)
         for (const plan of stale) {
@@ -357,11 +406,13 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
         }
         await session.finish()
       } catch (error) {
+        failure = error
         if (session !== undefined) await session.abort()
         throw error
       } finally {
-        // Worker exit is always awaited before the cross-process GPU lease is released.
-        await lease.release()
+        // Worker exit is always awaited before the cross-process GPU lease is released. A release
+        // failure never discards a batch that rendered; it is reported alongside the results.
+        leaseReleaseError = await releaseLease(lease, failure)
       }
     }
 
@@ -376,7 +427,17 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
       rendered: rendered.size,
       reused: reused.size,
     })
-    return { results, rendered: rendered.size, reused: reused.size }
+    return {
+      results,
+      rendered: rendered.size,
+      reused: reused.size,
+      ...(leaseReleaseError === undefined ? {} : { leaseReleaseError }),
+    }
+  }
+
+  /** The single approved unresolved-speaker fallback profile pinned in the production config. */
+  get fallbackVoiceProfileId(): SelectedVoiceProfileId {
+    return this.#production.value.fallbackVoiceProfileId
   }
 
   selectedVoiceProfile(voice: {
@@ -411,22 +472,29 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
       const end = async (): Promise<void> => {
         if (ended) return
         ended = true
+        let failure: unknown
         try {
           await activeSession.finish()
+        } catch (error) {
+          failure = error
+          throw error
         } finally {
-          await lease.release()
+          // A release failure after a clean finish is intentionally dropped: the holder's death
+          // already frees the kernel flock, and failing a completed batch here would be worse.
+          await releaseLease(lease, failure)
         }
       }
       return {
         render: async (request) => {
           if (ended) throw new SpeechEngineError('configuration', 'Qwen batch has already ended')
-          validateRequest(request)
+          validateRequest(request, this.#allowUnscopedSegmentIds)
           sequence += 1
           const plan = createSegmentPlan(
             sequence,
             request,
             this.#paths.outputDirectory,
             this.#production,
+            this.#runtimeIdentity,
           )
           const cached = await tryReuse(plan, this.#production)
           try {
@@ -450,7 +518,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
           } catch (error) {
             ended = true
             await activeSession.abort()
-            await lease.release()
+            await releaseLease(lease, error)
             throw error
           }
         },
@@ -458,7 +526,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
       }
     } catch (error) {
       if (session !== undefined) await session.abort()
-      await lease.release()
+      await releaseLease(lease, error)
       throw error
     }
   }

@@ -76,6 +76,32 @@ def handle_termination(_signum: int, _frame: Any) -> None:
     raise Cancelled("render batch cancelled")
 
 
+PR_SET_PDEATHSIG = 1
+
+
+def bind_to_parent_lifetime() -> None:
+    """Die with the orchestrating Node parent.
+
+    The parent holds the exclusive cross-process GPU lease and spawns this worker in its own
+    process group, so a SIGKILLed parent would otherwise release the lease while this process is
+    still CUDA-resident and the next owner would load its weights on top of ours. PR_SET_PDEATHSIG
+    makes the kernel kill us the moment the parent goes away. It is a hard exclusivity guarantee,
+    so a platform that cannot arm it must fail rather than render.
+    """
+    if sys.platform != "linux":
+        raise ValueError("the pinned Qwen worker requires Linux parent-death signalling")
+    import ctypes
+
+    parent = os.getppid()
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG, SIGKILL) failed")
+    if os.getppid() != parent:
+        # The parent died inside the arming window, so the signal will never arrive. Leave now
+        # rather than hold the GPU behind a lease nobody owns.
+        os._exit(129)
+
+
 def emit(event_type: str, **values: Any) -> None:
     print(json.dumps({"protocolVersion": PROTOCOL_VERSION, "type": event_type, **values}, separators=(",", ":")), flush=True)
 
@@ -467,6 +493,7 @@ def run() -> int:
     torch = None
     active_segment: str | None = None
     try:
+        bind_to_parent_lifetime()
         request = read_begin_request()
         if os.environ.get("PYTHONHOME") or os.environ.get("PYTHONPATH"):
             raise ValueError("ambient Python import paths are forbidden")
