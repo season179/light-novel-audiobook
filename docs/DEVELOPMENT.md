@@ -102,3 +102,20 @@ and it keeps the TTS runtime separate from the standard llama.cpp brain runtime.
 about 3.55 GB of checksum-pinned public GGUF assets. See
 [`spikes/voxcpm2-runtime.md`](spikes/voxcpm2-runtime.md) before using it; the pinned server has a
 known streaming crash and is not approved for a production adapter.
+
+## Synthetic voice bootstrap spike
+
+Issue #8 adds a second opt-in host experiment:
+
+```sh
+pnpm voices:verify
+pnpm voices:setup
+pnpm voices:probe -- --output docs/evidence/issue-8-synthetic-voices-wsl2.json
+```
+
+Setup builds pinned GPL-licensed eSpeak NG source outside Git with MBROLA disabled. The probe
+uses only project-authored text and deterministic formant voices, stores every WAV externally,
+and reuses each frozen reference over serialized calls to the non-streaming VoxCPM2 endpoint.
+CI runs only `pnpm test:voices`; it does not build either engine or generate audio. This
+experiment does not change issue #7's production/M2 NO-GO. See
+[`spikes/synthetic-voice-bootstrap.md`](spikes/synthetic-voice-bootstrap.md).

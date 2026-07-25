@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "issue": 8,
+  "espeakNg": {
+    "repository": "https://github.com/espeak-ng/espeak-ng.git",
+    "tag": "1.52.0",
+    "revision": "4870adfa25b1a32b4361592f1be8a40337c58d6c",
+    "sourceTree": "45e4d63726666fbde7616168e8872762470c46d1",
+    "license": "GPL-3.0-or-later",
+    "licenseUrl": "https://raw.githubusercontent.com/espeak-ng/espeak-ng/4870adfa25b1a32b4361592f1be8a40337c58d6c/COPYING",
+    "licenseSha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "readmeSha256": "765e894f83a47e2d003bd2256e86d1ae412e6e0078c3092d66ece293b051e278",
+    "voiceDocumentationSha256": "7c599eeda2771a90e4e33fbeeb8f54bfbb5d41dd9fe91226bc3ce2066e10973b",
+    "build": {
+      "type": "Release",
+      "sharedLibraries": false,
+      "mbrola": false,
+      "libsonic": false,
+      "libpcaudio": false,
+      "klatt": true,
+      "speechPlayer": false,
+      "async": false,
+      "testing": false,
+      "relocatableInstall": false
+    },
+    "voiceSources": [
+      {
+        "path": "espeak-ng-data/lang/gmw/en-US",
+        "sha256": "41534c2a22df5dd4f1052ff9e1a33a3ea7bff5a26b5c02bdad5ba8ddb7524704"
+      },
+      {
+        "path": "espeak-ng-data/voices/!v/m3",
+        "sha256": "7a4ac872387439814ddd65f5e1ff73017122975911df6b5dc62c5709e6fdb611"
+      },
+      {
+        "path": "espeak-ng-data/voices/!v/f4",
+        "sha256": "ff9e2907a818920e3b976232c90eabaf270fff0de0b8a479af9a3633e9b7921f"
+      }
+    ]
+  },
+  "voxcpm2": {
+    "lockPath": "config/voxcpm2-spike.lock.json",
+    "lockSha256": "6b431f34008736a1f808037946915bb0d00bc8d38a790805c6bcd4b607f08650",
+    "requiredIssue7Decision": "NO-GO for production SpeechEngine/M2",
+    "mode": "serialized-non-streaming-experimental-only",
+    "endpointPath": "/v1/audio/speech"
+  },
+  "candidates": [
+    {
+      "id": "narrator",
+      "role": "narrator",
+      "voice": "en-us",
+      "transcript": "At sunrise, the brass observatory opened its quiet shutters, while three clockwork swallows traced circles above the garden.",
+      "transcriptSha256": "a3e84c0fe1ccb982b0a83fb27610e05add6894bb9f8b2692b6223a83628af78e",
+      "seed": null,
+      "parameters": { "rateWordsPerMinute": 155, "pitch": 45, "amplitude": 120 }
+    },
+    {
+      "id": "character-one",
+      "role": "character",
+      "voice": "en-us+m3",
+      "transcript": "I packed the blue compass, checked every latch, and left a bright chalk arrow beside the northern gate.",
+      "transcriptSha256": "ae8f772d1a02dc8e42f20808273aa463df9fef0b5eb1398988db88b31aae1b2c",
+      "seed": null,
+      "parameters": { "rateWordsPerMinute": 175, "pitch": 15, "amplitude": 120 }
+    },
+    {
+      "id": "character-two",
+      "role": "character",
+      "voice": "en-us+f4",
+      "transcript": "Wait for the second bell; the river path is safer then, and our little lantern will stay hidden beneath my coat.",
+      "transcriptSha256": "6d3136c7bca3b4f8d09ec38ad81357424cb26c5138eacb6112c5431ba34f5bc8",
+      "seed": null,
+      "parameters": { "rateWordsPerMinute": 185, "pitch": 65, "amplitude": 120 }
+    }
+  ],
+  "lines": [
+    {
+      "id": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101
+    },
+    {
+      "id": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102
+    },
+    {
+      "id": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103
+    }
+  ],
+  "generation": {
+    "model": "voxcpm2",
+    "responseFormat": "wav",
+    "cfgValue": 2,
+    "temperature": 1,
+    "inferenceTimesteps": 10,
+    "maxSteps": 60,
+    "repeatLineId": "line-01"
+  },
+  "reviewGates": {
+    "minimumReferencePitchRatio": 1.12,
+    "maximumClippedSampleFraction": 0.01,
+    "minimumActiveFrameFraction": 0.15,
+    "minimumOutputSecondsPerWord": 0.12,
+    "maximumOutputSecondsPerWord": 1.5
+  }
+}

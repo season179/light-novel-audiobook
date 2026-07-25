@@ -16,3 +16,12 @@ the isolated ext4 checkout/build/model trees and builds the two CUDA targets. `p
 voxcpm2:probe` runs the CLI, persistent loopback server, synthetic API characterization, resource
 measurements, and destructive streaming-crash check. Raw logs, weights, source, builds, and audio
 stay outside Git. See [`docs/spikes/voxcpm2-runtime.md`](../docs/spikes/voxcpm2-runtime.md).
+
+## Synthetic voice bootstrap spike
+
+`pnpm voices:verify` checks pinned eSpeak NG GPL/source/voice provenance. `pnpm voices:setup`
+builds eSpeak NG 1.52.0 from source outside Git with MBROLA disabled. `pnpm voices:probe` creates
+three deterministic formant references, reuses each across serialized non-streaming VoxCPM2
+lines, and emits create-new external manifests plus sanitized evidence. Normal setup and CI run
+only portable tests and never build eSpeak, start VoxCPM2, or create audio. See
+[`docs/spikes/synthetic-voice-bootstrap.md`](../docs/spikes/synthetic-voice-bootstrap.md).
