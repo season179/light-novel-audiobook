@@ -40,8 +40,9 @@ async function sha256(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-function sha256Json(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+function sha256Json(value: unknown): string | null {
+  const serialized = JSON.stringify(value)
+  return serialized === undefined ? null : createHash('sha256').update(serialized).digest('hex')
 }
 
 function authorizationHeaders(apiKey: string): Record<string, string> {
@@ -256,13 +257,15 @@ function inspectStructuredRequest(body: Uint8Array): Record<string, unknown> {
     stream: parsed.stream,
     streamOptions: parsed.stream_options,
     messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : null,
-    responseFormat: {
-      type: responseFormat?.type,
-      name: jsonSchema?.name,
-      strict: jsonSchema?.strict,
-      schema: jsonSchema?.schema,
-      schemaSha256: sha256Json(jsonSchema?.schema),
-    },
+    responseFormat: responseFormat
+      ? {
+          type: responseFormat.type,
+          name: jsonSchema?.name,
+          strict: jsonSchema?.strict,
+          schema: jsonSchema?.schema,
+          schemaSha256: sha256Json(jsonSchema?.schema),
+        }
+      : null,
   }
 }
 
@@ -428,7 +431,9 @@ async function main(): Promise<void> {
     }
     await client.generateStructured({ temperature: 0, seed: 5, maxTokens: 64, timeoutMs: 10_000 })
     const realRequestCapture = recordingFetch.captures.find(
-      (capture) => capture.assertedFields.responseFormat !== undefined,
+      (capture) =>
+        (capture.assertedFields.responseFormat as { type?: unknown } | null)?.type ===
+        'json_schema',
     )
     assertRealRequestCapture(realRequestCapture)
 
