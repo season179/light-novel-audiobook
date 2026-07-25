@@ -91,6 +91,12 @@ describe('computeLoudnessGainDb', () => {
   })
 
   it('keeps an exact hundredth of a decibel instead of truncating binary noise away', () => {
+    // -18 - -69.99 is exactly 51.99 dB, but the subtraction lands on 51.989999999999995. A bare
+    // `Math.floor(gain * 100) / 100` reports 51.98 and quietly loses a hundredth of a decibel; the
+    // measurement is printed to two decimals, so the exact value is the only correct answer.
+    expect(decide(-69.99, -60).gainDb).toBe(51.99)
+    expect(decide(-69.99, -60).limitedBy).toBe('loudness')
+    // These already agree between truncation and the exact form; they guard the ordinary path.
     expect(decide(-22.55, -18.06).gainDb).toBe(4.55)
     expect(decide(-18.3, -12).gainDb).toBe(0.3)
     expect(decide(-14, -9).gainDb).toBe(-4)
