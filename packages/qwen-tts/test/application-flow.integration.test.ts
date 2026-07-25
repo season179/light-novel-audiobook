@@ -680,7 +680,8 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
           this.armed = false
           const victim = MIRA_SEGMENTS[0]
           if (victim !== undefined) {
-            await super.revoke(bookId, victim, 'human-withdrawal', {
+            await super.revoke(bookId, victim, {
+              reason: 'human-withdrawal',
               decidedBy: 'another-reviewer',
               decidedAt: RE_DECIDED_AT.toISOString(),
             })

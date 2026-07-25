@@ -97,8 +97,22 @@ export interface FallbackApprovalExclusion {
   readonly decidedAt: string
 }
 
-/** Why a recorded decision was removed. Only the first is a human act. */
-export type FallbackRevocationReason = 'human-withdrawal' | 'no-longer-describes-segment'
+/**
+ * Why a recorded decision is being removed.
+ *
+ * A discriminated union rather than a reason string plus an actor parameter, so the two cases cannot
+ * be confused: a human withdrawal **cannot** be recorded without naming who withdrew it, and a system
+ * invalidation has nowhere to put an invented actor. Round 2 passed a literal `'reconciliation'` as
+ * the actor for the system case, which is exactly the kind of manufactured attribution issue #45
+ * exists to prevent.
+ */
+export type FallbackRevocation =
+  | {
+      readonly reason: 'human-withdrawal'
+      readonly decidedBy: string
+      readonly decidedAt: string
+    }
+  | { readonly reason: 'no-longer-describes-segment' }
 
 /**
  * One atomically consistent read of everything the review context knows about a book.

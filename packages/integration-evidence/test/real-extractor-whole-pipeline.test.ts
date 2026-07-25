@@ -5,13 +5,22 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { GenerateAudiobook } from '../../application/src/index.js'
+import {
+  GenerateAudiobook,
+  PendingFallbackReviewError,
+  ReviewFallbackApprovals,
+} from '../../application/src/index.js'
 import { FfmpegAudioAssembler } from '../../audio-assembly/src/index.js'
 import { VoiceCast, VoiceProfile } from '../../domain/src/index.js'
 import { DomainEpubExtractor, type StoredEpubIngestion } from '../../epub-ingestion/src/index.js'
 import { type DirectorProgressStore, GemmaDirectorModel } from '../../gemma-director/src/index.js'
-import { layoutFor, openWorkspace, SqliteJobRepository } from '../../persistence/src/index.js'
-import { QwenApplicationSpeechEngine, QwenTtsSpeechEngine } from '../../qwen-tts/src/index.js'
+import {
+  layoutFor,
+  openWorkspace,
+  SqliteFallbackApprovalRepository,
+  SqliteJobRepository,
+} from '../../persistence/src/index.js'
+import { createQwenSpeechEngineFactory, QwenTtsSpeechEngine } from '../../qwen-tts/src/index.js'
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(TEST_DIRECTORY, '../../..')
@@ -236,6 +245,7 @@ describe('whole pipeline with the real extractor cover contract', () => {
       const layout = layoutFor(join(root, 'application'))
       const db = openWorkspace(layout)
       const jobs = new SqliteJobRepository(layout, db)
+      const approvals = new SqliteFallbackApprovalRepository(db)
       const brain = new RequestResponsiveLlamaServer()
       await brain.start()
       const gpuLockPath = join(root, 'fake-gpu.lock')
@@ -265,21 +275,39 @@ describe('whole pipeline with the real extractor cover contract', () => {
             workspaceRoot: ingestionWorkspace,
             repositoryRoot: REPOSITORY_ROOT,
           }),
-          directorModel: director,
-          speechEngine: new QwenApplicationSpeechEngine(qwen),
+          // Issue #45: the director is built only when direction runs, and the speech engine only
+          // after this book's persisted fallback approvals are read back.
+          directorModelFactory: { identity: director.identity, create: () => director },
+          speechEngineFactory: createQwenSpeechEngineFactory(qwen),
           audioAssembler: await FfmpegAudioAssembler.create(),
           jobs,
+          approvals,
         })
+        const review = new ReviewFallbackApprovals({ jobs, approvals })
         const epubSha256 = createHash('sha256')
           .update(await readFile(FIXTURE_EPUB))
           .digest('hex')
 
-        const result = await useCase.execute({
+        const command = {
           jobId: 'real-extractor-cover-contract',
           epubPath: FIXTURE_EPUB,
           epubSha256,
           voices: voices(),
-        })
+        }
+        // Issue #45: a book with unresolved speakers stops for a human decision and nothing renders
+        // until one is recorded. This fixture's cast leaves speakers unresolved, so the run stops
+        // once, the decision is made through the review context, and rendering continues from the
+        // persisted script without re-directing.
+        const result = await useCase
+          .execute(command)
+          .catch(async (error: unknown): Promise<Awaited<ReturnType<typeof useCase.execute>>> => {
+            if (!(error instanceof PendingFallbackReviewError)) throw error
+            await review.grantBookFallback({
+              jobId: command.jobId,
+              decidedBy: 'integration-evidence',
+            })
+            return useCase.execute(command)
+          })
 
         expect(result.job.state).toBe('completed')
         expect(result.job.stage).toBe('completed')

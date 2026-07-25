@@ -89,6 +89,17 @@ export interface AudiobookJobSnapshot {
    * identity would no longer identify what produced the output.
    */
   readonly renderContract: string | null
+  /**
+   * The fallback-approval catalog revision this job's completed output was produced under, or `null`
+   * before it completes.
+   *
+   * A render claims a catalog, renders, and re-checks the revision before publishing — but a
+   * revocation can still land in the instant between that check and the commit. Recording the
+   * revision makes such an output **detectably** stale forever after, rather than depending on a
+   * reopen that raced. `RenderAudiobook` refuses to serve a completed output whose revision has moved
+   * and re-derives it instead.
+   */
+  readonly catalogRevision: number | null
   readonly bookId: string | null
   readonly progress: AudiobookJobProgress
   readonly warnings: readonly FallbackVoiceWarning[]
@@ -102,6 +113,7 @@ export class AudiobookJob {
   private currentStage: AudiobookJobStage = 'extracting'
   private boundCommandIdentity: string | null = null
   private boundRenderContract: string | null = null
+  private completedCatalogRevision: number | null = null
   private attachedBookId: string | null = null
   private currentProgress: AudiobookJobProgress = Object.freeze({
     currentChapterId: null,
@@ -132,6 +144,10 @@ export class AudiobookJob {
 
   get renderContract(): string | null {
     return this.boundRenderContract
+  }
+
+  get catalogRevision(): number | null {
+    return this.completedCatalogRevision
   }
 
   get bookId(): string | null {
@@ -284,6 +300,7 @@ export class AudiobookJob {
     this.currentState = 'awaiting_review'
     this.currentStage = 'directing'
     this.completedOutput = null
+    this.completedCatalogRevision = null
     this.failureMessage = null
     this.currentProgress = Object.freeze({
       currentChapterId: null,
@@ -353,7 +370,14 @@ export class AudiobookJob {
     this.fallbackWarnings = Object.freeze([...this.fallbackWarnings, Object.freeze({ ...warning })])
   }
 
-  complete(output: AudiobookOutput): void {
+  /**
+   * `catalogRevision` is the fallback-approval catalog revision the render claimed. It is recorded
+   * with the output so a decision that raced the commit leaves the output provably stale.
+   */
+  complete(output: AudiobookOutput, catalogRevision: number): void {
+    if (!Number.isSafeInteger(catalogRevision) || catalogRevision < 0) {
+      throw new DomainError('Completed output requires the approval catalog revision it used')
+    }
     if (this.currentState !== 'running' || this.currentStage !== 'assembling') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'completed')
     }
@@ -364,6 +388,7 @@ export class AudiobookJob {
     this.validateOutputContext(output, this.attachedBookId, this.currentProgress.totalSegments)
     this.currentStage = 'completed'
     this.currentState = 'completed'
+    this.completedCatalogRevision = catalogRevision
     this.completedOutput = Object.freeze({
       ...output,
       chapters: Object.freeze(output.chapters.map((chapter) => Object.freeze({ ...chapter }))),
@@ -389,6 +414,7 @@ export class AudiobookJob {
       stage: this.currentStage,
       commandIdentity: this.boundCommandIdentity,
       renderContract: this.boundRenderContract,
+      catalogRevision: this.completedCatalogRevision,
       bookId: this.attachedBookId,
       progress: Object.freeze({ ...this.currentProgress }),
       warnings: Object.freeze(
@@ -415,6 +441,7 @@ export class AudiobookJob {
     job.currentStage = snapshot.stage
     job.boundCommandIdentity = snapshot.commandIdentity?.toLowerCase() ?? null
     job.boundRenderContract = snapshot.renderContract?.toLowerCase() ?? null
+    job.completedCatalogRevision = snapshot.catalogRevision
     job.attachedBookId = snapshot.bookId
     job.currentProgress = Object.freeze({ ...snapshot.progress })
     job.fallbackWarnings = Object.freeze(
@@ -472,6 +499,15 @@ export class AudiobookJob {
     }
     if ((snapshot.output !== null) !== (snapshot.state === 'completed')) {
       throw new DomainError('Only completed jobs can contain output')
+    }
+    if ((snapshot.catalogRevision !== null) !== (snapshot.state === 'completed')) {
+      throw new DomainError('Only completed jobs can record an approval catalog revision')
+    }
+    if (
+      snapshot.catalogRevision !== null &&
+      (!Number.isSafeInteger(snapshot.catalogRevision) || snapshot.catalogRevision < 0)
+    ) {
+      throw new DomainError('Audiobook job snapshot has an invalid approval catalog revision')
     }
     if ((snapshot.error !== null) !== (snapshot.state === 'failed') || snapshot.error === '') {
       throw new DomainError('Only failed jobs can contain a nonempty error')
@@ -684,6 +720,7 @@ export class AudiobookJob {
     })
     this.fallbackWarnings = Object.freeze([])
     this.completedOutput = null
+    this.completedCatalogRevision = null
     this.failureMessage = null
   }
 

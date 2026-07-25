@@ -368,11 +368,14 @@ describe('audiobook job and numbered output lifecycle', () => {
     job.recordSegmentCompleted('segment-1')
     job.beginAssembly()
     const version = new OutputVersion(1)
-    job.complete({
-      version,
-      m4bPath: version.fileName('My Book', 'm4b'),
-      chapters: [{ chapterId, path: 'My Book-v001-ch01.flac' }],
-    })
+    job.complete(
+      {
+        version,
+        m4bPath: version.fileName('My Book', 'm4b'),
+        chapters: [{ chapterId, path: 'My Book-v001-ch01.flac' }],
+      },
+      0,
+    )
 
     expect(job.state).toBe('completed')
     expect(job.stage).toBe('completed')
@@ -415,11 +418,14 @@ describe('audiobook job and numbered output lifecycle', () => {
     completed.beginRendering(1)
     completed.recordSegmentCompleted('segment-1')
     completed.beginAssembly()
-    completed.complete({
-      version: new OutputVersion(3),
-      m4bPath: '/output/book-v003.m4b',
-      chapters: [{ chapterId, path: '/output/book-v003-ch01.flac' }],
-    })
+    completed.complete(
+      {
+        version: new OutputVersion(3),
+        m4bPath: '/output/book-v003.m4b',
+        chapters: [{ chapterId, path: '/output/book-v003-ch01.flac' }],
+      },
+      0,
+    )
     const completedReloaded = AudiobookJob.reconstitute(
       JSON.parse(JSON.stringify(completed.snapshot())),
     )
@@ -455,11 +461,14 @@ describe('audiobook job and numbered output lifecycle', () => {
     job.recordSegmentCompleted('segment-1')
     job.beginAssembly()
     expect(() =>
-      job.complete({
-        version: new OutputVersion(1),
-        m4bPath: '/output/shared',
-        chapters: [{ chapterId, path: '/output/shared' }],
-      }),
+      job.complete(
+        {
+          version: new OutputVersion(1),
+          m4bPath: '/output/shared',
+          chapters: [{ chapterId, path: '/output/shared' }],
+        },
+        0,
+      ),
     ).toThrow('pairwise distinct')
   })
 
@@ -487,11 +496,14 @@ describe('audiobook job and numbered output lifecycle', () => {
     assembling.beginAssembly()
 
     const completed = AudiobookJob.reconstitute(assembling.snapshot())
-    completed.complete({
-      version: new OutputVersion(1),
-      m4bPath: '/output/book-v001.m4b',
-      chapters: [{ chapterId, path: '/output/book-v001-ch01.flac' }],
-    })
+    completed.complete(
+      {
+        version: new OutputVersion(1),
+        m4bPath: '/output/book-v001.m4b',
+        chapters: [{ chapterId, path: '/output/book-v001-ch01.flac' }],
+      },
+      0,
+    )
 
     const pending = new AudiobookJob('snapshot-pending').snapshot()
     const runningSnapshot = runningExtracting.snapshot()

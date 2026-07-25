@@ -15,6 +15,7 @@ const runningSnapshot: AudiobookJobSnapshot = {
   stage: 'rendering',
   commandIdentity: 'b'.repeat(64),
   renderContract: null,
+  catalogRevision: null,
   bookId,
   progress: {
     currentChapterId: `${bookId}-ch0002`,

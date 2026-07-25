@@ -4,7 +4,7 @@ import type {
   FallbackApprovalCatalog,
   FallbackApprovalExclusion,
   FallbackApprovalRepository,
-  FallbackRevocationReason,
+  FallbackRevocation,
   PersistedFallbackApproval,
 } from '@light-novel-audiobook/application'
 import {
@@ -164,13 +164,15 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
   async revoke(
     bookId: string,
     segmentId: string,
-    reason: FallbackRevocationReason,
-    actor: { readonly decidedBy: string; readonly decidedAt: string },
+    revocation: FallbackRevocation,
   ): Promise<boolean> {
     requireBookId(bookId)
     if (!segmentId || segmentId.length === 0) throw new DomainError('Segment ID is required')
-    if (reason !== 'human-withdrawal' && reason !== 'no-longer-describes-segment') {
-      throw new DomainError(`Unsupported fallback revocation reason: ${reason}`)
+    if (
+      revocation.reason !== 'human-withdrawal' &&
+      revocation.reason !== 'no-longer-describes-segment'
+    ) {
+      throw new DomainError('Unsupported fallback revocation')
     }
     return withBusyRetryingTransaction(
       this.db,
@@ -182,7 +184,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
         // book-wide grant would re-create the approval on the next reconciliation and the
         // revocation would mean nothing; recording a *system* invalidation would instead
         // permanently block a segment whose decision merely needs re-deriving.
-        if (reason === 'human-withdrawal') {
+        if (revocation.reason === 'human-withdrawal') {
           this.db
             .prepare(
               `INSERT INTO fallback_approval_exclusions (book_id, segment_id, decided_by, decided_at)
@@ -191,7 +193,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
                  decided_by = excluded.decided_by,
                  decided_at = excluded.decided_at`,
             )
-            .run(bookId, segmentId, actor.decidedBy, actor.decidedAt)
+            .run(bookId, segmentId, revocation.decidedBy, revocation.decidedAt)
         }
         this.bumpRevision(bookId)
         return Number(result.changes) > 0

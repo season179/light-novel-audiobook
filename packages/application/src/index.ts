@@ -16,7 +16,7 @@ export {
   type FallbackApprovalDecision,
   type FallbackApprovalExclusion,
   type FallbackApprovalSubject,
-  type FallbackRevocationReason,
+  type FallbackRevocation,
   fallbackApprovalExcerpt,
   hashSourceText,
   type PendingFallbackApproval,

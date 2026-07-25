@@ -9,9 +9,13 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { createStubEpubBytes } from './support/stub-epub.js'
-import { createTestHarness, type TestHarness, waitForJobState } from './support/test-harness.js'
+import {
+  createTestHarness,
+  TEST_REVIEWER,
+  type TestHarness,
+  waitForJobState,
+} from './support/test-harness.js'
 
-const REVIEWER = 'a-human'
 let harness: TestHarness | undefined
 
 afterEach(async () => {
@@ -70,13 +74,13 @@ describe('fallback approvals in the web app (issue #45)', () => {
     const { api, jobId } = await startAndStopForReview('approve-all')
     const before = await api.listFallbackReview({ jobId })
 
-    const after = await api.approveAllFallbacks({ jobId, decidedBy: REVIEWER })
+    const after = await api.approveAllFallbacks({ jobId })
 
-    expect(after.grantedBy).toBe(REVIEWER)
+    expect(after.grantedBy).toBe(TEST_REVIEWER)
     expect(after.pendingCount).toBe(0)
     expect(after.items).toHaveLength(before.items.length)
     expect(after.items.every((item) => item.decision === 'approved')).toBe(true)
-    expect(after.items.every((item) => item.decidedBy === REVIEWER)).toBe(true)
+    expect(after.items.every((item) => item.decidedBy === TEST_REVIEWER)).toBe(true)
     // Per-segment records with distinct identities, never one blanket approval.
     const approvalIds = after.items.map((item) => item.approvalId)
     expect(approvalIds.every((id) => id !== null)).toBe(true)
@@ -87,7 +91,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
     const { api, jobId, harness: app } = await startAndStopForReview('render-approved')
     expect(app.directors).toHaveLength(1)
 
-    await api.approveAllFallbacks({ jobId, decidedBy: REVIEWER })
+    await api.approveAllFallbacks({ jobId })
     await api.renderApprovedScript({ jobId })
     const finished = await waitForJobState(api, jobId, (state) => state.finished)
 
@@ -102,7 +106,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
 
   it('reopens a completed book when one speaker is withdrawn, and only that speaker', async () => {
     const { api, jobId } = await startAndStopForReview('withdraw-one')
-    await api.approveAllFallbacks({ jobId, decidedBy: REVIEWER })
+    await api.approveAllFallbacks({ jobId })
     await api.renderApprovedScript({ jobId })
     await waitForJobState(api, jobId, (state) => state.finished)
 
@@ -110,11 +114,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
     const victim = approved.items[0]
     if (victim === undefined) throw new Error('fixture has no fallback segments')
 
-    const after = await api.revokeFallback({
-      jobId,
-      segmentId: victim.segmentId,
-      decidedBy: REVIEWER,
-    })
+    const after = await api.revokeFallback({ jobId, segmentId: victim.segmentId })
 
     // The completed job returned to review by itself and dropped its output.
     const job = await api.getJobState({ jobId })
@@ -144,7 +144,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
       if (job !== null && !job.active && job.state === 'awaiting_review') break
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    await api.approveAllFallbacks({ jobId: started.jobId, decidedBy: REVIEWER })
+    await api.approveAllFallbacks({ jobId: started.jobId })
     const review = await api.listFallbackReview({ jobId: started.jobId })
     const victim = review.items[0]
     if (victim === undefined) throw new Error('fixture has no fallback segments')
@@ -153,11 +153,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
     // the catalog underneath it is refused rather than queued behind it.
     await api.renderApprovedScript({ jobId: started.jobId })
     await expect(
-      api.revokeFallback({
-        jobId: started.jobId,
-        segmentId: victim.segmentId,
-        decidedBy: REVIEWER,
-      }),
+      api.revokeFallback({ jobId: started.jobId, segmentId: victim.segmentId }),
     ).rejects.toThrow(/rendering/)
 
     await waitForJobState(api, started.jobId, (state) => state.finished)

@@ -11,7 +11,7 @@ import type {
 import type {
   BookFallbackGrant,
   FallbackApprovalCatalog,
-  FallbackRevocationReason,
+  FallbackRevocation,
   PersistedFallbackApproval,
 } from './fallback-approval.js'
 
@@ -131,12 +131,7 @@ export interface FallbackApprovalRepository {
    *
    * Returns true when a live approval existed and was removed.
    */
-  revoke(
-    bookId: string,
-    segmentId: string,
-    reason: FallbackRevocationReason,
-    actor: { readonly decidedBy: string; readonly decidedAt: string },
-  ): Promise<boolean>
+  revoke(bookId: string, segmentId: string, revocation: FallbackRevocation): Promise<boolean>
   saveBookGrant(grant: BookFallbackGrant): Promise<void>
   /** True when a grant existed and was withdrawn. Recorded exclusions and approvals are untouched. */
   revokeBookGrant(bookId: string): Promise<boolean>

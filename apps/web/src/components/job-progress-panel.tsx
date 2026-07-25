@@ -11,12 +11,9 @@ export interface JobProgressPanelProps {
   readonly jobId: string
   /** Polling interval while the job is active. */
   readonly pollIntervalMs?: number
-  /** Recorded on every decision this page makes. M1 has one local user. */
-  readonly reviewedBy?: string
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 700
-const DEFAULT_REVIEWER = 'local-user'
 
 const chapterText = (job: JobStateView): string => {
   if (job.currentChapterLabel === null) return 'Not in a chapter yet'
@@ -35,15 +32,9 @@ const segmentsText = (job: JobStateView): string => {
  * Progress and result view. Job state is always fetched from the server, so reloading the page keeps
  * the real progress instead of restarting from whatever React happened to hold.
  */
-export function JobProgressPanel({
-  client,
-  jobId,
-  pollIntervalMs,
-  reviewedBy,
-}: JobProgressPanelProps) {
+export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressPanelProps) {
   const progressId = useId()
   const interval = pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-  const decidedBy = reviewedBy ?? DEFAULT_REVIEWER
   const queryClient = useQueryClient()
   const jobQuery = useQuery({
     queryKey: ['job-state', jobId],
@@ -71,11 +62,11 @@ export function JobProgressPanel({
     ])
   }
   const approveAll = useMutation({
-    mutationFn: () => client.approveAllFallbacks({ jobId, decidedBy }),
+    mutationFn: () => client.approveAllFallbacks({ jobId }),
     onSuccess: refresh,
   })
   const revoke = useMutation({
-    mutationFn: (segmentId: string) => client.revokeFallback({ jobId, segmentId, decidedBy }),
+    mutationFn: (segmentId: string) => client.revokeFallback({ jobId, segmentId }),
     onSuccess: refresh,
   })
   const render = useMutation({

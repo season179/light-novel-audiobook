@@ -41,11 +41,14 @@ const completedJob = (): AudiobookJob => {
   job.beginRendering(1)
   job.recordSegmentCompleted(SEGMENT_ID)
   job.beginAssembly()
-  job.complete({
-    version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-    m4bPath: '/workspace/story-v001.m4b',
-    chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/story-v001-ch001.flac' }],
-  })
+  job.complete(
+    {
+      version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+      m4bPath: '/workspace/story-v001.m4b',
+      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/story-v001-ch001.flac' }],
+    },
+    0,
+  )
   return job
 }
 

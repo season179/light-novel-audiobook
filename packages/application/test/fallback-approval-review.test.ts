@@ -28,6 +28,7 @@ import {
   RenderContractMismatchError,
   RenderInProgressError,
   ReviewFallbackApprovals,
+  UnapprovedFallbackSegmentsError,
 } from '../src/index.js'
 import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
 
@@ -418,11 +419,14 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     job.beginRendering(4)
     for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
     job.beginAssembly()
-    job.complete({
-      version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-      m4bPath: '/workspace/review-v001.m4b',
-      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
-    })
+    job.complete(
+      {
+        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+        m4bPath: '/workspace/review-v001.m4b',
+        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+      },
+      (await app.approvals.readCatalog(BOOK_ID)).revision,
+    )
     expect(job.state).toBe('completed')
 
     expect(
@@ -593,6 +597,195 @@ describe('standalone render provenance (issue #45, round-2 MEDIUM)', () => {
 /** A speech engine that would fail loudly if the contract check ever let a render through. */
 const neverRenders = {
   identity: 'speech-2',
+  beginBatch: (): Promise<void> => Promise.reject(new Error('render must not have started')),
+  render: (): Promise<never> => Promise.reject(new Error('render must not have started')),
+  endBatch: (): Promise<void> => Promise.resolve(),
+}
+
+describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
+  let app: Harness
+
+  beforeEach(() => {
+    app = harness()
+  })
+
+  /**
+   * The window round 2 left open: a review call reads the job while it is awaiting review, passes the
+   * render-ownership guard, and its write lands *after* the render's final catalog check — so the
+   * segment is rendered and the job completes as if approved, while the decision authorizing it is
+   * gone.
+   *
+   * Two mechanisms close it, and this suite pins both:
+   *   - the completed output records the catalog revision it was produced under, so an output the
+   *     catalog has moved under is provably stale and is re-derived rather than served;
+   *   - every review mutation re-reads the job afterwards and reopens it if it completed meanwhile.
+   *
+   * Deleting the rendered artifact was the alternative and is not needed: the approval is already
+   * hashed into that segment's render input identity, so a revoked segment's audio is unreachable by
+   * construction, and exactly that segment re-renders when it is approved again. What had to be
+   * invalidated was the job's *completed* state, not the reuse ledger.
+   */
+  it('does not serve a completed output whose catalog moved after the final check', async () => {
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
+    const claimed = (await app.approvals.readCatalog(BOOK_ID)).revision
+
+    // Drive the job to completed exactly as a render does, recording the revision it claimed.
+    job.resumeApprovedRender()
+    job.beginRendering(4)
+    for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
+    job.beginAssembly()
+    job.complete(
+      {
+        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+        m4bPath: '/workspace/review-v001.m4b',
+        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+      },
+      claimed,
+    )
+    await app.jobs.saveJob(job)
+    expect(job.catalogRevision).toBe(claimed)
+
+    // The lost revocation: it lands on the ledger without the job being reopened, which is what a
+    // decision racing the commit looks like from the render's side.
+    await app.approvals.revoke(BOOK_ID, MIRA_SEGMENT, {
+      reason: 'human-withdrawal',
+      decidedBy: REVIEWER,
+      decidedAt: LATER.toISOString(),
+    })
+    const moved = (await app.approvals.readCatalog(BOOK_ID)).revision
+    expect(moved).not.toBe(claimed)
+
+    // The completed output no longer stands, so it is not served: the job goes back to review and the
+    // render then refuses, because that segment has no live decision.
+    const render = new RenderAudiobook({
+      speechEngineFactory: { identity: 'speech-1', create: () => neverRenders1 },
+      audioAssembler: {
+        identity: 'assembly-1',
+        assemble: () => Promise.reject(new Error('unused')),
+      },
+      jobs: app.jobs,
+      approvals: app.approvals,
+    })
+    const stored = await app.jobs.findJob('job-review')
+    if (stored === undefined) throw new Error('job vanished')
+    stored.bindRenderContract(
+      createRenderContract({
+        voices: cast,
+        speechEngineIdentity: 'speech-1',
+        audioAssemblerIdentity: 'assembly-1',
+      }),
+    )
+    await app.jobs.saveJob(stored)
+
+    const refusal = await render
+      .execute({ jobId: 'job-review', voices: cast })
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+    expect(refusal).toBeInstanceOf(UnapprovedFallbackSegmentsError)
+    expect((refusal as UnapprovedFallbackSegmentsError).segmentIds).toEqual([MIRA_SEGMENT])
+
+    // And the stale output is gone rather than still downloadable.
+    const after = await app.jobs.findJob('job-review')
+    expect(after?.state).toBe('awaiting_review')
+    expect(after?.output).toBeNull()
+    expect(after?.catalogRevision).toBeNull()
+  })
+
+  it('still serves a completed output while its catalog has not moved', async () => {
+    // The other half: without this, "refuse when the revision moved" could be satisfied by refusing
+    // always, and every completed job would silently re-render.
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
+    const claimed = (await app.approvals.readCatalog(BOOK_ID)).revision
+    job.resumeApprovedRender()
+    job.beginRendering(4)
+    for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
+    job.beginAssembly()
+    job.complete(
+      {
+        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+        m4bPath: '/workspace/review-v001.m4b',
+        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+      },
+      claimed,
+    )
+    await app.jobs.saveJob(job)
+
+    const render = new RenderAudiobook({
+      speechEngineFactory: { identity: 'speech-1', create: () => neverRenders1 },
+      audioAssembler: {
+        identity: 'assembly-1',
+        assemble: () => Promise.reject(new Error('unused')),
+      },
+      jobs: app.jobs,
+      approvals: app.approvals,
+    })
+    const result = await render.execute({ jobId: 'job-review', voices: cast })
+    expect(result.job.state).toBe('completed')
+    expect(result.generatedSegments).toBe(0)
+    expect(result.output.m4bPath).toBe('/workspace/review-v001.m4b')
+  })
+
+  it('reopens a job that completed while a review decision was in flight', async () => {
+    // The immediate half of the fix, in the shape the race actually takes: the review call loaded the
+    // job while it was awaiting review, and by the time its write lands the job has completed.
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
+    const claimed = (await app.approvals.readCatalog(BOOK_ID)).revision
+
+    const racing = new ReviewFallbackApprovals({
+      jobs: {
+        ...app.jobs,
+        findJob: async (jobId: string) => app.jobs.findJob(jobId),
+        findBook: async (bookId: string) => app.jobs.findBook(bookId),
+        saveJob: async (saved) => app.jobs.saveJob(saved),
+      } as typeof app.jobs,
+      approvals: {
+        ...app.approvals,
+        readCatalog: (bookId: string) => app.approvals.readCatalog(bookId),
+        save: (record) => app.approvals.save(record),
+        saveBookGrant: (grant) => app.approvals.saveBookGrant(grant),
+        revokeBookGrant: (bookId: string) => app.approvals.revokeBookGrant(bookId),
+        // Completion lands between this call's job read and its write — the exact race.
+        revoke: async (bookId, segmentId, revocation) => {
+          job.resumeApprovedRender()
+          job.beginRendering(4)
+          for (const segment of book.chapters[0]?.segments ?? [])
+            job.recordSegmentCompleted(segment.id)
+          job.beginAssembly()
+          job.complete(
+            {
+              version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+              m4bPath: '/workspace/review-v001.m4b',
+              chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+            },
+            claimed,
+          )
+          await app.jobs.saveJob(job)
+          return app.approvals.revoke(bookId, segmentId, revocation)
+        },
+      } as typeof app.approvals,
+      now: () => LATER,
+    })
+
+    expect(
+      await racing.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT, decidedBy: REVIEWER }),
+    ).toBe(true)
+
+    // The post-write re-read caught the completion and put the job back into review.
+    const after = await app.jobs.findJob('job-review')
+    expect(after?.state).toBe('awaiting_review')
+    expect(after?.output).toBeNull()
+  })
+})
+
+/** Fails loudly if a stale completed output were ever served by rendering instead of refusing. */
+const neverRenders1 = {
+  identity: 'speech-1',
   beginBatch: (): Promise<void> => Promise.reject(new Error('render must not have started')),
   render: (): Promise<never> => Promise.reject(new Error('render must not have started')),
   endBatch: (): Promise<void> => Promise.resolve(),

@@ -21,6 +21,7 @@ import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-a
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
+import { resolveReviewerIdentity } from './reviewer-identity.js'
 import { createWorkspace, type LocalWorkspace } from './workspace.js'
 
 /**
@@ -71,6 +72,14 @@ export interface AudiobookAdapterFactories {
   /** Shared for the whole process: this is the persistence boundary, not a per-run resource. */
   readonly jobs?: JobRepository | undefined
   readonly voices?: VoiceCast | undefined
+  /**
+   * Who this server records as the human behind a fallback-voice decision.
+   *
+   * Omitted, it is resolved from `LNA_REVIEWER` or the operating-system account — never invented, and
+   * never read from a request body. `resolveReviewerIdentity` throws if neither is available, so the
+   * gap is visible at startup instead of being papered over with a constant.
+   */
+  readonly reviewer?: string | undefined
 }
 
 export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
@@ -150,6 +159,7 @@ export const createAudiobookWebApi = async (
     runner,
     voices,
     review: new ReviewFallbackApprovals({ jobs, approvals }),
+    reviewer: options.reviewer ?? resolveReviewerIdentity(),
   })
 }
 

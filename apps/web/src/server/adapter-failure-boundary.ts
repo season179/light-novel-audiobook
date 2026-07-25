@@ -10,7 +10,7 @@ import type {
   EpubExtractor,
   FallbackApprovalCatalog,
   FallbackApprovalRepository,
-  FallbackRevocationReason,
+  FallbackRevocation,
   JobRepository,
   OutputReservation,
   PersistedFallbackApproval,
@@ -165,13 +165,8 @@ class SanitizedFallbackApprovalRepository implements FallbackApprovalRepository 
     return sanitize('approvals.save', () => this.inner.save(record))
   }
 
-  revoke(
-    bookId: string,
-    segmentId: string,
-    reason: FallbackRevocationReason,
-    actor: { readonly decidedBy: string; readonly decidedAt: string },
-  ): Promise<boolean> {
-    return sanitize('approvals.revoke', () => this.inner.revoke(bookId, segmentId, reason, actor))
+  revoke(bookId: string, segmentId: string, revocation: FallbackRevocation): Promise<boolean> {
+    return sanitize('approvals.revoke', () => this.inner.revoke(bookId, segmentId, revocation))
   }
 
   saveBookGrant(grant: BookFallbackGrant): Promise<void> {

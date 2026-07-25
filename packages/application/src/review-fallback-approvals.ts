@@ -111,12 +111,9 @@ export class ReviewFallbackApprovals {
     // the cast gained a voice. Removed so the catalog can never authorize a segment nobody reviewed.
     for (const [segmentId, record] of live) {
       if (subjectIds.has(segmentId)) continue
-      await this.approvals.revoke(
-        request.book.id,
-        segmentId,
-        'no-longer-describes-segment',
-        this.actor('reconciliation'),
-      )
+      await this.approvals.revoke(request.book.id, segmentId, {
+        reason: 'no-longer-describes-segment',
+      })
       invalidated.push(record)
       live.delete(segmentId)
     }
@@ -131,12 +128,9 @@ export class ReviewFallbackApprovals {
       if (existing !== undefined) {
         // The decision was about a different speaker, reason, profile or line. PLAN.md:132 makes
         // that an invalidation, not something to silently carry forward.
-        await this.approvals.revoke(
-          request.book.id,
-          subject.segment.id,
-          'no-longer-describes-segment',
-          this.actor('reconciliation'),
-        )
+        await this.approvals.revoke(request.book.id, subject.segment.id, {
+          reason: 'no-longer-describes-segment',
+        })
         invalidated.push(existing)
       }
       // An explicit human withdrawal outranks any book-wide grant. Without this the grant would
@@ -229,7 +223,9 @@ export class ReviewFallbackApprovals {
         decidedAt: this.decidedAt(),
       }),
     )
-    return this.reconcile({ book })
+    const reconciliation = await this.reconcile({ book })
+    await this.reopenIfCompletedSince(request.jobId)
+    return reconciliation
   }
 
   /** Withdraws the book-wide grant. Records already written stay; nothing new is derived from it. */
@@ -237,7 +233,9 @@ export class ReviewFallbackApprovals {
     const { job, book } = await this.load(request.jobId)
     this.assertNoRenderOwns(job)
     await this.reopenIfCompleted(job)
-    return this.approvals.revokeBookGrant(book.id)
+    const removed = await this.approvals.revokeBookGrant(book.id)
+    await this.reopenIfCompletedSince(request.jobId)
+    return removed
   }
 
   /** Records one human decision, clearing any earlier withdrawal of the same segment. */
@@ -254,6 +252,7 @@ export class ReviewFallbackApprovals {
       grantId: null,
     })
     await this.approvals.save(record)
+    await this.reopenIfCompletedSince(request.jobId)
     return record
   }
 
@@ -269,10 +268,13 @@ export class ReviewFallbackApprovals {
     this.subjectFor(book, request.segmentId)
     this.assertNoRenderOwns(job)
     await this.reopenIfCompleted(job)
-    return this.approvals.revoke(book.id, request.segmentId, 'human-withdrawal', {
+    const removed = await this.approvals.revoke(book.id, request.segmentId, {
+      reason: 'human-withdrawal',
       decidedBy: request.decidedBy,
       decidedAt: this.decidedAt(),
     })
+    await this.reopenIfCompletedSince(request.jobId)
+    return removed
   }
 
   private async load(jobId: string): Promise<{ job: AudiobookJob; book: Book }> {
@@ -323,8 +325,21 @@ export class ReviewFallbackApprovals {
     await this.jobs.saveJob(job)
   }
 
-  private actor(decidedBy: string): { decidedBy: string; decidedAt: string } {
-    return { decidedBy, decidedAt: this.decidedAt() }
+  /**
+   * Re-reads the job **after** the decision was written and reopens it if it has completed in the
+   * meantime.
+   *
+   * The pre-write reopen above acts on the job as it was when this operation started, so a render
+   * that completed while the operation was in flight would leave a published output that the decision
+   * has since invalidated — the race round 2 narrowed but did not close. This is the immediate half of
+   * the fix; the durable half is the catalog revision recorded with the output, which makes such an
+   * output detectably stale even if this reopen loses the race too.
+   */
+  private async reopenIfCompletedSince(jobId: string): Promise<void> {
+    const latest = await this.jobs.findJob(jobId)
+    if (latest === undefined || latest.state !== 'completed') return
+    latest.reopenForReview()
+    await this.jobs.saveJob(latest)
   }
 
   private decidedAt(): string {

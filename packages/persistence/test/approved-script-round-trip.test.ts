@@ -295,7 +295,11 @@ describe('fallback approval ledger (issue #45)', () => {
       grantId,
     })
 
-  const ACTOR = { decidedBy: 'local-reviewer', decidedAt: DECIDED_AT }
+  const WITHDRAWAL = {
+    reason: 'human-withdrawal' as const,
+    decidedBy: 'local-reviewer',
+    decidedAt: DECIDED_AT,
+  }
   const liveApprovals = async (approvals: SqliteFallbackApprovalRepository, bookId = BOOK_ID) =>
     (await approvals.readCatalog(bookId)).approvals
 
@@ -321,8 +325,8 @@ describe('fallback approval ledger (issue #45)', () => {
     expect(live).toHaveLength(2)
     expect(live.find((record) => record.segmentId === first)?.approvalId).toBe(revised.approvalId)
 
-    expect(await approvals.revoke(BOOK_ID, first, 'human-withdrawal', ACTOR)).toBe(true)
-    expect(await approvals.revoke(BOOK_ID, first, 'human-withdrawal', ACTOR)).toBe(false)
+    expect(await approvals.revoke(BOOK_ID, first, WITHDRAWAL)).toBe(true)
+    expect(await approvals.revoke(BOOK_ID, first, WITHDRAWAL)).toBe(false)
     expect((await liveApprovals(approvals)).map((record) => record.segmentId)).toEqual([second])
     // A human withdrawal is recorded, so a later book-wide grant cannot silently re-create it.
     expect((await approvals.readCatalog(BOOK_ID)).exclusions.map((item) => item.segmentId)).toEqual(
@@ -343,10 +347,10 @@ describe('fallback approval ledger (issue #45)', () => {
     // Reads never move it.
     expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(afterSave)
 
-    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+    await approvals.revoke(BOOK_ID, segmentId, WITHDRAWAL)
     expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(2)
     // Even a revocation that removed nothing is a mutation: it recorded the exclusion.
-    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+    await approvals.revoke(BOOK_ID, segmentId, WITHDRAWAL)
     expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(3)
 
     await approvals.saveBookGrant(
@@ -369,7 +373,7 @@ describe('fallback approval ledger (issue #45)', () => {
     const { approvals } = await workspace()
     const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
     await approvals.save(decision(segmentId))
-    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+    await approvals.revoke(BOOK_ID, segmentId, WITHDRAWAL)
 
     let catalog = await approvals.readCatalog(BOOK_ID)
     expect(catalog.approvals).toEqual([])
@@ -388,9 +392,9 @@ describe('fallback approval ledger (issue #45)', () => {
     const { approvals } = await workspace()
     const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
     await approvals.save(decision(segmentId))
-    expect(await approvals.revoke(BOOK_ID, segmentId, 'no-longer-describes-segment', ACTOR)).toBe(
-      true,
-    )
+    expect(
+      await approvals.revoke(BOOK_ID, segmentId, { reason: 'no-longer-describes-segment' }),
+    ).toBe(true)
     const catalog = await approvals.readCatalog(BOOK_ID)
     expect(catalog.approvals).toEqual([])
     expect(catalog.exclusions).toEqual([])

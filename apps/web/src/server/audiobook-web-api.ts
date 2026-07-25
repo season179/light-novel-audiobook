@@ -66,6 +66,11 @@ export interface AudiobookWebApiDependencies {
   readonly runner: GenerationRunner
   readonly voices: VoiceCast
   readonly review: ReviewFallbackApprovals
+  /**
+   * Who this server records as the human behind a fallback decision. Required, and never taken from a
+   * request: see `resolveReviewerIdentity`.
+   */
+  readonly reviewer: string
 }
 
 /** The review queue for one job, plus whether a book-wide decision has already been made. */
@@ -117,6 +122,7 @@ export class AudiobookWebApi {
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
   private readonly review: ReviewFallbackApprovals
+  private readonly reviewer: string
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -126,6 +132,7 @@ export class AudiobookWebApi {
     this.runner = dependencies.runner
     this.voices = dependencies.voices
     this.review = dependencies.review
+    this.reviewer = dependencies.reviewer
   }
 
   /**
@@ -163,12 +170,9 @@ export class AudiobookWebApi {
    * book. One explicit act — a 2,328-passage book must not stop for a click per line — recorded as
    * one durable per-segment record each, so withdrawing one speaker later touches only that speaker.
    */
-  async approveAllFallbacks(input: {
-    readonly jobId: string
-    readonly decidedBy: string
-  }): Promise<FallbackReviewView> {
+  async approveAllFallbacks(input: { readonly jobId: string }): Promise<FallbackReviewView> {
     await this.runReviewDecision(input.jobId, () =>
-      this.review.grantBookFallback({ jobId: input.jobId, decidedBy: input.decidedBy }),
+      this.review.grantBookFallback({ jobId: input.jobId, decidedBy: this.reviewer }),
     )
     return this.listFallbackReview({ jobId: input.jobId })
   }
@@ -176,13 +180,12 @@ export class AudiobookWebApi {
   async approveFallback(input: {
     readonly jobId: string
     readonly segmentId: string
-    readonly decidedBy: string
   }): Promise<FallbackReviewView> {
     await this.runReviewDecision(input.jobId, () =>
       this.review.approve({
         jobId: input.jobId,
         segmentId: input.segmentId,
-        decidedBy: input.decidedBy,
+        decidedBy: this.reviewer,
       }),
     )
     return this.listFallbackReview({ jobId: input.jobId })
@@ -191,13 +194,12 @@ export class AudiobookWebApi {
   async revokeFallback(input: {
     readonly jobId: string
     readonly segmentId: string
-    readonly decidedBy: string
   }): Promise<FallbackReviewView> {
     await this.runReviewDecision(input.jobId, () =>
       this.review.revoke({
         jobId: input.jobId,
         segmentId: input.segmentId,
-        decidedBy: input.decidedBy,
+        decidedBy: this.reviewer,
       }),
     )
     return this.listFallbackReview({ jobId: input.jobId })

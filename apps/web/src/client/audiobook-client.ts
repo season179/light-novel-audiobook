@@ -26,15 +26,16 @@ export interface AudiobookClient {
   listChapterAudio(input: { readonly jobId: string }): Promise<WebApiResult<ChapterAudioListing>>
   listUploads(): Promise<WebApiResult<readonly EpubUploadView[]>>
   listFallbackReview(input: { readonly jobId: string }): Promise<WebApiResult<FallbackReviewView>>
-  /** The one book-wide decision: use the fallback voice for every unresolved speaker in this book. */
-  approveAllFallbacks(input: {
-    readonly jobId: string
-    readonly decidedBy: string
-  }): Promise<WebApiResult<FallbackReviewView>>
+  /**
+   * The one book-wide decision: use the fallback voice for every unresolved speaker in this book.
+   *
+   * No actor parameter, deliberately — the server records who decided, from its own configuration. A
+   * client-supplied actor would be self-attestation, and issue #45 is about approvals being evidence.
+   */
+  approveAllFallbacks(input: { readonly jobId: string }): Promise<WebApiResult<FallbackReviewView>>
   revokeFallback(input: {
     readonly jobId: string
     readonly segmentId: string
-    readonly decidedBy: string
   }): Promise<WebApiResult<FallbackReviewView>>
   renderApprovedScript(input: { readonly jobId: string }): Promise<WebApiResult<StartedGeneration>>
 }

@@ -139,14 +139,22 @@ export class RenderAudiobook {
     const initialState = job.state
     if (initialState === 'completed') {
       if (job.output === null) throw new DomainError('Completed job has no audiobook output')
-      return {
-        job,
-        output: job.output,
-        generatedSegments: 0,
-        reusedSegments: job.progress.totalSegments,
+      if (job.bookId === null) throw new DomainError('A completed job must have an attached book')
+      // A revocation can land in the instant between a render's final catalog check and its commit,
+      // so a completed output is only served while the catalog it was produced under still stands.
+      // Otherwise the job goes back to review and is re-derived: the decision wins, not the race.
+      const { revision } = await this.approvals.readCatalog(job.bookId)
+      if (job.catalogRevision === revision) {
+        return {
+          job,
+          output: job.output,
+          generatedSegments: 0,
+          reusedSegments: job.progress.totalSegments,
+        }
       }
-    }
-    if (initialState !== 'awaiting_review') {
+      job.reopenForReview()
+      await this.jobs.saveJob(job)
+    } else if (initialState !== 'awaiting_review') {
       throw new DomainError(
         `Audiobook job ${command.jobId} is ${initialState}; only a job awaiting review can be rendered`,
       )
@@ -215,13 +223,10 @@ export class RenderAudiobook {
         speechEngine,
       )
 
-      // The barrier. Nothing is published until the catalog this render claimed is proven unmoved,
-      // so a revocation that landed after `resolveApprovals()` stops the render here instead of
-      // completing a book whose audio a human has since withdrawn.
-      const current = await this.approvals.readCatalog(book.id)
-      if (current.revision !== claimed.revision) {
-        throw new StaleFallbackCatalogError(claimed.revision, current.revision)
-      }
+      // The barrier, first half: nothing is assembled until the catalog this render claimed is
+      // proven unmoved, so a revocation that landed during rendering stops here instead of paying
+      // for an assembly it cannot publish.
+      await this.assertCatalogUnmoved(book.id, claimed.revision)
 
       job.beginAssembly()
       await this.jobs.saveJob(job)
@@ -230,7 +235,12 @@ export class RenderAudiobook {
       const output = await this.audioAssembler.assemble({ book, chapters, reservation })
       this.validateOutput(output, reservation)
 
-      job.complete(output)
+      // The barrier, second half: re-checked as late as it can be, immediately before the job is
+      // published. The revision is then recorded *with* the output, so a decision that lands in the
+      // remaining instant between this check and the commit leaves the output provably stale rather
+      // than silently authoritative — see the completed-job path above.
+      await this.assertCatalogUnmoved(book.id, claimed.revision)
+      job.complete(output, claimed.revision)
       await this.jobs.saveJob(job)
       return { job, output, generatedSegments, reusedSegments }
     } catch (error) {
@@ -243,6 +253,13 @@ export class RenderAudiobook {
         }
       }
       throw error
+    }
+  }
+
+  private async assertCatalogUnmoved(bookId: string, claimedRevision: number): Promise<void> {
+    const current = await this.approvals.readCatalog(bookId)
+    if (current.revision !== claimedRevision) {
+      throw new StaleFallbackCatalogError(claimedRevision, current.revision)
     }
   }
 

@@ -15,6 +15,9 @@ import {
 } from '../../src/server/m1-voice-cast.js'
 import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace.js'
 
+/** The actor this harness records on decisions it makes on the user's behalf. */
+export const TEST_REVIEWER = 'test-reviewer'
+
 /** Blocks the fake speech engine at a chosen segment so a test can observe mid-generation state. */
 export class RenderGate {
   private readonly blockAt: number
@@ -72,6 +75,9 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   const api = await createAudiobookWebApi({
     workspace,
     voices,
+    // Supplied, not resolved: a test must not depend on the OS account running it, and passing it
+    // here is exactly how #21 will pass a real identity.
+    reviewer: TEST_REVIEWER,
     speechEngineFactory: {
       identity: speechEngine.identity,
       create: (context) => {
@@ -120,9 +126,6 @@ export const createInProcessClient = (api: AudiobookWebApi): AudiobookClient => 
     toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
 })
 
-/** The actor recorded on decisions this harness makes on the user's behalf. */
-export const TEST_REVIEWER = 'test-reviewer'
-
 /**
  * Waits for a job state, making the user's fallback-voice decision if the job stops for it.
  *
@@ -147,7 +150,7 @@ export const waitForJobState = async (
     if (latest !== null && predicate(latest)) return latest
     if (latest?.state === 'awaiting_review' && !decided) {
       decided = true
-      await api.approveAllFallbacks({ jobId, decidedBy: TEST_REVIEWER })
+      await api.approveAllFallbacks({ jobId })
       await api.renderApprovedScript({ jobId })
     }
     await new Promise((resolve) => setTimeout(resolve, 20))

@@ -90,26 +90,25 @@ export const listFallbackReviewFn = createServerFn({ method: 'GET' })
  * invalidates only that speaker's audio.
  */
 export const approveAllFallbacksFn = createServerFn({ method: 'POST' })
-  .validator((data: { jobId: string; decidedBy: string }) => data)
+  .validator((data: { jobId: string }) => data)
   .handler(
     async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
       toWebApiResult('approveAllFallbacks', async () =>
-        (await api()).approveAllFallbacks({
-          jobId: requireIdInput(data.jobId, 'Job ID'),
-          decidedBy: requireIdInput(data.decidedBy, 'Reviewer'),
-        }),
+        // No `decidedBy` in the payload, deliberately. The actor is what makes an approval evidence of
+        // a human decision, so it is resolved server-side once at composition; a client-supplied one
+        // would be self-attestation the server simply believed.
+        (await api()).approveAllFallbacks({ jobId: requireIdInput(data.jobId, 'Job ID') }),
       ),
   )
 
 export const revokeFallbackFn = createServerFn({ method: 'POST' })
-  .validator((data: { jobId: string; segmentId: string; decidedBy: string }) => data)
+  .validator((data: { jobId: string; segmentId: string }) => data)
   .handler(
     async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
       toWebApiResult('revokeFallback', async () =>
         (await api()).revokeFallback({
           jobId: requireIdInput(data.jobId, 'Job ID'),
           segmentId: requireIdInput(data.segmentId, 'Segment ID'),
-          decidedBy: requireIdInput(data.decidedBy, 'Reviewer'),
         }),
       ),
   )

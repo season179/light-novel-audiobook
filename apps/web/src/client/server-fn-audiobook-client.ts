@@ -24,9 +24,7 @@ export const serverFnAudiobookClient: AudiobookClient = {
   listChapterAudio: ({ jobId }) => listChapterAudioFn({ data: { jobId } }),
   listUploads: () => listUploadsFn(),
   listFallbackReview: ({ jobId }) => listFallbackReviewFn({ data: { jobId } }),
-  approveAllFallbacks: ({ jobId, decidedBy }) =>
-    approveAllFallbacksFn({ data: { jobId, decidedBy } }),
-  revokeFallback: ({ jobId, segmentId, decidedBy }) =>
-    revokeFallbackFn({ data: { jobId, segmentId, decidedBy } }),
+  approveAllFallbacks: ({ jobId }) => approveAllFallbacksFn({ data: { jobId } }),
+  revokeFallback: ({ jobId, segmentId }) => revokeFallbackFn({ data: { jobId, segmentId } }),
   renderApprovedScript: ({ jobId }) => renderApprovedScriptFn({ data: { jobId } }),
 }

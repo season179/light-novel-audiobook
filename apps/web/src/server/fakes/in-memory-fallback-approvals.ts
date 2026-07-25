@@ -3,7 +3,7 @@ import type {
   FallbackApprovalCatalog,
   FallbackApprovalExclusion,
   FallbackApprovalRepository,
-  FallbackRevocationReason,
+  FallbackRevocation,
   PersistedFallbackApproval,
 } from '@light-novel-audiobook/application'
 
@@ -54,16 +54,15 @@ export class InMemoryFallbackApprovalRepository implements FallbackApprovalRepos
   async revoke(
     bookId: string,
     segmentId: string,
-    reason: FallbackRevocationReason,
-    actor: { readonly decidedBy: string; readonly decidedAt: string },
+    revocation: FallbackRevocation,
   ): Promise<boolean> {
     const removed = this.approvals.delete(key(bookId, segmentId))
-    if (reason === 'human-withdrawal') {
+    if (revocation.reason === 'human-withdrawal') {
       this.exclusions.set(key(bookId, segmentId), {
         bookId,
         segmentId,
-        decidedBy: actor.decidedBy,
-        decidedAt: actor.decidedAt,
+        decidedBy: revocation.decidedBy,
+        decidedAt: revocation.decidedAt,
       })
     }
     this.bump(bookId)

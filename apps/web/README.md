@@ -118,13 +118,27 @@ Two consequences worth knowing:
   | Operation | What it does |
   | --- | --- |
   | `listFallbackReview({ jobId })` | the queue, each entry with a short excerpt of the approved line |
-  | `approveAllFallbacks({ jobId, decidedBy })` | one book-wide decision, written out as one durable per-segment record each |
-  | `revokeFallback({ jobId, segmentId, decidedBy })` | withdraws one speaker; a completed job returns to review and its audio for that speaker becomes unreachable |
+  | `approveAllFallbacks({ jobId })` | one book-wide decision, written out as one durable per-segment record each |
+  | `revokeFallback({ jobId, segmentId })` | withdraws one speaker; a completed job returns to review and its audio for that speaker becomes unreachable |
   | `renderApprovedScript({ jobId })` | continues from the persisted script, with no re-extraction and no re-direction |
 
   Withdrawing one speaker invalidates only that speaker's audio, because the approval identity is
   hashed into that segment's render input identity and nothing else moves. A withdrawal is recorded
   as a durable exclusion, so the book-wide grant cannot silently re-create it.
+
+  **None of these take an actor.** Every recorded decision names the human who made it, and that name
+  is resolved once at composition — from `LNA_REVIEWER`, or failing that the operating-system account —
+  never from a request body and never from a literal. `resolveReviewerIdentity` throws rather than
+  invent one, so a server that cannot say who is deciding does not start. Set `LNA_REVIEWER` to record
+  something more useful than the local account name:
+
+  ```sh
+  LNA_REVIEWER='Ada Lovelace' pnpm dev
+  ```
+
+  This is attribution on a single-user local app, not authentication. When real users arrive,
+  `createAudiobookWebApi({ reviewer })` is the seam that carries the authenticated identity and nothing
+  below it changes.
 
   The review excerpt is **story text**. It is returned to the browser so the human can read the line
   they are approving; it must never be written to a log or into job state.

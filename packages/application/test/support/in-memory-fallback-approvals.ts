@@ -3,7 +3,7 @@ import type {
   FallbackApprovalCatalog,
   FallbackApprovalExclusion,
   FallbackApprovalRepository,
-  FallbackRevocationReason,
+  FallbackRevocation,
   PersistedFallbackApproval,
 } from '../../src/index.js'
 
@@ -18,7 +18,7 @@ export class InMemoryFallbackApprovalRepository implements FallbackApprovalRepos
   readonly approvals = new Map<string, PersistedFallbackApproval>()
   readonly exclusions = new Map<string, FallbackApprovalExclusion>()
   readonly grants = new Map<string, BookFallbackGrant>()
-  readonly revocations: { segmentId: string; reason: FallbackRevocationReason }[] = []
+  readonly revocations: { segmentId: string; reason: FallbackRevocation['reason'] }[] = []
   saved: string[] = []
   private revisions = new Map<string, number>()
 
@@ -45,17 +45,16 @@ export class InMemoryFallbackApprovalRepository implements FallbackApprovalRepos
   async revoke(
     bookId: string,
     segmentId: string,
-    reason: FallbackRevocationReason,
-    actor: { readonly decidedBy: string; readonly decidedAt: string },
+    revocation: FallbackRevocation,
   ): Promise<boolean> {
-    this.revocations.push({ segmentId, reason })
+    this.revocations.push({ segmentId, reason: revocation.reason })
     const removed = this.approvals.delete(this.key(bookId, segmentId))
-    if (reason === 'human-withdrawal') {
+    if (revocation.reason === 'human-withdrawal') {
       this.exclusions.set(this.key(bookId, segmentId), {
         bookId,
         segmentId,
-        decidedBy: actor.decidedBy,
-        decidedAt: actor.decidedAt,
+        decidedBy: revocation.decidedBy,
+        decidedAt: revocation.decidedAt,
       })
     }
     this.bump(bookId)
