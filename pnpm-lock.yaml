@@ -156,6 +156,15 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/persistence:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/qwen-tts:
     dependencies:
       '@light-novel-audiobook/application':
