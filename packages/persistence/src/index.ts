@@ -1,7 +1,6 @@
 export { SqliteJobRepository } from './repo.js'
 export { migrateSchema, SCHEMA_VERSION } from './schema.js'
 export {
-  atomicWriteFile,
   hashText,
   layoutFor,
   openWorkspace,

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve, sep } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   type CompletedSegmentAudio,
@@ -12,6 +12,7 @@ import {
   Book,
   Chapter,
   type DirectedSegment,
+  DomainError,
   ExactSourceCoverage,
   type Segment,
   SourcePassage,
@@ -253,6 +254,10 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     )
     await harness.repo.saveCompletedSegment(artifact)
 
+    // GenerateAudiobook re-saves the book after rendering each chapter and again
+    // after job.complete(), so a completed artifact must survive saveBook.
+    await harness.repo.saveBook(book)
+
     // Simulate a process restart over the same database and workspace.
     harness.reopen()
 
@@ -294,6 +299,8 @@ describe('SqliteJobRepository contract (issue #27)', () => {
       await harness.repo.saveCompletedSegment(
         writeArtifact(harness.layout, segment.id, identity, Buffer.from(`${segment.id}-v1`)),
       )
+      // The real caller re-saves the book while segments are being completed.
+      await harness.repo.saveBook(book)
     }
 
     harness.reopen()
@@ -370,6 +377,9 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     await harness.repo.saveCompletedSegment(corruptArtifact)
     writeFileSync(corruptArtifact.wavPath, Buffer.from('BBBBBBBB'))
 
+    // Re-saving book metadata must not disturb the recorded artifacts.
+    await harness.repo.saveBook(book)
+
     // A healthy artifact is still reused.
     expect(
       await harness.repo.findReusableSegment({
@@ -429,8 +439,10 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     await harness.repo.saveCompletedSegment(artifact0)
     job.recordSegmentCompleted(seg0.id)
     await harness.repo.saveJob(job)
+    await harness.repo.saveBook(book)
     await harness.repo.saveCompletedSegment(artifact1)
     job.recordSegmentCompleted(seg1.id)
+    await harness.repo.saveBook(book)
 
     // The worker disappears mid-flight, leaving the job in an abandoned state.
     job.markAbandoned()
@@ -475,13 +487,16 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     await harness.repo.saveBook(book)
 
     const r1 = await harness.repo.reserveNextOutput(book)
+    await harness.repo.saveBook(book)
     const r2 = await harness.repo.reserveNextOutput(book)
+    await harness.repo.saveBook(book)
     const r3 = await harness.repo.reserveNextOutput(book)
     expect([r1.version.value, r2.version.value, r3.version.value]).toEqual([1, 2, 3])
     const paths = [r1.m4bPath, r2.m4bPath, r3.m4bPath]
     expect(new Set(paths).size).toBe(3)
 
     // Restart: the persisted reservation counter must keep climbing.
+    await harness.repo.saveBook(book)
     harness.reopen()
     const r4 = await harness.repo.reserveNextOutput(book)
     expect(r4.version.value).toBe(4)
@@ -505,5 +520,195 @@ describe('SqliteJobRepository contract (issue #27)', () => {
 
     // The pre-existing v001 file is left untouched.
     expect(readFileSync(existingPath, 'utf8')).toBe('existing-audiobook')
+  })
+
+  // Regression (issue #27 review, F1): GenerateAudiobook calls saveBook six times per run,
+  // interleaved with saveCompletedSegment. Re-saving book metadata must never drop the
+  // reuse ledger, or a resumed book re-renders from scratch.
+  it('keeps completed segment audio reusable when saveBook runs after saveCompletedSegment', async () => {
+    const { book, cast } = makeBook()
+    const [seg0, seg1] = segmentsOf(book)
+    if (!seg0 || !seg1) throw new Error('fixture segments missing')
+    const identity0 = identityFor(seg0, cast)
+    const identity1 = identityFor(seg1, cast)
+
+    await harness.repo.saveBook(book)
+
+    const artifact0 = writeArtifact(harness.layout, seg0.id, identity0, Buffer.from('chapter-1-a'))
+    await harness.repo.saveCompletedSegment(artifact0)
+
+    // The exact ordering of generate-audiobook.ts:260 / :290 — the book is re-saved
+    // between rendering one segment and reading back the next.
+    await harness.repo.saveBook(book)
+
+    const reused0 = await harness.repo.findReusableSegment({
+      segmentId: seg0.id,
+      inputIdentity: identity0,
+    })
+    if (!reused0) throw new Error('artifact saved before saveBook must remain reusable')
+    expect(reused0.sha256).toBe(artifact0.sha256)
+    expect(reused0.byteLength).toBe(artifact0.byteLength)
+
+    // A second segment completes, then the book is saved twice more (chapter end + job.complete).
+    const artifact1 = writeArtifact(harness.layout, seg1.id, identity1, Buffer.from('chapter-1-b'))
+    await harness.repo.saveCompletedSegment(artifact1)
+    await harness.repo.saveBook(book)
+    await harness.repo.saveBook(book)
+
+    const artifactRows = harness.db.prepare('SELECT COUNT(*) AS n FROM artifacts').get() as {
+      n: number
+    }
+    expect(artifactRows.n).toBe(2)
+
+    // And they are still reusable after a process restart.
+    harness.reopen()
+    expect(
+      await harness.repo.findReusableSegment({ segmentId: seg0.id, inputIdentity: identity0 }),
+    ).toBeDefined()
+    expect(
+      await harness.repo.findReusableSegment({ segmentId: seg1.id, inputIdentity: identity1 }),
+    ).toBeDefined()
+  })
+
+  // Regression (issue #27 review, F2): a reservation is an append-only claim ledger.
+  // Re-saving book metadata must never delete a claim, or the same version — and the
+  // same .m4b path — is handed out twice and a finished audiobook is overwritten.
+  it('keeps climbing output versions when saveBook runs between two reservations', async () => {
+    const { book } = makeBook()
+    await harness.repo.saveBook(book)
+
+    const first = await harness.repo.reserveNextOutput(book)
+    expect(first.version.value).toBe(1)
+    expect(first.m4bPath.endsWith('resume-story-v001.m4b')).toBe(true)
+
+    // generate-audiobook.ts:159 saves the book after job.complete(output); a crash-and-retry
+    // run then saves it again at :132 before reserving. Neither may reset the ledger.
+    await harness.repo.saveBook(book)
+
+    const second = await harness.repo.reserveNextOutput(book)
+    expect(second.version.value).toBe(2)
+    expect(second.m4bPath).not.toBe(first.m4bPath)
+    expect(second.m4bPath.endsWith('resume-story-v002.m4b')).toBe(true)
+
+    // Chapter paths must differ too — the assembler writes chapter masters there.
+    const firstChapterPaths = first.chapters.map((chapter) => chapter.path)
+    for (const chapter of second.chapters) {
+      expect(firstChapterPaths).not.toContain(chapter.path)
+    }
+
+    // Both claims are still on record, so a third run cannot reuse either.
+    const reservationRows = harness.db
+      .prepare('SELECT COUNT(*) AS n FROM output_reservations WHERE book_id = ?')
+      .get(book.id) as { n: number }
+    expect(reservationRows.n).toBe(2)
+
+    await harness.repo.saveBook(book)
+    const third = await harness.repo.reserveNextOutput(book)
+    expect(third.version.value).toBe(3)
+  })
+
+  // The assembler (#32) resolves the paths it is handed rather than rejecting bad ones, so a
+  // relative or non-canonical path would be silently rewritten: the book encodes somewhere else
+  // and GenerateAudiobook.validateOutput then fails the run on an exact path compare, after the
+  // whole encode, leaving files that wedge every retry.
+  it('reserves only absolute, canonical paths inside the workspace', async () => {
+    const { book } = makeBook()
+    await harness.repo.saveBook(book)
+    const reservation = await harness.repo.reserveNextOutput(book)
+
+    const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
+    expect(paths.length).toBe(2)
+    for (const path of paths) {
+      expect(isAbsolute(path)).toBe(true)
+      expect(resolve(path)).toBe(path)
+      expect(path.startsWith(`${harness.layout.root}${sep}`)).toBe(true)
+      expect(path).not.toContain(`${sep}${sep}`)
+      expect(path.split(sep)).not.toContain('..')
+      expect(path.split(sep)).not.toContain('.')
+    }
+  })
+
+  it('refuses to reserve an output path that would escape the workspace', async () => {
+    const escapingId = `${CHAPTER_ID}/../../../../escape`
+    const escaping = new Chapter({
+      id: escapingId,
+      bookId: BOOK_ID,
+      position: 1,
+      title: 'Escape',
+      sourcePassages: [
+        new SourcePassage({
+          id: `${escapingId}-p000001`,
+          chapterId: escapingId,
+          sourceText: 'Escaped.',
+        }),
+      ],
+    })
+    const book = new Book({
+      id: BOOK_ID,
+      title: 'Escape Story',
+      author: null,
+      coverPath: null,
+      source: { epubPath: '/uploads/escape.epub', sha256: SOURCE_HASH },
+      chapters: [escaping],
+    })
+
+    await expect(harness.repo.reserveNextOutput(book)).rejects.toBeInstanceOf(DomainError)
+    // Nothing was claimed, so no half-reservation is left behind.
+    const rows = harness.db
+      .prepare('SELECT COUNT(*) AS n FROM output_reservations WHERE book_id = ?')
+      .get(book.id) as { n: number }
+    expect(rows.n).toBe(0)
+  })
+
+  // F6: findJob runs before the use case has a job to record a failure on, so a raw SyntaxError
+  // would make the job permanently unopenable with no signal about why.
+  it('reports a corrupt job snapshot as a domain error instead of a parser error', async () => {
+    harness.db
+      .prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)')
+      .run('job-corrupt', '{"id":"job-corrupt","state":"run')
+
+    await expect(harness.repo.findJob('job-corrupt')).rejects.toBeInstanceOf(DomainError)
+    await expect(harness.repo.findJob('job-corrupt')).rejects.toThrow(
+      /job-corrupt has an unreadable snapshot/,
+    )
+
+    // An id that was simply never written is still absent rather than an error.
+    expect(await harness.repo.findJob('job-never-written')).toBeUndefined()
+  })
+
+  // F4: a second process must wait for a lock rather than abort its whole run with
+  // `database is locked`.
+  it('opens the workspace database in WAL mode with a busy timeout', () => {
+    const journal = harness.db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }
+    expect(journal.journal_mode).toBe('wal')
+    const busy = harness.db.prepare('PRAGMA busy_timeout').get() as { timeout: number }
+    expect(busy.timeout).toBe(5000)
+  })
+
+  // F9: saveBook runs six-plus times per run; re-saving an unchanged book must not rewrite rows.
+  it('writes no segment rows when an unchanged book is saved again', async () => {
+    const book = makePlainBook(6)
+    await harness.repo.saveBook(book)
+
+    const countWrites = () =>
+      (
+        harness.db.prepare('SELECT total_changes() AS n').get() as {
+          n: number
+        }
+      ).n
+
+    const before = countWrites()
+    await harness.repo.saveBook(book)
+    await harness.repo.saveBook(book)
+    const after = countWrites()
+
+    // Two rows per call -- the books and chapters upserts -- and nothing else. Deleting and
+    // re-inserting the segments instead would cost 12 more writes across these two calls, which
+    // is the shape that made a 400-chapter book do millions of row writes per run.
+    expect(after - before).toBeLessThanOrEqual(4)
+    const segmentRows = harness.db.prepare('SELECT COUNT(*) AS n FROM segments').get() as {
+      n: number
+    }
+    expect(segmentRows.n).toBe(6)
   })
 })

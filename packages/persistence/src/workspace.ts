@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { migrateSchema } from './schema.js'
 
@@ -44,16 +44,22 @@ export function openWorkspace(layout: WorkspaceLayout): DatabaseSync {
   mkdirSync(layout.outputDir, { recursive: true })
 
   const db = new DatabaseSync(layout.dbPath)
+  // busy_timeout FIRST: switching the journal mode needs an exclusive lock, so two processes
+  // opening a fresh workspace at the same moment would otherwise both die with
+  // `database is locked` before any timeout was in effect.
+  db.exec('PRAGMA busy_timeout = 5000')
+  // WAL then lets a reader and a writer coexist. PLAN.md has the web app and a separate worker
+  // both submitting jobs, so two processes on one workspace is expected. The mode is a durable
+  // property of the file, so this is a no-op once set -- and it is only an optimization: a
+  // filesystem that cannot support WAL (a Windows drive mounted into WSL2, a network share)
+  // keeps the rollback journal, which is still correct.
+  try {
+    db.exec('PRAGMA journal_mode = WAL')
+  } catch {
+    // Keep the existing journal mode; busy_timeout above is what prevents the hard failure.
+  }
   migrateSchema(db)
   return db
-}
-
-/** Atomic write: write to temp file then rename. */
-export function atomicWriteFile(targetPath: string, data: string | Buffer): void {
-  mkdirSync(dirname(targetPath), { recursive: true })
-  const tmp = `${targetPath}.tmp.${process.pid}-${Date.now()}`
-  writeFileSync(tmp, data)
-  renameSync(tmp, targetPath)
 }
 
 /** SHA-256 of a file on disk. */

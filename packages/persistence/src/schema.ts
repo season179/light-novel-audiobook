@@ -39,8 +39,12 @@ migrations.set(
     UNIQUE(chapter_id, position)
   );
 
+  -- Deliberately no foreign key to segments. This is the reuse ledger: rows are
+  -- content-addressed by (segment_id, input_identity) and revalidated against the bytes on
+  -- disk before use, so referential integrity to a table nothing reads buys nothing -- while
+  -- a cascade from books/chapters/segments would delete completed audio on every saveBook.
   CREATE TABLE artifacts (
-    segment_id TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+    segment_id TEXT NOT NULL,
     input_identity TEXT NOT NULL,
     wav_path TEXT NOT NULL,
     sha256 TEXT NOT NULL,
@@ -49,8 +53,11 @@ migrations.set(
     PRIMARY KEY(segment_id, input_identity)
   );
 
+  -- Append-only claim ledger, so also deliberately without a foreign key to books:
+  -- re-saving book metadata must never be able to delete a claim on an output version.
+  -- PRIMARY KEY(book_id, version) is what makes a reservation unique, enforced by the schema.
   CREATE TABLE output_reservations (
-    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    book_id TEXT NOT NULL,
     version INTEGER NOT NULL,
     m4b_path TEXT NOT NULL,
     chapter_paths_json TEXT NOT NULL,
