@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-25T01:27:17.734Z",
+  "generatedAt": "2026-07-25T01:57:46.246Z",
   "decision": "go",
   "scope": "issue-5-spike-only",
   "git": {
-    "implementationCommit": "c403cd61b1d6410671fd51a52b5aac16dd76f511",
-    "implementationTree": "5c37f2cd4cf3e0079daf539446fd690a8fe4bed0",
-    "canonicalSourceSetSha256": "100b897f98ecff9906528dfc95d5f3e587b8060f19a5b7e67c5899fe8e5dd024",
+    "implementationCommit": "7a0ed3c935d5980838a0c7a59ca416ce884ef53d",
+    "implementationTree": "3ab52d23ed48408556bb5e64d0cbfcea2822feb9",
+    "canonicalSourceSetSha256": "3e8ca2448d349761846d8e53cd3d49d89550a8f7f7f83645aedfc2fbc3bcfd38",
     "sourceFiles": [
       ".github/workflows/ci.yml",
       "biome.json",
@@ -15,6 +15,7 @@
       "packages/llama-cpp-spike/README.md",
       "packages/llama-cpp-spike/package.json",
       "packages/llama-cpp-spike/provenance.json",
+      "packages/llama-cpp-spike/scripts/host-runtime-safety.ts",
       "packages/llama-cpp-spike/scripts/prepare-host.sh",
       "packages/llama-cpp-spike/scripts/real-host-smoke.ts",
       "packages/llama-cpp-spike/src/client.ts",
@@ -27,6 +28,7 @@
       "packages/llama-cpp-spike/src/slot-pool.ts",
       "packages/llama-cpp-spike/test/client.test.ts",
       "packages/llama-cpp-spike/test/evidence.test.ts",
+      "packages/llama-cpp-spike/test/host-runtime-safety.test.ts",
       "packages/llama-cpp-spike/test/llama-fixture-server.ts",
       "packages/llama-cpp-spike/tsconfig.json",
       "pnpm-lock.yaml",
@@ -59,6 +61,24 @@
     "cleanSourceCheckout": true,
     "cleanRebuild": true,
     "ext4": true,
+    "externalRootProof": {
+      "canonicalized": true,
+      "ext4": true,
+      "outsideWorktree": true,
+      "outsideRepository": true,
+      "outsideGitDirectory": true,
+      "overlapCheckedBothDirections": true,
+      "symlinkComponentsRejected": true,
+      "validatedPathClasses": [
+        "binary",
+        "license",
+        "manifest",
+        "model",
+        "runtime",
+        "source",
+        "temporary"
+      ]
+    },
     "modelRepository": "bartowski/SmolLM2-135M-Instruct-GGUF",
     "modelRevision": "09816acd5d99df7be770d85ea30822623dab342c",
     "modelSha256": "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d"
