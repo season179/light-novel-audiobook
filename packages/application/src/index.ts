@@ -1,4 +1,5 @@
 export { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
+export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   GenerateAudiobook,
   type GenerateAudiobookCommand,

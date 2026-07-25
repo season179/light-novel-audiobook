@@ -27,6 +27,7 @@ import {
   type ReusableSegmentQuery,
   type SpeechEngine,
   type SpeechRenderRequest,
+  withDirectorContentIdentity,
 } from '../src/index.js'
 
 const sourceHash = 'b'.repeat(64)
@@ -482,7 +483,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.repository.reservations).toHaveLength(1)
   })
 
-  it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
+  it('resumes a completed job when only the upload path changes, and still rejects changed inputs', async () => {
     await app.useCase.execute({
       jobId: 'job-bound-inputs',
       epubPath: '/uploads/story.epub',
@@ -491,14 +492,21 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     })
     const extractionCount = app.extractor.calls.length
 
-    await expect(
-      app.useCase.execute({
-        jobId: 'job-bound-inputs',
-        epubPath: '/uploads/renamed-story.epub',
-        epubSha256: sourceHash,
-        voices: makeCast(),
-      }),
-    ).rejects.toThrow('stale for the requested generation inputs')
+    // Issue #54 item 3: the upload path is where the EPUB sat, not what it is. A web upload that
+    // lands in a fresh temp path per attempt must resume, not wedge. Pre-fix this rejected with
+    // 'stale for the requested generation inputs'.
+    const renamed = await app.useCase.execute({
+      jobId: 'job-bound-inputs',
+      epubPath: '/tmp/upload-9f2k1-renamed.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    expect(renamed.job.state).toBe('completed')
+    expect(renamed.output.m4bPath).toBe('/workspace/A-Small-Story-v001.m4b')
+    expect(renamed.reusedSegments).toBe(4)
+    expect(app.extractor.calls).toHaveLength(extractionCount)
+
+    // The content hash still binds: a different EPUB under the same job stays stale.
     await expect(
       app.useCase.execute({
         jobId: 'job-bound-inputs',
@@ -562,7 +570,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       audioAssemblerIdentity: string,
     ) =>
       createGenerationCommandIdentity({
-        epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
         voices: makeCast(),
         epubExtractorIdentity,
@@ -582,10 +589,29 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     ).not.toBe(original)
   })
 
+  it('excludes the upload path from the command identity while still binding the content hash', () => {
+    const base = {
+      epubSha256: sourceHash,
+      voices: makeCast(),
+      epubExtractorIdentity: app.extractor.identity,
+      directorIdentity: app.director.identity,
+      speechEngineIdentity: app.speech.identity,
+      audioAssemblerIdentity: app.assembler.identity,
+    }
+    const identity = createGenerationCommandIdentity(base)
+    // No path input exists to vary; the same content inputs must hash identically across calls.
+    expect(createGenerationCommandIdentity({ ...base })).toBe(identity)
+    expect(createGenerationCommandIdentity({ ...base, epubSha256: 'e'.repeat(64) })).not.toBe(
+      identity,
+    )
+    expect(
+      createGenerationCommandIdentity({ ...base, directorIdentity: 'other-director' }),
+    ).not.toBe(identity)
+  })
+
   it('rejects an active duplicate request and only recovers with explicit abandonment', async () => {
     const voices = makeCast()
     const identity = createGenerationCommandIdentity({
-      epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices,
       epubExtractorIdentity: app.extractor.identity,
@@ -666,6 +692,64 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(resumed.reusedSegments).toBe(2)
     expect(resumed.generatedSegments).toBe(2)
     expect(app.speech.endCalls).toBe(2)
+  })
+
+  it('resumes when the director moved hosts, and still stales when its content identity moved', async () => {
+    // Issue #54 item 2: a real director hashes its baseUrl and GPU lease lock path into its
+    // self-reported identity. The composition root wraps it with a content-only identity, so a
+    // brain-port move or lock-file move between crash and resume must not wedge the job.
+    const voices = makeCast()
+    const contentIdentity = 'gemma-content:model-1:prompt-1:schema-1:settings-1'
+    const wrapped = (adapterIdentity: string): FakeDirector => {
+      const inner = new FakeDirector(app.events, false, adapterIdentity)
+      const model = withDirectorContentIdentity(inner, contentIdentity)
+      // Keep the test's call counting on the wrapper's inner adapter.
+      return Object.assign(model, { inner }) as unknown as FakeDirector
+    }
+    const makeUseCase = (directorModel: DirectorModel): GenerateAudiobook =>
+      new GenerateAudiobook({
+        epubExtractor: app.extractor,
+        directorModel,
+        speechEngine: app.speech,
+        audioAssembler: app.assembler,
+        jobs: app.repository,
+      })
+
+    app.speech.failOnceAtRenderCall = 3
+    await expect(
+      makeUseCase(wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock')).execute({
+        jobId: 'job-moved-director',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices,
+      }),
+    ).rejects.toThrow('synthetic speech failure')
+
+    // Same content, different self-reported adapter identity (host/port/lock path moved): resumes.
+    const resumed = await makeUseCase(
+      wrapped('gemma-self-hash:http://localhost:9999:/var/lock/lease-b.lock'),
+    ).execute({
+      jobId: 'job-moved-director',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices,
+    })
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.reusedSegments).toBe(2)
+
+    // A genuinely different direction content identity still stales the job.
+    const redirected = withDirectorContentIdentity(
+      new FakeDirector(app.events),
+      'gemma-content:model-2:prompt-2:schema-1:settings-1',
+    )
+    await expect(
+      makeUseCase(redirected).execute({
+        jobId: 'job-moved-director',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices,
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
   })
 
   it('rejects an extractor result whose content hash differs from the bound EPUB', async () => {

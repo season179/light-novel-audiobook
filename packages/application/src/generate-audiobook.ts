@@ -70,7 +70,6 @@ export class GenerateAudiobook {
 
   async execute(command: GenerateAudiobookCommand): Promise<GenerateAudiobookResult> {
     const commandIdentity = createGenerationCommandIdentity({
-      epubPath: command.epubPath,
       epubSha256: command.epubSha256,
       voices: command.voices,
       epubExtractorIdentity: this.epubExtractor.identity,

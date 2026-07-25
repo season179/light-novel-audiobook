@@ -37,6 +37,11 @@ export interface AudiobookAdapterFactories {
   /**
    * MUST return a director that has not been released. `GemmaDirectorModel.release()` memoises its
    * shutdown and every later `directChapter()` throws, so this has to construct per run.
+   *
+   * #21: wrap the real adapter so the command identity binds WHAT it is, not WHERE it ran —
+   * `withDirectorContentIdentity(model, createDirectorContentIdentity(options))` (issue #54). The
+   * adapter's self-reported identity hashes in its baseUrl and GPU lease lock path, so an
+   * unwrapped real director wedges every resumable job on a port or lock-file move.
    */
   readonly createDirectorModel?: (() => DirectorModel | Promise<DirectorModel>) | undefined
   /** Stateless in practice; a shared instance is fine. */
