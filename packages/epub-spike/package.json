@@ -11,6 +11,7 @@
     "test": "vitest run --root ../.. packages/epub-spike/test"
   },
   "dependencies": {
+    "@light-novel-audiobook/epub-ingestion": "workspace:*",
     "fflate": "0.8.3",
     "saxes": "6.0.0"
   },
