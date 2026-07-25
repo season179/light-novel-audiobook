@@ -7,6 +7,7 @@ import { runExactlyThree } from './orchestrator.js'
 import { enforceFallbackOrder, profileById } from './profiles.js'
 import { withPinnedRuntime } from './runtime.js'
 import { fallbackHistorySchema } from './schemas.js'
+import { syntheticOperationalStatus } from './status.js'
 import { validateWorkspaceInputs } from './workspace.js'
 
 const execFile = promisify(execFileCallback)
@@ -60,8 +61,12 @@ async function main(): Promise<void> {
     : undefined
   enforceFallbackOrder(profile, history)
 
-  const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel'])
-  const repositoryRoot = stdout.trim()
+  const [{ stdout: repositoryOutput }, { stdout: gitDirectoryOutput }] = await Promise.all([
+    execFile('git', ['rev-parse', '--show-toplevel']),
+    execFile('git', ['rev-parse', '--absolute-git-dir']),
+  ])
+  const repositoryRoot = repositoryOutput.trim()
+  const gitDirectory = gitDirectoryOutput.trim()
   const inputs = await validateWorkspaceInputs({
     workspaceRoot: required(args, '--workspace'),
     repositoryRoot,
@@ -82,27 +87,26 @@ async function main(): Promise<void> {
 
   const result = await withPinnedRuntime({
     runtimeRoot,
+    repositoryRoot,
+    gitDirectory,
     profile,
     port: portValue,
-    run: async (gateway, host, child) =>
+    run: async (gateway, runtime) =>
       await runExactlyThree({
         experimentId,
         datasetClass,
         inputs,
         profile,
-        host,
+        runtime,
         gateway,
-        child,
       }),
   })
   if (datasetClass === 'synthetic_operational') {
-    process.stdout.write(
-      `${result.operationalPassed ? 'SYNTHETIC OPERATIONAL SMOKE COMPLETE' : 'SYNTHETIC OPERATIONAL SMOKE FAILED'} — NOT REPRESENTATIVE ACCURACY\n`,
-    )
-    if (!result.operationalPassed) process.exitCode = 1
+    process.stdout.write(`${syntheticOperationalStatus(result.value.operationalPassed)}\n`)
+    if (!result.value.operationalPassed) process.exitCode = 1
   } else {
-    process.stdout.write(`${result.overallPassed ? 'PASS' : 'FAIL'}\n`)
-    if (!result.overallPassed) process.exitCode = 1
+    process.stdout.write(`${result.value.overallPassed ? 'PASS' : 'FAIL'}\n`)
+    if (!result.value.overallPassed) process.exitCode = 1
   }
 }
 

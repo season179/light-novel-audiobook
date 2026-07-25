@@ -101,14 +101,35 @@ export function enforceFallbackOrder(
   if (!history || history.attempts.length !== profile.order) {
     throw new Error('Every preceding fallback attempt is required')
   }
+  const reportHashes = new Set<string>()
   for (let index = 0; index < profile.order; index += 1) {
     const expected = BENCHMARK_PROFILES[index]
     const attempt = history.attempts[index]
     if (!expected || !attempt || attempt.profile_id !== expected.id || attempt.overall_passed) {
       throw new Error('Fallback history is not in the locked order')
     }
+    if (reportHashes.has(attempt.report_sha256))
+      throw new Error('Fallback reports must be distinct')
+    reportHashes.add(attempt.report_sha256)
+    if (new Set(attempt.failure_reasons).size !== attempt.failure_reasons.length) {
+      throw new Error('Fallback failure reasons must be unique')
+    }
+    const expectedEvaluationReason =
+      index === 0 ? 'primary_locked' : index === 1 ? 'mature_content_refusal' : 'ordered_fallback'
+    if (attempt.evaluation_reason !== expectedEvaluationReason) {
+      throw new Error('Fallback evaluation reason does not match the locked transition')
+    }
   }
-  if (profile.order === 1 && history.attempts[0]?.reason !== 'mature_content_refusal') {
+  const primaryReasons = history.attempts[0]?.failure_reasons ?? []
+  if (profile.order === 1 && !primaryReasons.includes('mature_content_refusal')) {
     throw new Error('The first fallback is reserved for mature-content obstruction')
+  }
+  if (
+    profile.order >= 2 &&
+    !primaryReasons.some(
+      (reason) => reason === 'acceptance_failed' || reason === 'operational_impractical',
+    )
+  ) {
+    throw new Error('Later fallbacks require a documented ordinary primary failure')
   }
 }

@@ -1,13 +1,17 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import type { ResourceCapture } from './schemas.js'
 
 const execFile = promisify(execFileCallback)
 
-export interface ResourceResult {
-  readonly elapsedMs: number
-  readonly peakVramMib: number
-  readonly peakRamMib: number
+export interface ResourceSample {
+  readonly ramMib: number
+  readonly vramMib: number
+}
+
+export interface ResourceCollector {
+  sample(): Promise<ResourceSample>
 }
 
 export interface GatewayResponse {
@@ -15,72 +19,128 @@ export interface GatewayResponse {
   readonly status: number
   readonly raw: string
   readonly json: unknown
-  readonly resources: ResourceResult
+  readonly jsonValid: boolean
+}
+
+export interface GatewayCompletion {
+  readonly response: GatewayResponse | null
+  readonly failure: 'none' | 'timeout' | 'transport'
+  readonly resources: ResourceCapture
 }
 
 export interface ModelGateway {
   countTokens(content: string): Promise<number>
-  complete(body: Record<string, unknown>): Promise<GatewayResponse>
+  complete(body: Record<string, unknown>): Promise<GatewayCompletion>
 }
 
-async function effectiveWslRamMib(): Promise<number> {
-  const text = await readFile('/proc/meminfo', 'utf8')
-  const total = Number(/^MemTotal:\s+(\d+) kB$/m.exec(text)?.[1] ?? 0)
-  const available = Number(/^MemAvailable:\s+(\d+) kB$/m.exec(text)?.[1] ?? 0)
-  return Math.ceil((total - available) / 1024)
+class WslResourceCollector implements ResourceCollector {
+  async sample(): Promise<ResourceSample> {
+    const [text, result] = await Promise.all([
+      readFile('/proc/meminfo', 'utf8'),
+      execFile('nvidia-smi', ['--query-gpu=memory.used', '--format=csv,noheader,nounits']),
+    ])
+    const total = Number(/^MemTotal:\s+(\d+) kB$/m.exec(text)?.[1] ?? Number.NaN)
+    const available = Number(/^MemAvailable:\s+(\d+) kB$/m.exec(text)?.[1] ?? Number.NaN)
+    const vramValues = result.stdout
+      .trim()
+      .split('\n')
+      .map((value) => Number(value.trim()))
+      .filter(Number.isFinite)
+    if (!Number.isFinite(total) || !Number.isFinite(available) || vramValues.length === 0) {
+      throw new Error('Resource collector returned incomplete data')
+    }
+    return {
+      ramMib: Math.ceil((total - available) / 1024),
+      vramMib: Math.ceil(Math.max(...vramValues)),
+    }
+  }
 }
 
-async function deviceVramMib(): Promise<number> {
-  const { stdout } = await execFile('nvidia-smi', [
-    '--query-gpu=memory.used',
-    '--format=csv,noheader,nounits',
-  ])
-  const values = stdout
-    .trim()
-    .split('\n')
-    .map((value) => Number(value.trim()))
-    .filter(Number.isFinite)
-  return Math.ceil(Math.max(0, ...values))
+export interface MeasuredOutcome<T> {
+  readonly value: T | null
+  readonly error: unknown
+  readonly resources: ResourceCapture
 }
 
-async function measured<T>(
-  operation: () => Promise<T>,
-): Promise<{ value: T; resources: ResourceResult }> {
+export async function measureOperation<T>(options: {
+  operation: () => Promise<T>
+  collector: ResourceCollector
+  sampleIntervalMs?: number
+}): Promise<MeasuredOutcome<T>> {
   const started = performance.now()
   let peakVramMib = 0
   let peakRamMib = 0
-  let stopped = false
-  const sample = async (): Promise<void> => {
-    const [ram, vram] = await Promise.all([effectiveWslRamMib(), deviceVramMib()])
-    peakRamMib = Math.max(peakRamMib, ram)
-    peakVramMib = Math.max(peakVramMib, vram)
-  }
-  await sample()
-  const timer = setInterval(() => {
-    if (!stopped) void sample().catch(() => undefined)
-  }, 250)
-  try {
-    const value = await operation()
-    await sample()
-    return {
-      value,
-      resources: {
-        elapsedMs: Math.ceil(performance.now() - started),
-        peakVramMib,
-        peakRamMib,
-      },
+  let sampleCount = 0
+  let collectorFailed = false
+  let initialSampleCaptured = false
+  let finalSampleCaptured = false
+  let sampleChain = Promise.resolve()
+
+  const sample = async (phase: 'initial' | 'periodic' | 'final'): Promise<void> => {
+    try {
+      const value = await options.collector.sample()
+      peakRamMib = Math.max(peakRamMib, value.ramMib)
+      peakVramMib = Math.max(peakVramMib, value.vramMib)
+      sampleCount += 1
+      if (phase === 'initial') initialSampleCaptured = true
+      if (phase === 'final') finalSampleCaptured = true
+    } catch {
+      collectorFailed = true
     }
+  }
+  const enqueue = (phase: 'initial' | 'periodic' | 'final'): Promise<void> => {
+    sampleChain = sampleChain.then(async () => await sample(phase))
+    return sampleChain
+  }
+
+  await enqueue('initial')
+  const timer = setInterval(() => {
+    void enqueue('periodic')
+  }, options.sampleIntervalMs ?? 250)
+  let value: T | null = null
+  let error: unknown
+  try {
+    value = await options.operation()
+  } catch (caught: unknown) {
+    error = caught
   } finally {
-    stopped = true
     clearInterval(timer)
+    await sampleChain
+    await enqueue('final')
+  }
+
+  const complete = !collectorFailed && initialSampleCaptured && finalSampleCaptured
+  return {
+    value,
+    error,
+    resources: {
+      method_version: 'wsl-system-resource-sampling@2',
+      elapsed_ms: Math.ceil(performance.now() - started),
+      peak_vram_mib: peakVramMib,
+      peak_ram_mib: peakRamMib,
+      sample_count: sampleCount,
+      initial_sample_captured: initialSampleCaptured,
+      final_sample_captured: finalSampleCaptured,
+      complete,
+      error_code: complete ? 'none' : 'collector_failed',
+    },
+  }
+}
+
+class RequestFailure extends Error {
+  constructor(readonly failure: 'timeout' | 'transport') {
+    super('llama.cpp request failed')
   }
 }
 
 export class LlamaCppGateway implements ModelGateway {
+  private readonly collector: ResourceCollector
+
   constructor(
     private readonly origin: string,
     private readonly apiKey: string,
     private readonly timeoutMs = 3_600_000,
+    collector?: ResourceCollector,
   ) {
     const endpoint = new URL(origin)
     if (
@@ -90,6 +150,7 @@ export class LlamaCppGateway implements ModelGateway {
     ) {
       throw new Error('Benchmark endpoint must be an HTTP numeric loopback origin')
     }
+    this.collector = collector ?? new WslResourceCollector()
   }
 
   async countTokens(content: string): Promise<number> {
@@ -100,39 +161,62 @@ export class LlamaCppGateway implements ModelGateway {
     return body.tokens.length
   }
 
-  async complete(body: Record<string, unknown>): Promise<GatewayResponse> {
-    const measuredResponse = await measured(() =>
-      this.request('/v1/chat/completions', body, this.timeoutMs),
-    )
-    return { ...measuredResponse.value, resources: measuredResponse.resources }
+  async complete(body: Record<string, unknown>): Promise<GatewayCompletion> {
+    const measured = await measureOperation({
+      operation: async () => await this.request('/v1/chat/completions', body, this.timeoutMs),
+      collector: this.collector,
+    })
+    if (measured.error) {
+      return {
+        response: null,
+        failure:
+          measured.error instanceof RequestFailure
+            ? measured.error.failure
+            : ('transport' as const),
+        resources: measured.resources,
+      }
+    }
+    return { response: measured.value, failure: 'none', resources: measured.resources }
   }
 
   private async request(
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
-  ): Promise<Omit<GatewayResponse, 'resources'>> {
+  ): Promise<GatewayResponse> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new DOMException('llama.cpp request timeout', 'TimeoutError'))
+    }, timeoutMs)
     try {
-      const response = await fetch(`${this.origin.slice(0, -1)}${path}`, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
+      let response: Response
+      try {
+        response = await fetch(`${this.origin.slice(0, -1)}${path}`, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${this.apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+      } catch (error: unknown) {
+        void error
+        throw new RequestFailure(timedOut ? 'timeout' : 'transport')
+      }
       const raw = await response.text()
       let json: unknown = null
+      let jsonValid = false
       try {
         json = JSON.parse(raw) as unknown
+        jsonValid = true
       } catch {
-        // The immutable private raw response retains the parse evidence.
+        // Exact private bytes and explicit validity are retained in the run manifest.
       }
-      return { ok: response.ok, status: response.status, raw, json }
+      return { ok: response.ok, status: response.status, raw, json, jsonValid }
     } finally {
       clearTimeout(timer)
     }

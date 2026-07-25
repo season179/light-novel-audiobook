@@ -1,26 +1,43 @@
-import type { ChildProcess } from 'node:child_process'
-import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { link, lstat, mkdir, open, readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   canonicalJson,
   canonicalSha256,
   type EvaluationRun,
+  type JsonValue,
   RepresentativeCorpusScorer,
   sha256,
 } from '@light-novel-audiobook/scoring-harness'
-import type { ModelGateway } from './gateway.js'
+import type { GatewayCompletion, ModelGateway } from './gateway.js'
 import type { BenchmarkProfile } from './profiles.js'
 import { OUTPUT_SCHEMA_VERSION, PROMPT_VERSION, prepareRequest, SYSTEM_PROMPT } from './prompt.js'
-import type { HostManifest } from './runtime.js'
+import { type PinnedRuntimeContext, readChildExitEvidence } from './runtime.js'
 import {
   type BenchmarkRunManifest,
   benchmarkRunManifestSchema,
+  type ChildExitEvidence,
+  type ExperimentPlan,
+  experimentPlanSchema,
   type ModelOutput,
   modelOutputSchema,
+  type Performance,
+  type ResourceCapture,
 } from './schemas.js'
 import type { ValidatedInputs } from './workspace.js'
 
 const RUN_COUNT = 3
+const PLAN_NAME = 'experiment-plan.json'
+const REPORT_NAME = 'sanitized-report.json'
+const LOCK_NAME = '.experiment.lock'
+const RUN_NAMES = ['run-1.private.json', 'run-2.private.json', 'run-3.private.json'] as const
+const ALLOWED_ARTIFACTS = new Set([PLAN_NAME, REPORT_NAME, LOCK_NAME, ...RUN_NAMES])
+const EMPTY_PERFORMANCE: Performance = {
+  prompt_tokens: null,
+  generated_tokens: null,
+  prompt_tokens_per_second: null,
+  generated_tokens_per_second: null,
+}
 
 async function requirePrivateDirectory(path: string): Promise<void> {
   const details = await lstat(path)
@@ -47,11 +64,11 @@ async function createExperimentRoot(workspaceRoot: string, experimentId: string)
   return experimentRoot
 }
 
-async function writeImmutableJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`
+async function writeImmutableJson(path: string, value: JsonValue): Promise<void> {
+  const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`
   const handle = await open(temporary, 'wx', 0o600)
   try {
-    await handle.writeFile(`${canonicalJson(value as never)}\n`)
+    await handle.writeFile(`${canonicalJson(value)}\n`)
     await handle.sync()
   } finally {
     await handle.close()
@@ -60,6 +77,46 @@ async function writeImmutableJson(path: string, value: unknown): Promise<void> {
     await link(temporary, path)
   } finally {
     await rm(temporary, { force: true })
+  }
+}
+
+async function readCanonicalJson(path: string): Promise<{ value: unknown; bytes: string }> {
+  const bytes = await readFile(path, 'utf8')
+  const value = JSON.parse(bytes) as unknown
+  if (`${canonicalJson(value as JsonValue)}\n` !== bytes) {
+    throw new Error('Immutable experiment artifact is not canonical JSON')
+  }
+  return { value, bytes }
+}
+
+async function assertExactArtifacts(experimentRoot: string): Promise<Set<string>> {
+  const entries = await readdir(experimentRoot, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !ALLOWED_ARTIFACTS.has(entry.name)) {
+      throw new Error('Experiment contains an unexpected, non-file, or symlink artifact')
+    }
+  }
+  return new Set(entries.map((entry) => entry.name))
+}
+
+async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
+  const lockPath = join(experimentRoot, LOCK_NAME)
+  let lock: Awaited<ReturnType<typeof open>>
+  try {
+    lock = await open(lockPath, 'wx', 0o600)
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error('Experiment is already locked by another process')
+    }
+    throw error
+  }
+  try {
+    await lock.writeFile('exclusive\n')
+    await lock.sync()
+    return await run()
+  } finally {
+    await lock.close()
+    await rm(lockPath, { force: true })
   }
 }
 
@@ -129,10 +186,7 @@ function predictions(output: ModelOutput, inputs: ValidatedInputs): EvaluationRu
   })
 }
 
-function parseProviderResponse(json: unknown): {
-  output: ModelOutput
-  performance: BenchmarkRunManifest['performance']
-} {
+function parseProviderResponse(json: unknown): { output: ModelOutput; performance: Performance } {
   const body = json as {
     choices?: Array<{ message?: { content?: unknown } }>
     timings?: Record<string, unknown>
@@ -160,13 +214,11 @@ function evaluationRun(options: {
   runIndex: number
   inputs: ValidatedInputs
   profile: BenchmarkProfile
-  host: HostManifest
+  runtime: PinnedRuntimeContext
   request: ReturnType<typeof prepareRequest>
   output: ModelOutput
-  elapsedMs: number
-  peakVramMib: number
-  peakRamMib: number
-  crashed: boolean
+  resources: ResourceCapture
+  childExit: ChildExitEvidence
   outOfMemory: boolean
 }): EvaluationRun {
   return {
@@ -176,7 +228,7 @@ function evaluationRun(options: {
     corpus_sha256: options.inputs.corpusSha256,
     model: {
       adapter_id: 'llama.cpp-openai-chat-completions',
-      adapter_version: 'gemma-benchmark-adapter@1',
+      adapter_version: 'gemma-benchmark-adapter@2',
       model_id: options.profile.modelId,
       model_sha256: options.profile.modelSha256,
       prompt_version: PROMPT_VERSION,
@@ -199,27 +251,311 @@ function evaluationRun(options: {
         threads: options.profile.threads,
         reasoning: options.profile.reasoning,
         prompt_cache: false,
-        llama_cpp_commit: options.host.llamaCommit,
-        llama_cpp_binary_sha256: options.host.binarySha256,
-        cuda_compiler: options.host.cudaCompiler,
+        llama_cpp_commit: options.runtime.host.llamaCommit,
+        llama_cpp_binary_sha256: options.runtime.host.binarySha256,
+        cuda_compiler: options.runtime.host.cudaCompiler,
+        host_manifest_sha256: options.runtime.hostManifestSha256,
+        runtime_configuration_sha256: options.runtime.runtimeConfigurationSha256,
       },
     },
     operational: {
       resource_measurement: {
-        method_version: 'wsl-system-resource-sampling@1',
+        method_version: 'wsl-system-resource-sampling@2',
         collector_id: 'proc-meminfo-and-nvidia-smi-device-total',
-        collector_version: '1.0.0',
+        collector_version: '2.0.0',
         elapsed_scope: 'complete-direction-run',
         memory_unit: 'mebibyte',
       },
-      elapsed_ms: options.elapsedMs,
-      peak_vram_mib: options.peakVramMib,
-      peak_ram_mib: options.peakRamMib,
-      crashed: options.crashed,
+      elapsed_ms: options.resources.elapsed_ms,
+      peak_vram_mib: options.resources.peak_vram_mib,
+      peak_ram_mib: options.resources.peak_ram_mib,
+      crashed: options.childExit.observed_exited,
       out_of_memory: options.outOfMemory,
     },
     predictions: predictions(options.output, options.inputs),
   }
+}
+
+function makePlan(options: {
+  experimentId: string
+  datasetClass: 'private_representative' | 'synthetic_operational'
+  inputs: ValidatedInputs
+  profile: BenchmarkProfile
+  runtime: PinnedRuntimeContext
+  request: ReturnType<typeof prepareRequest>
+}): ExperimentPlan {
+  return {
+    schema_version: 'benchmark-experiment-plan@2',
+    experiment_id: options.experimentId,
+    dataset_class: options.datasetClass,
+    profile_id: options.profile.id,
+    profile_order: options.profile.order,
+    run_count: 3,
+    source_sha256: options.inputs.sourceSha256,
+    corpus_sha256: options.inputs.corpusSha256,
+    context_sha256: canonicalSha256(options.inputs.context as unknown as JsonValue),
+    model_id: options.profile.modelId,
+    model_sha256: options.profile.modelSha256,
+    host_manifest_sha256: options.runtime.hostManifestSha256,
+    runtime_binary_sha256: options.runtime.host.binarySha256,
+    runtime_configuration_sha256: options.runtime.runtimeConfigurationSha256,
+    request_sha256: options.request.requestSha256,
+    prompt_sha256: options.request.promptSha256,
+    output_schema_sha256: options.request.outputSchemaSha256,
+  }
+}
+
+function fallbackResources(elapsedMs: number): ResourceCapture {
+  return {
+    method_version: 'wsl-system-resource-sampling@2',
+    elapsed_ms: elapsedMs,
+    peak_vram_mib: 0,
+    peak_ram_mib: 0,
+    sample_count: 0,
+    initial_sample_captured: false,
+    final_sample_captured: false,
+    complete: false,
+    error_code: 'collector_failed',
+  }
+}
+
+function runSucceeded(manifest: BenchmarkRunManifest): boolean {
+  return (
+    manifest.result_state === 'completed' &&
+    manifest.failure_code === 'none' &&
+    manifest.provider_output_valid &&
+    manifest.raw_response_json_valid &&
+    manifest.provider_http_status !== null &&
+    manifest.provider_http_status >= 200 &&
+    manifest.provider_http_status < 300 &&
+    manifest.resources.complete &&
+    !manifest.child_exit.observed_exited &&
+    !manifest.evaluation_run.operational.crashed &&
+    !manifest.evaluation_run.operational.out_of_memory
+  )
+}
+
+export function operationalRunSetPassed(manifests: readonly BenchmarkRunManifest[]): boolean {
+  return (
+    manifests.length === RUN_COUNT &&
+    manifests.every((manifest, index) => manifest.run_index === index + 1 && runSucceeded(manifest))
+  )
+}
+
+function compareCanonical(left: unknown, right: unknown, message: string): void {
+  if (canonicalSha256(left as JsonValue) !== canonicalSha256(right as JsonValue)) {
+    throw new Error(message)
+  }
+}
+
+function validateResumedRun(options: {
+  manifest: BenchmarkRunManifest
+  rawFileBytes: string
+  runIndex: number
+  plan: ExperimentPlan
+  planSha256: string
+  inputs: ValidatedInputs
+  profile: BenchmarkProfile
+  runtime: PinnedRuntimeContext
+  request: ReturnType<typeof prepareRequest>
+}): void {
+  const { manifest } = options
+  if (
+    manifest.experiment_id !== options.plan.experiment_id ||
+    manifest.dataset_class !== options.plan.dataset_class ||
+    manifest.run_index !== options.runIndex ||
+    manifest.plan_sha256 !== options.planSha256 ||
+    manifest.host_manifest_sha256 !== options.runtime.hostManifestSha256 ||
+    manifest.runtime_configuration_sha256 !== options.runtime.runtimeConfigurationSha256 ||
+    manifest.request_sha256 !== options.request.requestSha256 ||
+    manifest.evaluation_run.source_sha256 !== options.inputs.sourceSha256 ||
+    manifest.evaluation_run.corpus_sha256 !== options.inputs.corpusSha256 ||
+    manifest.evaluation_run.model.model_id !== options.profile.modelId ||
+    manifest.evaluation_run.model.model_sha256 !== options.profile.modelSha256
+  ) {
+    throw new Error('Resumed run identity is stale or mismatched')
+  }
+  if (sha256(manifest.raw_response) !== manifest.raw_response_sha256) {
+    throw new Error('Resumed raw response hash mismatch')
+  }
+  if (`${canonicalJson(manifest as unknown as JsonValue)}\n` !== options.rawFileBytes) {
+    throw new Error('Resumed run bytes are not canonical')
+  }
+  let rawJson: unknown = null
+  let rawJsonValid = false
+  try {
+    rawJson = JSON.parse(manifest.raw_response) as unknown
+    rawJsonValid = true
+  } catch {
+    // Explicitly compared below.
+  }
+  if (rawJsonValid !== manifest.raw_response_json_valid) {
+    throw new Error('Resumed raw response parse evidence mismatch')
+  }
+
+  let output = allRefusals(options.inputs)
+  let parsedPerformance = EMPTY_PERFORMANCE
+  let providerValid = false
+  if (
+    rawJsonValid &&
+    manifest.provider_http_status !== null &&
+    manifest.provider_http_status >= 200 &&
+    manifest.provider_http_status < 300
+  ) {
+    try {
+      const parsed = parseProviderResponse(rawJson)
+      validateModelSemantics(parsed.output, options.inputs)
+      output = parsed.output
+      parsedPerformance = parsed.performance
+      providerValid = true
+    } catch {
+      // A malformed/model-invalid run must retain its deterministic surrogate.
+    }
+  }
+  if (providerValid !== manifest.provider_output_valid) {
+    throw new Error('Resumed provider-output validity mismatch')
+  }
+  const expectedState = providerValid
+    ? 'completed'
+    : manifest.provider_http_status !== null &&
+        manifest.provider_http_status >= 200 &&
+        manifest.provider_http_status < 300
+      ? 'model_output_invalid'
+      : 'request_failed'
+  let expectedFailure: BenchmarkRunManifest['failure_code']
+  if (manifest.child_exit.observed_exited) expectedFailure = 'runtime_exit'
+  else if (manifest.evaluation_run.operational.out_of_memory) expectedFailure = 'oom'
+  else if (!manifest.resources.complete) expectedFailure = 'resource_capture'
+  else if (providerValid) expectedFailure = 'none'
+  else if (manifest.provider_http_status === null) {
+    const transportCode =
+      rawJsonValid &&
+      typeof rawJson === 'object' &&
+      rawJson !== null &&
+      'error' in rawJson &&
+      ((rawJson as { error?: unknown }).error === 'timeout' ||
+        (rawJson as { error?: unknown }).error === 'transport')
+        ? (rawJson as { error: 'timeout' | 'transport' }).error
+        : 'transport'
+    expectedFailure = transportCode
+  } else if (manifest.provider_http_status >= 200 && manifest.provider_http_status < 300) {
+    expectedFailure = rawJsonValid ? 'schema' : 'malformed_json'
+  } else expectedFailure = 'http'
+  if (manifest.result_state !== expectedState || manifest.failure_code !== expectedFailure) {
+    throw new Error('Resumed result state or failure code mismatch')
+  }
+  compareCanonical(
+    manifest.performance,
+    providerValid ? parsedPerformance : EMPTY_PERFORMANCE,
+    'Resumed performance evidence mismatch',
+  )
+  const expectedRun = evaluationRun({
+    runIndex: options.runIndex,
+    inputs: options.inputs,
+    profile: options.profile,
+    runtime: options.runtime,
+    request: options.request,
+    output,
+    resources: manifest.resources,
+    childExit: manifest.child_exit,
+    outOfMemory: manifest.evaluation_run.operational.out_of_memory,
+  })
+  compareCanonical(manifest.evaluation_run, expectedRun, 'Resumed evaluation run mismatch')
+  if (manifest.failure_code === 'none' && !runSucceeded(manifest)) {
+    throw new Error('Resumed run falsely claims operational success')
+  }
+}
+
+async function createRun(options: {
+  runIndex: number
+  plan: ExperimentPlan
+  planSha256: string
+  inputs: ValidatedInputs
+  profile: BenchmarkProfile
+  runtime: PinnedRuntimeContext
+  request: ReturnType<typeof prepareRequest>
+  gateway: ModelGateway
+}): Promise<BenchmarkRunManifest> {
+  const started = performance.now()
+  let completion: GatewayCompletion
+  try {
+    completion = await options.gateway.complete(options.request.body)
+  } catch {
+    completion = {
+      response: null,
+      failure: 'transport',
+      resources: fallbackResources(Math.ceil(performance.now() - started)),
+    }
+  }
+  const childExit = readChildExitEvidence(options.runtime.child)
+  const response = completion.response
+  const rawResponse = response?.raw ?? canonicalJson({ error: completion.failure })
+  const rawJsonValid = response?.jsonValid ?? true
+  const outOfMemory = response ? /out of memory|cuda error/i.test(response.raw) : false
+  let output = allRefusals(options.inputs)
+  let performanceResult = EMPTY_PERFORMANCE
+  let providerOutputValid = false
+  let resultState: BenchmarkRunManifest['result_state'] = 'request_failed'
+  let failureCode: BenchmarkRunManifest['failure_code'] =
+    completion.failure === 'timeout'
+      ? 'timeout'
+      : completion.failure === 'transport'
+        ? 'transport'
+        : 'http'
+
+  if (response?.ok && response.jsonValid) {
+    try {
+      const parsed = parseProviderResponse(response.json)
+      validateModelSemantics(parsed.output, options.inputs)
+      output = parsed.output
+      performanceResult = parsed.performance
+      providerOutputValid = true
+      resultState = 'completed'
+      failureCode = 'none'
+    } catch {
+      resultState = 'model_output_invalid'
+      failureCode = 'schema'
+    }
+  } else if (response?.ok && !response.jsonValid) {
+    resultState = 'model_output_invalid'
+    failureCode = 'malformed_json'
+  }
+  if (outOfMemory) failureCode = 'oom'
+  if (!completion.resources.complete) failureCode = 'resource_capture'
+  if (childExit.observed_exited) failureCode = 'runtime_exit'
+
+  const run = evaluationRun({
+    runIndex: options.runIndex,
+    inputs: options.inputs,
+    profile: options.profile,
+    runtime: options.runtime,
+    request: options.request,
+    output,
+    resources: completion.resources,
+    childExit,
+    outOfMemory,
+  })
+  return benchmarkRunManifestSchema.parse({
+    schema_version: 'benchmark-run-manifest@2',
+    experiment_id: options.plan.experiment_id,
+    dataset_class: options.plan.dataset_class,
+    run_index: options.runIndex,
+    plan_sha256: options.planSha256,
+    host_manifest_sha256: options.runtime.hostManifestSha256,
+    runtime_configuration_sha256: options.runtime.runtimeConfigurationSha256,
+    request_sha256: options.request.requestSha256,
+    raw_response_sha256: sha256(rawResponse),
+    raw_response: rawResponse,
+    raw_response_json_valid: rawJsonValid,
+    provider_http_status: response?.status ?? null,
+    provider_output_valid: providerOutputValid,
+    result_state: resultState,
+    failure_code: failureCode,
+    performance: performanceResult,
+    resources: completion.resources,
+    child_exit: childExit,
+    evaluation_run: run,
+  })
 }
 
 export async function runExactlyThree(options: {
@@ -227,10 +563,14 @@ export async function runExactlyThree(options: {
   datasetClass: 'private_representative' | 'synthetic_operational'
   inputs: ValidatedInputs
   profile: BenchmarkProfile
-  host: HostManifest
+  runtime: PinnedRuntimeContext
   gateway: ModelGateway
-  child: ChildProcess
-}): Promise<{ reportPath: string; overallPassed: boolean; operationalPassed: boolean }> {
+}): Promise<{
+  experimentRoot: string
+  reportPath: string
+  overallPassed: boolean
+  operationalPassed: boolean
+}> {
   if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(options.experimentId)) {
     throw new Error('Experiment ID must be an opaque safe identifier')
   }
@@ -238,189 +578,144 @@ export async function runExactlyThree(options: {
     options.inputs.workspaceRoot,
     options.experimentId,
   )
-  const request = prepareRequest(
-    options.inputs.source,
-    options.inputs.corpus,
-    options.inputs.context,
-    options.profile.id,
-    {
-      seed: options.profile.seed,
-      temperature: options.profile.temperature,
-      topP: options.profile.topP,
-      maxTokens: options.profile.maxTokens,
-    },
-  )
-  const plan = {
-    schema_version: 'benchmark-experiment-plan@1',
-    experiment_id: options.experimentId,
-    dataset_class: options.datasetClass,
-    profile_id: options.profile.id,
-    run_count: RUN_COUNT,
-    source_sha256: options.inputs.sourceSha256,
-    corpus_sha256: options.inputs.corpusSha256,
-    context_sha256: canonicalSha256(options.inputs.context),
-    request_sha256: request.requestSha256,
-    runtime_binary_sha256: options.host.binarySha256,
-  }
-  const planPath = join(experimentRoot, 'experiment-plan.json')
-  try {
-    await writeImmutableJson(planPath, plan)
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    const existing = JSON.parse(await readFile(planPath, 'utf8')) as unknown
-    if (canonicalSha256(existing as never) !== canonicalSha256(plan as never)) {
-      throw new Error('Experiment ID already has a different immutable plan')
+  return await withExperimentLock(experimentRoot, async () => {
+    const artifacts = await assertExactArtifacts(experimentRoot)
+    const request = prepareRequest(
+      options.inputs.source,
+      options.inputs.corpus,
+      options.inputs.context,
+      options.profile.id,
+      {
+        seed: options.profile.seed,
+        temperature: options.profile.temperature,
+        topP: options.profile.topP,
+        maxTokens: options.profile.maxTokens,
+      },
+    )
+    const expectedPlan = makePlan({ ...options, request })
+    experimentPlanSchema.parse(expectedPlan)
+    const planPath = join(experimentRoot, PLAN_NAME)
+    let plan = expectedPlan
+    if (artifacts.has(PLAN_NAME)) {
+      const existing = await readCanonicalJson(planPath)
+      plan = experimentPlanSchema.parse(existing.value)
+      compareCanonical(plan, expectedPlan, 'Experiment plan is stale or mismatched')
+    } else {
+      await writeImmutableJson(planPath, expectedPlan as unknown as JsonValue)
     }
-  }
+    const planSha256 = canonicalSha256(plan as unknown as JsonValue)
 
-  const tokenMaterial = `${SYSTEM_PROMPT}\n${canonicalJson(request.body as never)}`
-  const promptTokens = await options.gateway.countTokens(tokenMaterial)
-  if (promptTokens + options.profile.maxTokens > options.profile.contextSize) {
-    throw new Error('Prompt and reserved output exceed the pinned 32K context')
-  }
+    const existingRunCount = RUN_NAMES.filter((name) => artifacts.has(name)).length
+    if (artifacts.has(REPORT_NAME) && existingRunCount !== RUN_COUNT) {
+      throw new Error('Sanitized report exists without exactly three run manifests')
+    }
 
-  const manifests: BenchmarkRunManifest[] = []
-  for (let runIndex = 1; runIndex <= RUN_COUNT; runIndex += 1) {
-    const runPath = join(experimentRoot, `run-${runIndex}.private.json`)
-    try {
-      const existing = benchmarkRunManifestSchema.parse(JSON.parse(await readFile(runPath, 'utf8')))
-      if (existing.request_sha256 !== request.requestSha256 || existing.run_index !== runIndex) {
-        throw new Error('Existing immutable run does not match this experiment')
+    const tokenMaterial = `${SYSTEM_PROMPT}\n${canonicalJson(request.body as unknown as JsonValue)}`
+    const promptTokens = await options.gateway.countTokens(tokenMaterial)
+    if (promptTokens + options.profile.maxTokens > options.profile.contextSize) {
+      throw new Error('Prompt and reserved output exceed the pinned 32K context')
+    }
+
+    const manifests: BenchmarkRunManifest[] = []
+    const manifestHashes: string[] = []
+    for (let runIndex = 1; runIndex <= RUN_COUNT; runIndex += 1) {
+      const runPath = join(experimentRoot, RUN_NAMES[runIndex - 1] as string)
+      if (artifacts.has(RUN_NAMES[runIndex - 1] as string)) {
+        const existing = await readCanonicalJson(runPath)
+        const manifest = benchmarkRunManifestSchema.parse(existing.value)
+        validateResumedRun({
+          manifest,
+          rawFileBytes: existing.bytes,
+          runIndex,
+          plan,
+          planSha256,
+          inputs: options.inputs,
+          profile: options.profile,
+          runtime: options.runtime,
+          request,
+        })
+        manifests.push(manifest)
+        manifestHashes.push(sha256(existing.bytes))
+        continue
       }
-      manifests.push(existing)
-      continue
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+
+      const manifest = await createRun({
+        runIndex,
+        plan,
+        planSha256,
+        inputs: options.inputs,
+        profile: options.profile,
+        runtime: options.runtime,
+        request,
+        gateway: options.gateway,
+      })
+      await writeImmutableJson(runPath, manifest as unknown as JsonValue)
+      const bytes = await readFile(runPath, 'utf8')
+      manifests.push(manifest)
+      manifestHashes.push(sha256(bytes))
     }
 
-    let output = allRefusals(options.inputs)
-    let rawResponse = canonicalJson({ error: 'request_failed' })
-    let resultState: BenchmarkRunManifest['result_state'] = 'request_failed'
-    let failureCode: BenchmarkRunManifest['failure_code'] = 'http'
-    let performanceResult: BenchmarkRunManifest['performance'] = {
-      prompt_tokens: null,
-      generated_tokens: null,
-      prompt_tokens_per_second: null,
-      generated_tokens_per_second: null,
-    }
-    let elapsedMs = 0
-    let peakVramMib = 0
-    let peakRamMib = 0
-    let outOfMemory = false
-    const started = performance.now()
-    try {
-      const response = await options.gateway.complete(request.body)
-      rawResponse = response.raw
-      elapsedMs = response.resources.elapsedMs
-      peakVramMib = response.resources.peakVramMib
-      peakRamMib = response.resources.peakRamMib
-      outOfMemory = /out of memory|cuda error/i.test(response.raw)
-      if (!response.ok) {
-        failureCode = outOfMemory ? 'oom' : 'http'
-      } else {
-        try {
-          const parsed = parseProviderResponse(response.json)
-          validateModelSemantics(parsed.output, options.inputs)
-          output = parsed.output
-          performanceResult = parsed.performance
-          resultState = 'completed'
-          failureCode = 'none'
-        } catch {
-          resultState = 'model_output_invalid'
-          failureCode = 'schema'
-        }
-      }
-    } catch {
-      elapsedMs = Math.ceil(performance.now() - started)
-      failureCode =
-        options.child.exitCode !== null || options.child.signalCode !== null
-          ? 'runtime_exit'
-          : 'http'
-    }
-    const crashed = options.child.exitCode !== null || options.child.signalCode !== null
-    const run = evaluationRun({
-      runIndex,
-      inputs: options.inputs,
-      profile: options.profile,
-      host: options.host,
-      request,
-      output,
-      elapsedMs,
-      peakVramMib,
-      peakRamMib,
-      crashed,
-      outOfMemory,
+    if (manifests.length !== RUN_COUNT) throw new Error('Exactly three immutable runs are required')
+    const operationalPassed = operationalRunSetPassed(manifests)
+    const scoring = new RepresentativeCorpusScorer().score({
+      source: options.inputs.source,
+      corpus: options.inputs.corpus,
+      annotations: options.inputs.annotations,
+      runs: manifests.map((manifest) => manifest.evaluation_run),
     })
-    const manifest: BenchmarkRunManifest = {
-      schema_version: 'benchmark-run-manifest@1',
-      experiment_id: options.experimentId,
+    const report = {
+      schema_version: 'issue-6-benchmark-report@2',
       dataset_class: options.datasetClass,
-      run_index: runIndex,
-      request_sha256: request.requestSha256,
-      raw_response_sha256: sha256(rawResponse),
-      raw_response: rawResponse,
-      result_state: resultState,
-      failure_code: failureCode,
-      performance: performanceResult,
-      evaluation_run: run,
+      representative_accuracy_claim_permitted: options.datasetClass === 'private_representative',
+      profile_id: options.profile.id,
+      profile_order: options.profile.order,
+      plan_sha256: planSha256,
+      run_count: RUN_COUNT,
+      run_manifest_sha256: manifestHashes,
+      operational_passed: operationalPassed,
+      scoring,
+      runs: manifests.map((manifest) => ({
+        run_index: manifest.run_index,
+        result_state: manifest.result_state,
+        failure_code: manifest.failure_code,
+        provider_output_valid: manifest.provider_output_valid,
+        resources: manifest.resources,
+        child_exit: manifest.child_exit,
+        ...manifest.performance,
+      })),
+      decision:
+        options.datasetClass === 'synthetic_operational'
+          ? operationalPassed
+            ? 'synthetic-operational-smoke-only'
+            : 'synthetic-operational-smoke-failed'
+          : operationalPassed && scoring.overall_passed
+            ? 'selected-profile'
+            : 'acceptance-failed-follow-locked-fallback-order',
+    } as const
+    const reportPath = join(experimentRoot, REPORT_NAME)
+    if (artifacts.has(REPORT_NAME)) {
+      const existing = await readCanonicalJson(reportPath)
+      compareCanonical(
+        existing.value,
+        report,
+        'Existing immutable report differs from recomputation',
+      )
+    } else {
+      await writeImmutableJson(reportPath, report as unknown as JsonValue)
     }
-    benchmarkRunManifestSchema.parse(manifest)
-    await writeImmutableJson(runPath, manifest)
-    manifests.push(manifest)
-  }
-
-  if (manifests.length !== RUN_COUNT) throw new Error('Exactly three immutable runs are required')
-  const scoring = new RepresentativeCorpusScorer().score({
-    source: options.inputs.source,
-    corpus: options.inputs.corpus,
-    annotations: options.inputs.annotations,
-    runs: manifests.map((manifest) => manifest.evaluation_run),
+    const finalArtifacts = await assertExactArtifacts(experimentRoot)
+    if (
+      !finalArtifacts.has(PLAN_NAME) ||
+      !finalArtifacts.has(REPORT_NAME) ||
+      RUN_NAMES.some((name) => !finalArtifacts.has(name))
+    ) {
+      throw new Error('Experiment is not the exact plan/report/three-run artifact set')
+    }
+    return {
+      experimentRoot,
+      reportPath,
+      overallPassed: operationalPassed && scoring.overall_passed,
+      operationalPassed,
+    }
   })
-  const report = {
-    schema_version: 'issue-6-benchmark-report@1',
-    dataset_class: options.datasetClass,
-    representative_accuracy_claim_permitted: options.datasetClass === 'private_representative',
-    profile_id: options.profile.id,
-    profile_order: options.profile.order,
-    run_count: RUN_COUNT,
-    scoring,
-    performance: manifests.map((manifest) => ({
-      run_index: manifest.run_index,
-      result_state: manifest.result_state,
-      ...manifest.performance,
-    })),
-    decision:
-      options.datasetClass === 'synthetic_operational'
-        ? 'synthetic-operational-smoke-only'
-        : scoring.overall_passed
-          ? 'selected-profile'
-          : 'acceptance-failed-follow-locked-fallback-order',
-  }
-  const reportPath = join(experimentRoot, 'sanitized-report.json')
-  try {
-    await writeImmutableJson(reportPath, report)
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    const existing = JSON.parse(await readFile(reportPath, 'utf8')) as unknown
-    if (canonicalSha256(existing as never) !== canonicalSha256(report as never)) {
-      throw new Error('Existing immutable report differs from recomputed scoring')
-    }
-  }
-  const operationalMetricNames = [
-    'run_set_integrity',
-    'schema_validity',
-    'source_corpus_identity',
-    'prediction_order_integrity',
-    'elapsed_time_within_limit',
-    'vram_within_limit',
-    'ram_within_limit',
-    'operational_success',
-    'context_size_configuration',
-    'repeated_run_configuration',
-  ] as const
-  return {
-    reportPath,
-    overallPassed: scoring.overall_passed,
-    operationalPassed: operationalMetricNames.every((name) => scoring.metrics[name].passed),
-  }
 }

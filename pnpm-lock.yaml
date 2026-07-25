@@ -97,15 +97,6 @@ importers:
         specifier: 3.0.2
         version: 3.0.2(ts-toolbelt@9.6.0)
 
-  packages/gemma-benchmark:
-    dependencies:
-      '@light-novel-audiobook/scoring-harness':
-        specifier: workspace:*
-        version: link:../scoring-harness
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-
   packages/llama-cpp-spike:
     dependencies:
       '@tanstack/ai':

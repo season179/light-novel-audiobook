@@ -1,10 +1,11 @@
 import { evaluationRunSchema } from '@light-novel-audiobook/scoring-harness'
 import { z } from 'zod'
 
-const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
+export const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
 const versionSchema = z.string().regex(/^[a-z][a-z0-9-]*@[1-9][0-9]*$/)
 const opaqueIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/)
 const caseIdSchema = z.string().min(1).max(256)
+export const datasetClassSchema = z.enum(['private_representative', 'synthetic_operational'])
 
 export const benchmarkContextSchema = z.strictObject({
   schema_version: z.literal('benchmark-context@1'),
@@ -53,42 +54,152 @@ export const modelOutputSchema = z.strictObject({
   results: z.array(modelResultSchema).min(1),
 })
 
-const performanceSchema = z.strictObject({
+export const performanceSchema = z.strictObject({
   prompt_tokens: z.int().min(0).nullable(),
   generated_tokens: z.int().min(0).nullable(),
   prompt_tokens_per_second: z.number().min(0).nullable(),
   generated_tokens_per_second: z.number().min(0).nullable(),
 })
 
-export const benchmarkRunManifestSchema = z.strictObject({
-  schema_version: z.literal('benchmark-run-manifest@1'),
-  experiment_id: opaqueIdSchema,
-  dataset_class: z.enum(['private_representative', 'synthetic_operational']),
-  run_index: z.int().min(1).max(3),
-  request_sha256: sha256Schema,
-  raw_response_sha256: sha256Schema,
-  raw_response: z.string(),
-  result_state: z.enum(['completed', 'model_output_invalid', 'request_failed']),
-  failure_code: z
-    .enum(['none', 'http', 'malformed_json', 'schema', 'identity', 'runtime_exit', 'oom'])
-    .optional(),
-  performance: performanceSchema,
-  evaluation_run: evaluationRunSchema,
+export const resourceCaptureSchema = z.strictObject({
+  method_version: z.literal('wsl-system-resource-sampling@2'),
+  elapsed_ms: z.int().min(0),
+  peak_vram_mib: z.int().min(0),
+  peak_ram_mib: z.int().min(0),
+  sample_count: z.int().min(0),
+  initial_sample_captured: z.boolean(),
+  final_sample_captured: z.boolean(),
+  complete: z.boolean(),
+  error_code: z.enum(['none', 'collector_failed']),
 })
 
+export const childExitEvidenceSchema = z.strictObject({
+  observed_exited: z.boolean(),
+  exit_code: z.int().nullable(),
+  signal: z.string().nullable(),
+})
+
+export const experimentPlanSchema = z.strictObject({
+  schema_version: z.literal('benchmark-experiment-plan@2'),
+  experiment_id: opaqueIdSchema,
+  dataset_class: datasetClassSchema,
+  profile_id: opaqueIdSchema,
+  profile_order: z.int().min(0).max(3),
+  run_count: z.literal(3),
+  source_sha256: sha256Schema,
+  corpus_sha256: sha256Schema,
+  context_sha256: sha256Schema,
+  model_id: z.string().min(1),
+  model_sha256: sha256Schema,
+  host_manifest_sha256: sha256Schema,
+  runtime_binary_sha256: sha256Schema,
+  runtime_configuration_sha256: sha256Schema,
+  request_sha256: sha256Schema,
+  prompt_sha256: sha256Schema,
+  output_schema_sha256: sha256Schema,
+})
+
+export const runFailureCodeSchema = z.enum([
+  'none',
+  'http',
+  'timeout',
+  'transport',
+  'malformed_json',
+  'schema',
+  'identity',
+  'runtime_exit',
+  'oom',
+  'resource_capture',
+])
+
+export const benchmarkRunManifestSchema = z
+  .strictObject({
+    schema_version: z.literal('benchmark-run-manifest@2'),
+    experiment_id: opaqueIdSchema,
+    dataset_class: datasetClassSchema,
+    run_index: z.int().min(1).max(3),
+    plan_sha256: sha256Schema,
+    host_manifest_sha256: sha256Schema,
+    runtime_configuration_sha256: sha256Schema,
+    request_sha256: sha256Schema,
+    raw_response_sha256: sha256Schema,
+    raw_response: z.string(),
+    raw_response_json_valid: z.boolean(),
+    provider_http_status: z.int().min(100).max(599).nullable(),
+    provider_output_valid: z.boolean(),
+    result_state: z.enum(['completed', 'model_output_invalid', 'request_failed']),
+    failure_code: runFailureCodeSchema,
+    performance: performanceSchema,
+    resources: resourceCaptureSchema,
+    child_exit: childExitEvidenceSchema,
+    evaluation_run: evaluationRunSchema,
+  })
+  .superRefine((value, context) => {
+    const providerValid =
+      value.result_state === 'completed' &&
+      value.raw_response_json_valid &&
+      value.provider_http_status !== null &&
+      value.provider_http_status >= 200 &&
+      value.provider_http_status < 300
+    if (value.provider_output_valid !== providerValid) {
+      context.addIssue({ code: 'custom', message: 'Provider-output fields are inconsistent' })
+    }
+    if (
+      value.failure_code === 'none' &&
+      (!providerValid ||
+        !value.resources.complete ||
+        value.child_exit.observed_exited ||
+        value.evaluation_run.operational.crashed ||
+        value.evaluation_run.operational.out_of_memory)
+    ) {
+      context.addIssue({ code: 'custom', message: 'Run falsely claims operational success' })
+    }
+    if (value.resources.complete !== (value.resources.error_code === 'none')) {
+      context.addIssue({ code: 'custom', message: 'Resource capture fields are inconsistent' })
+    }
+    if (value.child_exit.observed_exited !== value.evaluation_run.operational.crashed) {
+      context.addIssue({ code: 'custom', message: 'Child exit and crash fields are inconsistent' })
+    }
+  })
+
+export const runtimeCleanupEvidenceSchema = z.strictObject({
+  schema_version: z.literal('runtime-cleanup@1'),
+  child_exit_observed: z.literal(true),
+  exit_code: z.int().nullable(),
+  signal: z.string().nullable(),
+  termination: z.enum(['already_exited', 'sigterm', 'sigkill']),
+  sigterm_sent: z.boolean(),
+  sigkill_sent: z.boolean(),
+  exit_awaited: z.literal(true),
+  api_key_file_removed: z.literal(true),
+  port_released: z.literal(true),
+})
+
+const fallbackReasonSchema = z.enum([
+  'acceptance_failed',
+  'operational_impractical',
+  'mature_content_refusal',
+])
+
 export const fallbackHistorySchema = z.strictObject({
-  schema_version: z.literal('fallback-history@1'),
+  schema_version: z.literal('fallback-history@2'),
   attempts: z.array(
     z.strictObject({
       profile_id: opaqueIdSchema,
       report_sha256: sha256Schema,
       overall_passed: z.literal(false),
-      reason: z.enum(['acceptance_failed', 'operational_impractical', 'mature_content_refusal']),
+      evaluation_reason: z.enum(['primary_locked', 'mature_content_refusal', 'ordered_fallback']),
+      failure_reasons: z.array(fallbackReasonSchema).min(1),
     }),
   ),
 })
 
 export type BenchmarkContext = z.infer<typeof benchmarkContextSchema>
 export type ModelOutput = z.infer<typeof modelOutputSchema>
+export type Performance = z.infer<typeof performanceSchema>
+export type ResourceCapture = z.infer<typeof resourceCaptureSchema>
+export type ChildExitEvidence = z.infer<typeof childExitEvidenceSchema>
+export type ExperimentPlan = z.infer<typeof experimentPlanSchema>
 export type BenchmarkRunManifest = z.infer<typeof benchmarkRunManifestSchema>
+export type RuntimeCleanupEvidence = z.infer<typeof runtimeCleanupEvidenceSchema>
 export type FallbackHistory = z.infer<typeof fallbackHistorySchema>

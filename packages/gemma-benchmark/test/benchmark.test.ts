@@ -1,21 +1,29 @@
 import type { ChildProcess } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  canonicalJson,
   canonicalSha256,
   type EvaluationSource,
   type GoldAnnotations,
+  type JsonValue,
   type RepresentativeCorpus,
+  sha256,
 } from '@light-novel-audiobook/scoring-harness'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import type { GatewayResponse, ModelGateway } from '../src/gateway.js'
-import { runExactlyThree } from '../src/orchestrator.js'
-import { BENCHMARK_PROFILES, enforceFallbackOrder, profileById } from '../src/profiles.js'
+import type { GatewayCompletion, ModelGateway } from '../src/gateway.js'
+import { operationalRunSetPassed, runExactlyThree } from '../src/orchestrator.js'
+import { BENCHMARK_PROFILES, enforceFallbackOrder } from '../src/profiles.js'
 import { prepareRequest } from '../src/prompt.js'
-import type { HostManifest } from '../src/runtime.js'
-import { type BenchmarkContext, benchmarkContextSchema } from '../src/schemas.js'
+import type { HostManifest, PinnedRuntimeContext } from '../src/runtime.js'
+import {
+  type BenchmarkContext,
+  benchmarkContextSchema,
+  type ResourceCapture,
+} from '../src/schemas.js'
+import { syntheticOperationalStatus } from '../src/status.js'
 import type { ValidatedInputs } from '../src/workspace.js'
 
 const fixtureRoot = join(import.meta.dirname, '../../scoring-harness/test/fixtures')
@@ -33,19 +41,34 @@ async function contextFixture(): Promise<BenchmarkContext> {
   )
 }
 
+const completeResources: ResourceCapture = {
+  method_version: 'wsl-system-resource-sampling@2',
+  elapsed_ms: 1_000,
+  peak_vram_mib: 10_000,
+  peak_ram_mib: 20_000,
+  sample_count: 3,
+  initial_sample_captured: true,
+  final_sample_captured: true,
+  complete: true,
+  error_code: 'none',
+}
+
 class PassingGateway implements ModelGateway {
   completeCalls = 0
+  tokenCalls = 0
 
   constructor(
     private readonly corpus: RepresentativeCorpus,
     private readonly annotations: GoldAnnotations,
+    private readonly mutate?: (completion: GatewayCompletion, call: number) => GatewayCompletion,
   ) {}
 
   async countTokens(): Promise<number> {
+    this.tokenCalls += 1
     return 1_000
   }
 
-  async complete(): Promise<GatewayResponse> {
+  async complete(): Promise<GatewayCompletion> {
     this.completeCalls += 1
     const gold = new Map(this.annotations.cases.map((item) => [item.case_id, item]))
     const results = this.corpus.cases.map((item) => {
@@ -75,13 +98,18 @@ class PassingGateway implements ModelGateway {
         predicted_per_second: 5,
       },
     }
-    return {
-      ok: true,
-      status: 200,
-      raw: JSON.stringify(body),
-      json: body,
-      resources: { elapsedMs: 1_000, peakVramMib: 10_000, peakRamMib: 20_000 },
+    const completion: GatewayCompletion = {
+      response: {
+        ok: true,
+        status: 200,
+        raw: JSON.stringify(body),
+        json: body,
+        jsonValid: true,
+      },
+      failure: 'none',
+      resources: completeResources,
     }
+    return this.mutate?.(completion, this.completeCalls) ?? completion
   }
 }
 
@@ -99,6 +127,25 @@ const host: HostManifest = {
   textModelOnly: true,
 }
 
+function runtime(child?: ChildProcess): PinnedRuntimeContext {
+  return {
+    host,
+    hostManifestSha256: '8'.repeat(64),
+    runtimeConfigurationSha256: '9'.repeat(64),
+    externalRootProof: {
+      canonicalized: true,
+      ext4: true,
+      outsideRepository: true,
+      outsideGitDirectory: true,
+      outsideTtsRoots: true,
+      overlapCheckedBothDirections: true,
+      symlinkComponentsRejected: true,
+      pathClasses: ['binary', 'manifest', 'model', 'runtime', 'temporary'],
+    },
+    child: child ?? ({ exitCode: null, signalCode: null } as unknown as ChildProcess),
+  }
+}
+
 async function inputs(root: string): Promise<ValidatedInputs> {
   const source = await fixture<EvaluationSource>('source.json')
   const corpus = await fixture<RepresentativeCorpus>('corpus.json')
@@ -109,45 +156,128 @@ async function inputs(root: string): Promise<ValidatedInputs> {
     corpus,
     annotations,
     context: await contextFixture(),
-    sourceSha256: canonicalSha256(source),
-    corpusSha256: canonicalSha256(corpus),
+    sourceSha256: canonicalSha256(source as unknown as JsonValue),
+    corpusSha256: canonicalSha256(corpus as unknown as JsonValue),
   }
 }
 
+async function temporaryInput(): Promise<{ root: string; inputs: ValidatedInputs }> {
+  const root = await mkdtemp(join(tmpdir(), 'gemma-benchmark-'))
+  temporaryRoots.push(root)
+  return { root, inputs: await inputs(root) }
+}
+
+function optionsFor(
+  validated: ValidatedInputs,
+  gateway: ModelGateway,
+  experimentId: string,
+  runtimeContext = runtime(),
+) {
+  const profile = BENCHMARK_PROFILES[0]
+  if (!profile) throw new Error('missing profile')
+  return {
+    experimentId,
+    datasetClass: 'synthetic_operational' as const,
+    inputs: validated,
+    profile,
+    runtime: runtimeContext,
+    gateway,
+  }
+}
+
+async function writeCanonical(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${canonicalJson(value as JsonValue)}\n`)
+}
+
 afterEach(async () => {
-  const { rm } = await import('node:fs/promises')
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   )
 })
 
 describe('Gemma benchmark policy', () => {
-  it('enforces the exact fallback order and special first fallback reason', () => {
-    const primary = profileById(BENCHMARK_PROFILES[0]?.id ?? '')
+  it('enforces every fallback transitively with no skipped or mislabeled predecessor', () => {
+    const [primary, first, second, third] = BENCHMARK_PROFILES
+    if (!primary || !first || !second || !third) throw new Error('missing profiles')
     expect(() => enforceFallbackOrder(primary, undefined)).not.toThrow()
-    const first = profileById(BENCHMARK_PROFILES[1]?.id ?? '')
     expect(() =>
       enforceFallbackOrder(first, {
-        schema_version: 'fallback-history@1',
+        schema_version: 'fallback-history@2',
         attempts: [
           {
             profile_id: primary.id,
             report_sha256: 'a'.repeat(64),
             overall_passed: false,
-            reason: 'acceptance_failed',
+            evaluation_reason: 'primary_locked',
+            failure_reasons: ['mature_content_refusal'],
           },
         ],
       }),
+    ).not.toThrow()
+    const orderTwoHistory = {
+      schema_version: 'fallback-history@2' as const,
+      attempts: [
+        {
+          profile_id: primary.id,
+          report_sha256: 'a'.repeat(64),
+          overall_passed: false as const,
+          evaluation_reason: 'primary_locked' as const,
+          failure_reasons: ['acceptance_failed' as const],
+        },
+        {
+          profile_id: first.id,
+          report_sha256: 'b'.repeat(64),
+          overall_passed: false as const,
+          evaluation_reason: 'mature_content_refusal' as const,
+          failure_reasons: ['operational_impractical' as const],
+        },
+      ],
+    }
+    const primaryAttempt = orderTwoHistory.attempts[0]
+    const firstAttempt = orderTwoHistory.attempts[1]
+    if (!primaryAttempt || !firstAttempt) throw new Error('missing fallback attempts')
+    expect(() => enforceFallbackOrder(second, orderTwoHistory)).not.toThrow()
+    expect(() =>
+      enforceFallbackOrder(second, {
+        ...orderTwoHistory,
+        attempts: [
+          primaryAttempt,
+          { ...firstAttempt, report_sha256: primaryAttempt.report_sha256 },
+        ],
+      }),
+    ).toThrow('distinct')
+    expect(() =>
+      enforceFallbackOrder(second, {
+        ...orderTwoHistory,
+        attempts: orderTwoHistory.attempts.slice(1),
+      }),
     ).toThrow()
     expect(() =>
-      enforceFallbackOrder(first, {
-        schema_version: 'fallback-history@1',
+      enforceFallbackOrder(second, {
+        ...orderTwoHistory,
         attempts: [
+          { ...primaryAttempt, failure_reasons: ['mature_content_refusal'] },
+          firstAttempt,
+        ],
+      }),
+    ).toThrow('ordinary primary failure')
+    expect(() =>
+      enforceFallbackOrder(second, {
+        ...orderTwoHistory,
+        attempts: [primaryAttempt, { ...firstAttempt, evaluation_reason: 'ordered_fallback' }],
+      }),
+    ).toThrow('evaluation reason')
+    expect(() =>
+      enforceFallbackOrder(third, {
+        ...orderTwoHistory,
+        attempts: [
+          ...orderTwoHistory.attempts,
           {
-            profile_id: primary.id,
-            report_sha256: 'a'.repeat(64),
+            profile_id: second.id,
+            report_sha256: 'c'.repeat(64),
             overall_passed: false,
-            reason: 'mature_content_refusal',
+            evaluation_reason: 'ordered_fallback',
+            failure_reasons: ['acceptance_failed'],
           },
         ],
       }),
@@ -185,49 +315,303 @@ describe('Gemma benchmark policy', () => {
     expect(profile.gpuLayers).toBe(35)
   })
 
-  it('keeps committed host smoke evidence synthetic-only and text-free', async () => {
-    const evidenceText = await readFile(
-      join(import.meta.dirname, '../evidence/synthetic-operational-smoke.json'),
-      'utf8',
+  it('requires all three valid, failure-free runs for operational pass', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const passing = new PassingGateway(validated.corpus, validated.annotations)
+    const result = await runExactlyThree(optionsFor(validated, passing, 'three-valid-runs'))
+    expect(result.operationalPassed).toBe(true)
+    expect(result.overallPassed).toBe(true)
+    expect(passing.completeCalls).toBe(3)
+
+    const report = JSON.parse(await readFile(result.reportPath, 'utf8'))
+    expect(report.operational_passed).toBe(true)
+    expect(report.runs.every((run: { failure_code: string }) => run.failure_code === 'none')).toBe(
+      true,
     )
-    const evidence = JSON.parse(evidenceText)
-    expect(evidence.dataset_class).toBe('synthetic_operational')
-    expect(evidence.representative_accuracy_claim_permitted).toBe(false)
-    expect(evidence.run_count).toBe(3)
-    expect(evidence.decision).toBe('synthetic-operational-smoke-only')
-    expect(evidence.scoring.metrics.operational_success.passed).toBe(true)
-    expect(evidence.scoring.metrics.context_size_configuration.passed).toBe(true)
-    expect(evidenceText).not.toContain('The brass bell rang.')
   })
 
-  it('creates exactly three immutable runs, scores them, and resumes without rerunning', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'gemma-benchmark-'))
-    temporaryRoots.push(root)
-    const validated = await inputs(root)
+  it.each([
+    {
+      name: 'timeout',
+      mutate: (completion: GatewayCompletion) => ({
+        ...completion,
+        response: null,
+        failure: 'timeout' as const,
+      }),
+      failure: 'timeout',
+    },
+    {
+      name: 'invalid provider output',
+      mutate: (completion: GatewayCompletion) => ({
+        ...completion,
+        response: {
+          ok: true,
+          status: 200,
+          raw: '{"choices":[]}',
+          json: { choices: [] },
+          jsonValid: true,
+        },
+      }),
+      failure: 'schema',
+    },
+    {
+      name: 'resource capture failure',
+      mutate: (completion: GatewayCompletion) => ({
+        ...completion,
+        resources: {
+          ...completeResources,
+          complete: false,
+          final_sample_captured: false,
+          error_code: 'collector_failed' as const,
+        },
+      }),
+      failure: 'resource_capture',
+    },
+    {
+      name: 'OOM response',
+      mutate: (completion: GatewayCompletion) => ({
+        ...completion,
+        response: {
+          ok: false,
+          status: 500,
+          raw: '{"error":"CUDA out of memory"}',
+          json: { error: 'CUDA out of memory' },
+          jsonValid: true,
+        },
+      }),
+      failure: 'oom',
+    },
+  ])('fails operational status for $name while retaining three run records', async (testCase) => {
+    const { inputs: validated } = await temporaryInput()
+    const gateway = new PassingGateway(validated.corpus, validated.annotations, testCase.mutate)
+    const result = await runExactlyThree(
+      optionsFor(validated, gateway, `failed-${testCase.failure}`),
+    )
+    expect(result.operationalPassed).toBe(false)
+    const report = JSON.parse(await readFile(result.reportPath, 'utf8'))
+    expect(report.decision).toBe('synthetic-operational-smoke-failed')
+    expect(report.runs).toHaveLength(3)
+    expect(
+      report.runs.every((run: { failure_code: string }) => run.failure_code === testCase.failure),
+    ).toBe(true)
+  })
+
+  it('fails when the child exits even after a syntactically valid provider response', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const child = { exitCode: 137, signalCode: null } as unknown as ChildProcess
     const gateway = new PassingGateway(validated.corpus, validated.annotations)
-    const child = { exitCode: null, signalCode: null } as unknown as ChildProcess
-    const profile = BENCHMARK_PROFILES[0]
-    if (!profile) throw new Error('missing profile')
-    const options = {
-      experimentId: 'synthetic-resume',
-      datasetClass: 'synthetic_operational' as const,
-      inputs: validated,
-      profile,
-      host,
-      gateway,
-      child,
-    }
+    const result = await runExactlyThree(
+      optionsFor(validated, gateway, 'child-exit', runtime(child)),
+    )
+    expect(result.operationalPassed).toBe(false)
+    const run = JSON.parse(
+      await readFile(join(result.experimentRoot, 'run-1.private.json'), 'utf8'),
+    )
+    expect(run.provider_output_valid).toBe(true)
+    expect(run.failure_code).toBe('runtime_exit')
+    expect(run.child_exit.observed_exited).toBe(true)
+    expect(run.evaluation_run.operational.crashed).toBe(true)
+  })
+
+  it('resumes valid exact runs without rerunning and rejects an exclusive concurrent lock', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const gateway = new PassingGateway(validated.corpus, validated.annotations)
+    const options = optionsFor(validated, gateway, 'strict-resume')
     const first = await runExactlyThree(options)
-    expect(first.overallPassed).toBe(true)
     expect(first.operationalPassed).toBe(true)
-    expect(gateway.completeCalls).toBe(3)
     await runExactlyThree(options)
     expect(gateway.completeCalls).toBe(3)
-    const report = await readFile(first.reportPath, 'utf8')
-    expect(report).toContain('synthetic-operational-smoke-only')
-    expect(report).not.toContain('The brass bell rang.')
-    await expect(
-      readFile(join(root, 'experiments/synthetic-resume/run-4.private.json'), 'utf8'),
-    ).rejects.toThrow()
+
+    let releaseToken!: () => void
+    let tokenStarted!: () => void
+    const tokenStartedPromise = new Promise<void>((resolvePromise) => {
+      tokenStarted = resolvePromise
+    })
+    const releasePromise = new Promise<void>((resolvePromise) => {
+      releaseToken = resolvePromise
+    })
+    const blockingGateway: ModelGateway = {
+      async countTokens() {
+        tokenStarted()
+        await releasePromise
+        return 1_000
+      },
+      async complete() {
+        throw new Error('not reached')
+      },
+    }
+    const lockedOptions = optionsFor(validated, blockingGateway, 'exclusive-lock')
+    const owner = runExactlyThree(lockedOptions)
+    await tokenStartedPromise
+    await expect(runExactlyThree(lockedOptions)).rejects.toThrow('already locked')
+    releaseToken()
+    await owner
+  })
+
+  it('rejects extra artifacts and stale plan, dataset, profile, model, binary, runtime, or request identity', async () => {
+    const mutationCases: Array<{ name: string; mutate: (root: string) => Promise<void> }> = [
+      {
+        name: 'extra run',
+        mutate: async (root) => await writeFile(join(root, 'run-4.private.json'), '{}\n'),
+      },
+      {
+        name: 'dataset',
+        mutate: async (root) => {
+          const path = join(root, 'run-1.private.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.dataset_class = 'private_representative'
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'model',
+        mutate: async (root) => {
+          const path = join(root, 'run-1.private.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.evaluation_run.model.model_id = 'tampered-model'
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'request',
+        mutate: async (root) => {
+          const path = join(root, 'run-1.private.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.request_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'experiment plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.experiment_id = 'tampered-experiment'
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'source plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.source_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'corpus plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.corpus_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'host manifest run',
+        mutate: async (root) => {
+          const path = join(root, 'run-1.private.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.host_manifest_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'binary plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.runtime_binary_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'runtime config plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.runtime_configuration_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'profile plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.profile_id = 'tampered-profile'
+          await writeCanonical(path, value)
+        },
+      },
+    ]
+    for (const [index, mutation] of mutationCases.entries()) {
+      const { inputs: validated } = await temporaryInput()
+      const gateway = new PassingGateway(validated.corpus, validated.annotations)
+      const options = optionsFor(validated, gateway, `identity-${index}`)
+      const result = await runExactlyThree(options)
+      await mutation.mutate(result.experimentRoot)
+      await expect(runExactlyThree(options), mutation.name).rejects.toThrow()
+    }
+  })
+
+  it('rehashes and reparses exact raw bytes and binds each manifest hash into the report', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const gateway = new PassingGateway(validated.corpus, validated.annotations)
+    const options = optionsFor(validated, gateway, 'raw-binding')
+    const result = await runExactlyThree(options)
+    const runPath = join(result.experimentRoot, 'run-1.private.json')
+    const run = JSON.parse(await readFile(runPath, 'utf8'))
+    run.raw_response = '{"choices":[]}'
+    run.raw_response_sha256 = sha256(run.raw_response)
+    run.raw_response_json_valid = true
+    await writeCanonical(runPath, run)
+    await expect(runExactlyThree(options)).rejects.toThrow('provider-output validity')
+
+    const second = await temporaryInput()
+    const secondGateway = new PassingGateway(second.inputs.corpus, second.inputs.annotations)
+    const secondOptions = optionsFor(second.inputs, secondGateway, 'manifest-binding')
+    const secondResult = await runExactlyThree(secondOptions)
+    const secondRunPath = join(secondResult.experimentRoot, 'run-1.private.json')
+    const secondRun = JSON.parse(await readFile(secondRunPath, 'utf8'))
+    const raw = JSON.parse(secondRun.raw_response)
+    raw.timings.prompt_n += 1
+    secondRun.raw_response = JSON.stringify(raw)
+    secondRun.raw_response_sha256 = sha256(secondRun.raw_response)
+    secondRun.performance.prompt_tokens += 1
+    await writeCanonical(secondRunPath, secondRun)
+    await expect(runExactlyThree(secondOptions)).rejects.toThrow('report differs')
+  })
+
+  it('never labels a failed operational run set as smoke complete', () => {
+    expect(syntheticOperationalStatus(false)).toContain('FAILED')
+    expect(syntheticOperationalStatus(false)).not.toContain('COMPLETE')
+    expect(syntheticOperationalStatus(true)).toContain('COMPLETE')
+  })
+
+  it('never accepts a refusal surrogate as an operationally successful run', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const gateway = new PassingGateway(validated.corpus, validated.annotations, (completion) => ({
+      ...completion,
+      response: null,
+      failure: 'transport',
+    }))
+    const result = await runExactlyThree(optionsFor(validated, gateway, 'surrogate'))
+    const manifests = await Promise.all(
+      [1, 2, 3].map(async (index) =>
+        JSON.parse(
+          await readFile(join(result.experimentRoot, `run-${index}.private.json`), 'utf8'),
+        ),
+      ),
+    )
+    expect(operationalRunSetPassed(manifests)).toBe(false)
+    expect(
+      manifests.every(
+        (manifest) =>
+          manifest.result_state === 'request_failed' &&
+          manifest.failure_code === 'transport' &&
+          !manifest.provider_output_valid,
+      ),
+    ).toBe(true)
   })
 })
