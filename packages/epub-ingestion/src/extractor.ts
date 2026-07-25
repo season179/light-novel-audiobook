@@ -296,16 +296,61 @@ function decodeXml(bytes: Uint8Array, archivePath: string): string {
 }
 
 /**
- * True when a DOCTYPE declares an internal subset, which is where `<!ENTITY` declarations live and
- * therefore where entity-expansion and external-entity attacks would have to come from.
+ * The XML 1.0 productions needed to positively recognise a DOCTYPE with no internal subset.
  *
- * Quoted spans are removed before looking for the delimiter: the subset's `[` is always outside
- * quotes, whereas a SYSTEM identifier may legitimately contain one (an IPv6 host literal such as
- * `http://[::1]/x.dtd`). A `[` cannot appear in a PUBLIC identifier at all -- the XML `PubidChar`
- * production excludes it -- so this only affects SYSTEM identifiers.
+ * `saxes` reports the declaration's text but does not validate the whole `doctypedecl` grammar, so
+ * the shape is checked here. This is deliberately a whitelist: anything not matched is rejected,
+ * because looking for known-bad markers instead lets malformed declarations through. For example
+ * `<!DOCTYPE html <!ENTITY x "value">` contains no `[`, and the `>` that closes the inner construct
+ * ends the declaration -- so a "contains a subset delimiter" test sees nothing to object to while an
+ * `<!ENTITY`-shaped declaration sails past the rule that is supposed to reject it.
+ *
+ * `S` is the four XML whitespace characters only; NBSP and other Unicode spaces are not XML
+ * whitespace and must not be treated as separators.
  */
-function hasInternalSubset(doctype: string): boolean {
-  return doctype.replace(/"[^"]*"|'[^']*'/g, '').includes('[')
+const XML_S = '[\\u0020\\u0009\\u000D\\u000A]'
+const NAME_START_CHAR =
+  ':A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF' +
+  '\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD' +
+  '\\u{10000}-\\u{EFFFF}'
+const NAME_CHAR = `${NAME_START_CHAR}.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040-`
+const XML_NAME = `[${NAME_START_CHAR}][${NAME_CHAR}]*`
+const SYSTEM_LITERAL = `"[^"]*"|'[^']*'`
+/**
+ * `PubidChar` minus the apostrophe, which is only legal inside the double-quoted form.
+ *
+ * The hyphen must stay first so it remains a literal. At the end it pairs with whatever the
+ * double-quoted variant appends and silently becomes a range, which drops the leading hyphen that
+ * every real public identifier begins with (`-//W3C//DTD XHTML 1.1//EN`).
+ */
+const PUBID_CHAR = '-\\u0020\\u000D\\u000Aa-zA-Z0-9()+,./:=?;!*#@$_%'
+const PUBID_LITERAL = `"[${PUBID_CHAR}']*"|'[${PUBID_CHAR}]*'`
+const EXTERNAL_ID =
+  `SYSTEM${XML_S}+(?:${SYSTEM_LITERAL})` +
+  `|PUBLIC${XML_S}+(?:${PUBID_LITERAL})${XML_S}+(?:${SYSTEM_LITERAL})`
+
+/** `doctypedecl` without the internal-subset clause: `S Name (S ExternalID)? S?`. */
+const BARE_DOCTYPE = new RegExp(
+  `^${XML_S}+${XML_NAME}(?:${XML_S}+(?:${EXTERNAL_ID}))?${XML_S}*$`,
+  'u',
+)
+
+/**
+ * Only used to choose a clearer message; acceptance is decided solely by `BARE_DOCTYPE`.
+ *
+ * Quoted spans are removed first because a SYSTEM identifier may legitimately contain a bracket (an
+ * IPv6 host literal such as `http://[::1]/x.dtd`), whereas a real subset delimiter is never quoted.
+ */
+function declaresInternalSubset(doctype: string): boolean {
+  return doctype.replace(/"[^"]*"|'[^']*'/gu, '').includes('[')
+}
+
+/** `undefined` when the declaration is an acceptable bare DOCTYPE, otherwise why it is rejected. */
+function doctypeRejection(doctype: string): string | undefined {
+  if (BARE_DOCTYPE.test(doctype)) return undefined
+  return declaresInternalSubset(doctype)
+    ? 'DOCTYPE internal subsets are not permitted'
+    : 'DOCTYPE is not a well-formed declaration without an internal subset'
 }
 
 function parseXml(
@@ -336,9 +381,8 @@ function parseXml(
   }
 
   parser.on('doctype', (doctype) => {
-    if (hasInternalSubset(doctype)) {
-      parseError ??= new Error(`${archivePath}: DOCTYPE internal subsets are not permitted`)
-    }
+    const rejection = doctypeRejection(doctype)
+    if (rejection) parseError ??= new Error(`${archivePath}: ${rejection}`)
   })
   parser.on('error', (error) => {
     parseError ??= new Error(`${archivePath}: malformed XML: ${error.message}`)

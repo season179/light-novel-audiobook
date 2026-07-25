@@ -66,8 +66,11 @@ or speech-ready text.
    references are decoded once to Unicode. For example, `&amp;` becomes `&` and `&#x1F642;` becomes
    `🙂`. A custom entity, undeclared named HTML entity such as `&nbsp;`, malformed reference, or
    invalid scalar is a hard error. A non-breaking space can be authored as `&#160;`.
-   A `DOCTYPE` **with no internal subset** is permitted and ignored; a `DOCTYPE` declaring an
-   internal subset (`[ ... ]`) is a hard error, whatever the subset contains. See
+   A **well-formed bare `DOCTYPE`** — a name, optionally `SYSTEM` with one quoted literal or
+   `PUBLIC` with two, and nothing else — is permitted and ignored. Any other declaration is a hard
+   error, including one with an internal subset (`[ ... ]`) whatever it contains, an empty
+   declaration, a dangling `SYSTEM`/`PUBLIC` keyword, trailing garbage, and a nested `<!` construct.
+   The external identifier is never resolved. See
    [amendment 2026-07-25](#amendment-2026-07-25-doctype-with-no-internal-subset-is-permitted).
 5. No NFC, NFD, NFKC, case, punctuation, smart-quote, compatibility, or grapheme normalization is
    performed. A decomposed `e` plus combining acute remains two Unicode scalar values.
@@ -253,15 +256,34 @@ where it cannot preserve source semantics.
 
 ### What changed
 
-Rule 4 previously made *any* `DOCTYPE` a hard error. It now rejects only a `DOCTYPE` that declares
-an internal subset (`[ ... ]`). Everything else rule 4 rejected is still rejected: `<!ENTITY`
-declarations, undeclared named entities such as `&nbsp;`, malformed references, and invalid scalars.
+Rule 4 previously made *any* `DOCTYPE` a hard error. It now accepts only a **positively recognised
+bare `doctypedecl`**: `S Name (S ExternalID)? S?`, where `ExternalID` is `SYSTEM` with one quoted
+literal or `PUBLIC` with two. Anything else is rejected, including an internal subset (`[ ... ]`) in
+any form, an empty declaration, a dangling `SYSTEM`/`PUBLIC` keyword, trailing garbage, and a nested
+`<!` construct. Everything else rule 4 rejected is still rejected: `<!ENTITY` declarations,
+undeclared named entities such as `&nbsp;`, malformed references, and invalid scalars.
+
+Recognition is deliberately a whitelist. `saxes` reports a declaration's text without validating the
+whole `doctypedecl` grammar, so a detector that merely looked for known-bad markers would let
+malformed declarations through. `<!DOCTYPE html <!ENTITY x "value">` is the concrete case: it
+contains no `[`, and the `>` closing the inner construct also ends the declaration, so a
+"contains a subset delimiter" test finds nothing to object to while an `<!ENTITY`-shaped declaration
+passes the rule meant to reject it. Whitelisting the good shape fails closed on that whole family.
 
 ### Why
 
-The original rule was written to stop XXE and entity-expansion ("billion laughs") attacks. Both
-require an internal DTD subset containing `<!ENTITY` declarations. Rejecting the *declaration line*
-as well was over-broad, and it made the adapter unable to read real books at all.
+The original rule was written to stop XXE and entity-expansion ("billion laughs") attacks.
+
+Entity expansion requires *declared* entities, and with no fetched external DTD the only place to
+declare them is an internal subset. XXE, however, does **not** require an internal subset: a bare
+`SYSTEM` or `PUBLIC` declaration names an external DTD that could itself declare an entity, and
+`&that;` would resolve in a parser that fetched it. So rejecting internal subsets is **not by itself
+sufficient**, and this amendment does not claim otherwise. What makes a bare `DOCTYPE` safe here is
+the separate, verified property that the parser never resolves the external identifier — see "Why
+this is safe" below. Internal subsets remain rejected as defence in depth.
+
+Rejecting the *declaration line* as well was over-broad, and it is what made the adapter unable to
+read the real book measured below.
 
 Measured against one real commercial EPUB 2.0 light novel (19,060,624 bytes; not committed, and
 gitignored under `/ebooks/`):
@@ -321,5 +343,11 @@ would falsely signal that stored records had become stale.
 
 The versioning requirement exists so that outputs produced under different rules cannot be confused
 when they could differ. Here they cannot differ: the overlap between the old and new accepted sets is
-exactly identical, and inputs newly accepted have no prior extraction to be confused with. No real
-book had ever been ingested under the previous wording, because the rule rejected them all.
+exactly identical, and inputs newly accepted have no prior extraction to be confused with.
+
+The evidence does not establish that the previous wording rejected *every* real EPUB, and this
+amendment does not claim it did. A valid publication carrying no `DOCTYPE` always took the accepted
+path, exactly as the committed synthetic fixtures do. What was measured is narrower: the one
+commercial EPUB 2.0 book tested was rejected, 22 of its 24 markup documents carry a boilerplate
+`DOCTYPE`, and both forms are near-universal in EPUB 2 — so the false positive should be expected to
+be common for that generation of publication rather than universal across all real input.

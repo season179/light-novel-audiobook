@@ -102,6 +102,44 @@ describe('DOCTYPE rule (ADR 0001 rule 4, narrowed)', () => {
     )
   })
 
+  /**
+   * `saxes` reports a DOCTYPE's text without validating the whole `doctypedecl` grammar, so these
+   * declarations reach the rule as ordinary doctype events. None contains a `[` -- in the `<!ENTITY`
+   * case the `>` closing the inner construct also ends the declaration -- so a detector that only
+   * looked for a subset delimiter would accept all of them, including an `<!ENTITY`-shaped one. The
+   * shape must therefore be positively recognised, and anything unrecognised fails closed.
+   */
+  it.each([
+    ['an <!ENTITY declaration with no subset brackets', '<!DOCTYPE html <!ENTITY x "value">'],
+    ['a dangling SYSTEM keyword with no literal', '<!DOCTYPE html SYSTEM >'],
+    ['a dangling PUBLIC keyword with no literal', '<!DOCTYPE html PUBLIC >'],
+    [
+      'a PUBLIC keyword with only one literal',
+      '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN">',
+    ],
+    ['trailing garbage after the name', '<!DOCTYPE html garbage>'],
+    ['trailing garbage after a valid external id', '<!DOCTYPE html SYSTEM "x.dtd" extra>'],
+    ['no name at all', '<!DOCTYPE>'],
+    ['only whitespace', '<!DOCTYPE >'],
+    ['a nested comment pseudo-declaration', '<!DOCTYPE html <!-- note -->'],
+    ['a nested processing-instruction pseudo-declaration', '<!DOCTYPE html <?pi data?>'],
+    ['an unterminated system literal', '<!DOCTYPE html SYSTEM "x.dtd>'],
+    ['a lowercase external-id keyword', '<!DOCTYPE html system "x.dtd">'],
+    ['a no-break space used as a separator', '<!DOCTYPE html\u00a0SYSTEM "x.dtd">'],
+  ])('fails closed on a malformed pseudo-DOCTYPE: %s', async (_label, prologue) => {
+    const archive = await archiveWith(`${prologue}\n`)
+    // Either the shape check or saxes itself must refuse it; what must not happen is acceptance.
+    expect(() => extractEpubDeterministically(archive)).toThrow(
+      /DOCTYPE is not a well-formed declaration|internal subsets are not permitted|malformed XML/,
+    )
+  })
+
+  it('does not register an entity declared by a malformed pseudo-DOCTYPE', async () => {
+    // Belt and braces: even before the shape check, saxes never honoured such a declaration.
+    const archive = await archiveWith('<!DOCTYPE html <!ENTITY x "value">\n', '<p>&x;</p>')
+    expect(() => extractEpubDeterministically(archive)).toThrow()
+  })
+
   it.each([
     ['an undeclared named entity', '<p>a&nbsp;b</p>'],
     ['a malformed character reference', '<p>a&#xZZ;b</p>'],
