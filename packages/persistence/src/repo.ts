@@ -55,22 +55,28 @@ export class SqliteJobRepository implements JobRepository {
     const snapshot = job.snapshot()
     const json = JSON.stringify(snapshot)
 
-    withTransaction(this.db, () => {
-      this.db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id)
-      this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(job.id, json)
-    })
+    await withBusyRetryingTransaction(
+      this.db,
+      () => {
+        this.db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id)
+        this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(job.id, json)
+      },
+      `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
+    )
   }
 
   async saveBook(book: Book): Promise<void> {
-    withTransaction(this.db, () => {
-      // Upsert, never INSERT OR REPLACE. REPLACE deletes the conflicting row before
-      // re-inserting it, and SQLite runs ON DELETE CASCADE actions for a REPLACE-driven
-      // delete -- which is how this wiped the artifact and reservation ledgers. The use case
-      // calls saveBook six times per run, interleaved with saveCompletedSegment and
-      // reserveNextOutput, so saveBook must only ever touch book metadata.
-      this.db
-        .prepare(
-          `INSERT INTO books (id, title, author, cover_path, epub_path, epub_sha256)
+    await withBusyRetryingTransaction(
+      this.db,
+      () => {
+        // Upsert, never INSERT OR REPLACE. REPLACE deletes the conflicting row before
+        // re-inserting it, and SQLite runs ON DELETE CASCADE actions for a REPLACE-driven
+        // delete -- which is how this wiped the artifact and reservation ledgers. The use case
+        // calls saveBook six times per run, interleaved with saveCompletedSegment and
+        // reserveNextOutput, so saveBook must only ever touch book metadata.
+        this.db
+          .prepare(
+            `INSERT INTO books (id, title, author, cover_path, epub_path, epub_sha256)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              title = excluded.title,
@@ -78,43 +84,45 @@ export class SqliteJobRepository implements JobRepository {
              cover_path = excluded.cover_path,
              epub_path = excluded.epub_path,
              epub_sha256 = excluded.epub_sha256`,
-        )
-        .run(
-          book.id,
-          book.title,
-          book.author ?? null,
-          book.coverPath ?? null,
-          book.source.epubPath,
-          book.source.sha256,
-        )
+          )
+          .run(
+            book.id,
+            book.title,
+            book.author ?? null,
+            book.coverPath ?? null,
+            book.source.epubPath,
+            book.source.sha256,
+          )
 
-      for (const chapter of book.chapters) {
-        this.db
-          .prepare(
-            `INSERT INTO chapters (id, book_id, position, title)
+        for (const chapter of book.chapters) {
+          this.db
+            .prepare(
+              `INSERT INTO chapters (id, book_id, position, title)
              VALUES (?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                book_id = excluded.book_id,
                position = excluded.position,
                title = excluded.title`,
-          )
-          .run(chapter.id, book.id, chapter.position, chapter.title)
+            )
+            .run(chapter.id, book.id, chapter.position, chapter.title)
 
-        this.saveChapterSegments(chapter)
-      }
+          this.saveChapterSegments(chapter)
+        }
 
-      // Delete only the chapters that are no longer part of the book. Their segments follow
-      // through the chapters cascade, which stays: that cluster is written together.
-      const chapterIds = book.chapters.map((chapter) => chapter.id)
-      if (chapterIds.length === 0) {
-        this.db.prepare('DELETE FROM chapters WHERE book_id = ?').run(book.id)
-      } else {
-        const placeholders = chapterIds.map(() => '?').join(', ')
-        this.db
-          .prepare(`DELETE FROM chapters WHERE book_id = ? AND id NOT IN (${placeholders})`)
-          .run(book.id, ...chapterIds)
-      }
-    })
+        // Delete only the chapters that are no longer part of the book. Their segments follow
+        // through the chapters cascade, which stays: that cluster is written together.
+        const chapterIds = book.chapters.map((chapter) => chapter.id)
+        if (chapterIds.length === 0) {
+          this.db.prepare('DELETE FROM chapters WHERE book_id = ?').run(book.id)
+        } else {
+          const placeholders = chapterIds.map(() => '?').join(', ')
+          this.db
+            .prepare(`DELETE FROM chapters WHERE book_id = ? AND id NOT IN (${placeholders})`)
+            .run(book.id, ...chapterIds)
+        }
+      },
+      `Could not save book ${book.id}; the workspace database stayed locked`,
+    )
   }
 
   /**
@@ -207,25 +215,29 @@ export class SqliteJobRepository implements JobRepository {
 
   async saveCompletedSegment(segment: CompletedSegmentAudio): Promise<void> {
     const now = new Date().toISOString()
-    withTransaction(this.db, () => {
-      // Remove any prior artifact for this segment+identity to allow replacement after failure
-      this.db
-        .prepare('DELETE FROM artifacts WHERE segment_id = ? AND input_identity = ?')
-        .run(segment.segmentId, segment.inputIdentity)
+    await withBusyRetryingTransaction(
+      this.db,
+      () => {
+        // Remove any prior artifact for this segment+identity to allow replacement after failure
+        this.db
+          .prepare('DELETE FROM artifacts WHERE segment_id = ? AND input_identity = ?')
+          .run(segment.segmentId, segment.inputIdentity)
 
-      this.db
-        .prepare(
-          'INSERT INTO artifacts (segment_id, input_identity, wav_path, sha256, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        )
-        .run(
-          segment.segmentId,
-          segment.inputIdentity,
-          segment.wavPath,
-          segment.sha256,
-          segment.byteLength,
-          now,
-        )
-    })
+        this.db
+          .prepare(
+            'INSERT INTO artifacts (segment_id, input_identity, wav_path, sha256, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .run(
+            segment.segmentId,
+            segment.inputIdentity,
+            segment.wavPath,
+            segment.sha256,
+            segment.byteLength,
+            now,
+          )
+      },
+      `Could not save completed segment ${segment.segmentId}; the workspace database stayed locked`,
+    )
   }
 
   async reserveNextOutput(book: Book): Promise<OutputReservation> {
@@ -258,8 +270,6 @@ export class SqliteJobRepository implements JobRepository {
       .get(book.id) as { v: number | null } | undefined
 
     let candidate = (existing?.v ?? 0) + 1
-    let busyAttempts = 0
-    const deadline = Date.now() + CLAIM_BUSY_DEADLINE_MS
 
     while (true) {
       const label = versionLabel(candidate)
@@ -291,9 +301,9 @@ export class SqliteJobRepository implements JobRepository {
         chapterPaths.map((cp) => ({ chapterId: cp.chapterId, path: cp.path })),
       )
 
-      let outcome: 'claimed' | 'taken'
-      try {
-        outcome = withTransaction(this.db, (): 'claimed' | 'taken' => {
+      const outcome = await withBusyRetryingTransaction(
+        this.db,
+        (): 'claimed' | 'taken' => {
           const dbConflict = this.db
             .prepare('SELECT 1 FROM output_reservations WHERE book_id = ? AND version = ?')
             .get(book.id, candidate)
@@ -314,21 +324,9 @@ export class SqliteJobRepository implements JobRepository {
             throw error
           }
           return 'claimed'
-        })
-      } catch (error) {
-        // Classified around the WHOLE call, not just around the INSERT: BEGIN IMMEDIATE waits
-        // out busy_timeout and then fails, and so can COMMIT -- both outside the callback and
-        // outside its try. Catching only the INSERT meant the retry budget was never consulted.
-        if (classifySqliteFailure(error) !== 'busy') throw error
-        if (Date.now() >= deadline) {
-          throw new DomainError(
-            `Could not reserve an output version for book ${book.id}; the workspace database stayed locked`,
-          )
-        }
-        await delay(backoffMs(busyAttempts))
-        busyAttempts += 1
-        continue
-      }
+        },
+        `Could not reserve an output version for book ${book.id}; the workspace database stayed locked`,
+      )
 
       if (outcome === 'taken') {
         candidate += 1
@@ -352,8 +350,36 @@ export class SqliteJobRepository implements JobRepository {
 // Private helpers
 // ============================================================
 
-/** Total time a claim may spend losing lock races before the run gives up. */
-const CLAIM_BUSY_DEADLINE_MS = 30_000
+/** Total time a repository transaction may spend losing lock races before the run gives up. */
+const TRANSACTION_BUSY_DEADLINE_MS = 30_000
+
+/**
+ * Retry the whole transaction after a busy failure, so a failed BEGIN IMMEDIATE or COMMIT is
+ * included and every attempt starts with a fresh transaction. SQLite's busy_timeout performs the
+ * primary wait; this deadline bounds repeated losses, while backoff prevents a retry spin.
+ */
+async function withBusyRetryingTransaction<T>(
+  db: DatabaseSync,
+  work: () => T,
+  lockedMessage: string,
+): Promise<T> {
+  const deadline = Date.now() + TRANSACTION_BUSY_DEADLINE_MS
+  let busyAttempts = 0
+
+  while (true) {
+    try {
+      return withTransaction(db, work)
+    } catch (error) {
+      if (classifySqliteFailure(error) !== 'busy') throw error
+
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) throw new DomainError(lockedMessage)
+
+      await delay(Math.min(backoffMs(busyAttempts), remainingMs))
+      busyAttempts += 1
+    }
+  }
+}
 
 /** NUL and the C0 controls, DEL and the C1 controls, and both path separators. */
 function isUnsafePathCharacter(character: string): boolean {
