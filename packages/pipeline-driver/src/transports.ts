@@ -45,7 +45,14 @@ export interface PipelineTransports {
     readonly coordinator: ExclusiveGpuLeaseCoordinator
     readonly lockFilePath: string
   }
-  /** Ordered record of GPU/runtime events, so a run can prove Gemma released before Qwen leased. */
+  /**
+   * Ordered record of GPU/runtime events. **Diagnostic only** — these are strings this module chose to
+   * push, so they show the order the driver *called* things, and nothing about VRAM. In real mode the
+   * list carries the director's start and exit and no Qwen lease acquisition at all, because the speech
+   * engine holds the real cross-process lease directly. Evidence that a model unloaded has to come from
+   * observed process state; `test/lifecycle-release-race.test.ts` and `test/real-lifecycle-ordering.test.ts`
+   * are where that is checked.
+   */
   readonly lifecycleEvents: readonly string[]
   close(): Promise<void>
 }
@@ -69,9 +76,13 @@ const FAKE_RUNTIME_MANIFEST = {
 } as const
 
 /**
- * In-process GPU arbitration for fake mode. Records acquire/release so a run can assert the ordering
- * the audit verified: the director must have released before the speech engine leases, or the two
- * models would be co-resident in VRAM.
+ * In-process GPU arbitration for fake mode. Records acquire/release so a run can show the order the
+ * lease changed hands.
+ *
+ * Be precise about what that proves: these are recorded strings, and in fake mode nothing is ever
+ * resident, so an ordered event log here is evidence about the *use case's* call order and nothing
+ * more. It is not evidence that a model unloaded. That claim needs observed process state, which is
+ * what `test/real-lifecycle-ordering.test.ts` checks against a real owned process.
  */
 class RecordingGpuCoordinator implements ExclusiveGpuLeaseCoordinator {
   #held: GpuOwner | undefined
@@ -169,7 +180,11 @@ export interface RealTransportConfig {
   readonly runtimeManifestPath: string
   /** Pinned Qwen snapshot directory. See {@link resolveDefaultModelSnapshotPath}. */
   readonly modelSnapshotPath: string
-  /** Shared with the director so the two models can never be co-resident. */
+  /**
+   * Shared with the director, so the two models cannot hold the GPU at the same time. Note that the
+   * lock alone does not prevent co-residency: it only transfers the *right* to load. What keeps Gemma
+   * out of VRAM once the lease moves on is `OwnedLlamaLifecycle` reaping the server before release.
+   */
   readonly gpuLockFilePath: string
   readonly startupTimeoutMs?: number
 }
