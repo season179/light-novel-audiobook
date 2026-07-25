@@ -143,6 +143,18 @@ export class VoiceCast {
     return profile
   }
 
+  /** Deterministic identity for every approved voice that can affect this generation. */
+  get generationIdentity(): string {
+    const characters = [...this.profilesBySpeaker.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([speakerId, profile]) => [speakerId, profile.renderIdentity])
+    return JSON.stringify({
+      narrator: this.narrator.renderIdentity,
+      fallback: this.fallback.renderIdentity,
+      characters,
+    })
+  }
+
   private resolved(profile: VoiceProfile, reason: FallbackReason | null): ResolvedVoice {
     return {
       profile,

@@ -1,5 +1,5 @@
 import {
-  type AudiobookJob,
+  AudiobookJob,
   type AudiobookOutput,
   Book,
   Chapter,
@@ -16,6 +16,7 @@ import {
   type AssembleAudiobookRequest,
   type AudioAssembler,
   type CompletedSegmentAudio,
+  createGenerationCommandIdentity,
   type DirectedChapter,
   type DirectorModel,
   type EpubExtractionRequest,
@@ -155,13 +156,19 @@ class FakeExtractor implements EpubExtractor {
 }
 
 class FakeDirector implements DirectorModel {
+  readonly identity: string
   readonly events: string[]
   readonly corrupt: boolean
   releaseCalls = 0
 
-  constructor(events: string[], corrupt = false) {
+  constructor(
+    events: string[],
+    corrupt = false,
+    identity = 'fake-gemma:model-1:prompt-1:schema-1:settings-1',
+  ) {
     this.events = events
     this.corrupt = corrupt
+    this.identity = identity
   }
 
   async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
@@ -182,7 +189,7 @@ class FakeDirector implements DirectorModel {
 }
 
 class FakeSpeechEngine implements SpeechEngine {
-  readonly identity = 'fake-qwen:model-revision-1:settings-1'
+  readonly identity: string
   readonly events: string[]
   renderCalls: SpeechRenderRequest[] = []
   beginCalls = 0
@@ -190,8 +197,9 @@ class FakeSpeechEngine implements SpeechEngine {
   failOnceAtRenderCall: number | null = null
   returnWrongIdentity = false
 
-  constructor(events: string[]) {
+  constructor(events: string[], identity = 'fake-qwen:model-revision-1:settings-1') {
     this.events = events
+    this.identity = identity
   }
 
   async beginBatch(): Promise<void> {
@@ -210,6 +218,8 @@ class FakeSpeechEngine implements SpeechEngine {
       segmentId: request.segment.id,
       inputIdentity: this.returnWrongIdentity ? 'wrong' : request.inputIdentity,
       wavPath: `/workspace/wav/${request.segment.id}-${request.inputIdentity.slice(0, 8)}.wav`,
+      sha256: 'c'.repeat(64),
+      byteLength: 4096,
     }
   }
 
@@ -220,11 +230,13 @@ class FakeSpeechEngine implements SpeechEngine {
 }
 
 class FakeAssembler implements AudioAssembler {
+  readonly identity: string
   readonly events: string[]
   calls: AssembleAudiobookRequest[] = []
 
-  constructor(events: string[]) {
+  constructor(events: string[], identity = 'fake-ffmpeg:aac-lc-64k:pause-policy-1') {
     this.events = events
+    this.identity = identity
   }
 
   async assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput> {
@@ -243,6 +255,10 @@ class InMemoryJobRepository implements JobRepository {
   readonly books = new Map<string, Book>()
   readonly audio = new Map<string, CompletedSegmentAudio>()
   readonly reservations: OutputReservation[] = []
+  returnInvalidReusableMetadata = false
+  reserveDuplicatePaths = false
+  readonly missingArtifactPaths = new Set<string>()
+  readonly corruptArtifactPaths = new Set<string>()
   private readonly versionByBook = new Map<string, number>()
   private readonly reservedPaths = new Set<string>()
 
@@ -251,7 +267,7 @@ class InMemoryJobRepository implements JobRepository {
   }
 
   async saveJob(job: AudiobookJob): Promise<void> {
-    this.jobs.set(job.id, job)
+    this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
   }
 
   async saveBook(book: Book): Promise<void> {
@@ -261,7 +277,16 @@ class InMemoryJobRepository implements JobRepository {
   async findReusableSegment(
     query: ReusableSegmentQuery,
   ): Promise<CompletedSegmentAudio | undefined> {
-    return this.audio.get(this.audioKey(query.segmentId, query.inputIdentity))
+    const reusable = this.audio.get(this.audioKey(query.segmentId, query.inputIdentity))
+    if (
+      reusable === undefined ||
+      this.missingArtifactPaths.has(reusable.wavPath) ||
+      this.corruptArtifactPaths.has(reusable.wavPath)
+    ) {
+      return undefined
+    }
+    if (!this.returnInvalidReusableMetadata) return reusable
+    return { ...reusable, sha256: 'invalid-hash' }
   }
 
   async saveCompletedSegment(segment: CompletedSegmentAudio): Promise<void> {
@@ -279,7 +304,9 @@ class InMemoryJobRepository implements JobRepository {
       m4bPath: `/workspace/${version.fileName(base, 'm4b')}`,
       chapters: book.chapters.map((chapter) => ({
         chapterId: chapter.id,
-        path: `/workspace/${base}-${version.label}-ch${String(chapter.position).padStart(2, '0')}.flac`,
+        path: this.reserveDuplicatePaths
+          ? `/workspace/${version.fileName(base, 'm4b')}`
+          : `/workspace/${base}-${version.label}-ch${String(chapter.position).padStart(2, '0')}.flac`,
       })),
     }
     const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
@@ -304,12 +331,19 @@ interface Harness {
   readonly useCase: GenerateAudiobook
 }
 
-const harness = (options: { corruptDirection?: boolean } = {}): Harness => {
+const harness = (
+  options: {
+    corruptDirection?: boolean
+    directorIdentity?: string
+    speechIdentity?: string
+    assemblerIdentity?: string
+  } = {},
+): Harness => {
   const events: string[] = []
   const extractor = new FakeExtractor()
-  const director = new FakeDirector(events, options.corruptDirection)
-  const speech = new FakeSpeechEngine(events)
-  const assembler = new FakeAssembler(events)
+  const director = new FakeDirector(events, options.corruptDirection, options.directorIdentity)
+  const speech = new FakeSpeechEngine(events, options.speechIdentity)
+  const assembler = new FakeAssembler(events, options.assemblerIdentity)
   const repository = new InMemoryJobRepository()
   return {
     events,
@@ -339,6 +373,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const result = await app.useCase.execute({
       jobId: 'job-001',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
 
@@ -387,12 +422,14 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const first = await app.useCase.execute({
       jobId: 'job-first',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
     const renderCallsAfterFirst = app.speech.renderCalls.length
     const second = await app.useCase.execute({
       jobId: 'job-second',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
 
@@ -413,6 +450,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const first = await app.useCase.execute({
       jobId: 'job-idempotent',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
     const calls = {
@@ -424,6 +462,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const repeated = await app.useCase.execute({
       jobId: 'job-idempotent',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
 
@@ -435,15 +474,123 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.repository.reservations).toHaveLength(1)
   })
 
+  it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
+    await app.useCase.execute({
+      jobId: 'job-bound-inputs',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    const extractionCount = app.extractor.calls.length
+
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-bound-inputs',
+        epubPath: '/uploads/renamed-story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-bound-inputs',
+        epubPath: '/uploads/story.epub',
+        epubSha256: 'e'.repeat(64),
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-bound-inputs',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(2),
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
+
+    const changedSpeech = new FakeSpeechEngine(app.events, 'fake-qwen:model-revision-2:settings-1')
+    const changedUseCase = new GenerateAudiobook({
+      epubExtractor: app.extractor,
+      directorModel: app.director,
+      speechEngine: changedSpeech,
+      audioAssembler: app.assembler,
+      jobs: app.repository,
+    })
+    await expect(
+      changedUseCase.execute({
+        jobId: 'job-bound-inputs',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
+
+    expect(app.extractor.calls).toHaveLength(extractionCount)
+    expect(app.repository.reservations).toHaveLength(1)
+  })
+
+  it('includes director and assembly settings in deterministic command identity', () => {
+    const identity = (directorIdentity: string, audioAssemblerIdentity: string) =>
+      createGenerationCommandIdentity({
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+        directorIdentity,
+        speechEngineIdentity: app.speech.identity,
+        audioAssemblerIdentity,
+      })
+    const original = identity(app.director.identity, app.assembler.identity)
+    expect(identity('changed-director-settings', app.assembler.identity)).not.toBe(original)
+    expect(identity(app.director.identity, 'changed-assembly-settings')).not.toBe(original)
+  })
+
+  it('rejects an active duplicate request and only recovers with explicit abandonment', async () => {
+    const voices = makeCast()
+    const identity = createGenerationCommandIdentity({
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices,
+      directorIdentity: app.director.identity,
+      speechEngineIdentity: app.speech.identity,
+      audioAssemblerIdentity: app.assembler.identity,
+    })
+    const active = new AudiobookJob('job-active')
+    active.bindCommand(identity)
+    active.start()
+    await app.repository.saveJob(active)
+
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-active',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices,
+      }),
+    ).rejects.toThrow('already running; duplicate request rejected')
+    expect(app.extractor.calls).toHaveLength(0)
+
+    const recovered = await app.useCase.execute({
+      jobId: 'job-active',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices,
+      recoverAbandoned: true,
+    })
+    expect(recovered.job.state).toBe('completed')
+    expect(app.extractor.calls).toHaveLength(1)
+  })
+
   it('invalidates only audio whose approved voice inputs changed', async () => {
     await app.useCase.execute({
       jobId: 'job-original-cast',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(1),
     })
     const changed = await app.useCase.execute({
       jobId: 'job-changed-fallback',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(2),
     })
 
@@ -459,6 +606,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       app.useCase.execute({
         jobId: 'job-resume',
         epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
         voices: makeCast(),
       }),
     ).rejects.toThrow('synthetic speech failure')
@@ -472,6 +620,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const resumed = await app.useCase.execute({
       jobId: 'job-resume',
       epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
       voices: makeCast(),
     })
     expect(resumed.job.state).toBe('completed')
@@ -480,12 +629,86 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.speech.endCalls).toBe(2)
   })
 
+  it('rejects an extractor result whose content hash differs from the bound EPUB', async () => {
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-epub-mismatch',
+        epubPath: '/uploads/story.epub',
+        epubSha256: 'f'.repeat(64),
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('Extracted EPUB identity does not match')
+    expect(app.repository.jobs.get('job-epub-mismatch')?.state).toBe('failed')
+    expect(app.director.releaseCalls).toBe(0)
+  })
+
+  it('rejects malformed reusable artifact metadata before speech', async () => {
+    await app.useCase.execute({
+      jobId: 'job-valid-artifacts',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    const renderCalls = app.speech.renderCalls.length
+    app.repository.returnInvalidReusableMetadata = true
+
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-invalid-artifact-metadata',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('SHA-256 is invalid')
+    expect(app.speech.renderCalls).toHaveLength(renderCalls)
+    expect(app.repository.jobs.get('job-invalid-artifact-metadata')?.state).toBe('failed')
+  })
+
+  it('regenerates artifacts the repository reports physically missing or corrupt', async () => {
+    await app.useCase.execute({
+      jobId: 'job-physical-artifacts',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    const artifacts = [...app.repository.audio.values()]
+    const missing = artifacts[0]
+    const corrupt = artifacts[1]
+    if (missing === undefined || corrupt === undefined) throw new Error('fixture artifacts missing')
+    app.repository.missingArtifactPaths.add(missing.wavPath)
+    app.repository.corruptArtifactPaths.add(corrupt.wavPath)
+
+    const recovered = await app.useCase.execute({
+      jobId: 'job-physical-artifacts-recovered',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    expect(recovered.generatedSegments).toBe(2)
+    expect(recovered.reusedSegments).toBe(2)
+  })
+
+  it('rejects output reservations with colliding M4B and chapter paths', async () => {
+    app.repository.reserveDuplicatePaths = true
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-duplicate-paths',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('Invalid numbered output reservation')
+    expect(app.assembler.calls).toHaveLength(0)
+    expect(app.repository.jobs.get('job-duplicate-paths')?.state).toBe('failed')
+  })
+
   it('rejects source fidelity failures before speech and persists a failed job', async () => {
     app = harness({ corruptDirection: true })
     await expect(
       app.useCase.execute({
         jobId: 'job-bad-source',
         epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
         voices: makeCast(),
       }),
     ).rejects.toBeInstanceOf(SourceCoverageError)
@@ -506,6 +729,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       app.useCase.execute({
         jobId: 'job-bad-audio',
         epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
         voices: makeCast(),
       }),
     ).rejects.toThrow('Speech output identity mismatch')

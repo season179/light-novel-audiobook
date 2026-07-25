@@ -23,8 +23,9 @@ export interface DirectedChapter {
   readonly segments: readonly DirectedSegment[]
 }
 
-/** Implemented by issue #30. release() ensures the director leaves GPU memory before speech. */
+/** Implemented by issue #30. identity binds model, prompt/schema, and direction settings. */
 export interface DirectorModel {
+  readonly identity: string
   directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter>
   release(): Promise<void>
 }
@@ -39,6 +40,8 @@ export interface CompletedSegmentAudio {
   readonly segmentId: string
   readonly inputIdentity: string
   readonly wavPath: string
+  readonly sha256: string
+  readonly byteLength: number
 }
 
 /**
@@ -78,8 +81,9 @@ export interface AssembleAudiobookRequest {
   readonly reservation: OutputReservation
 }
 
-/** Implemented by issue #32's non-overwriting FFmpeg adapter. */
+/** Implemented by issue #32. identity binds encoding, pause, and assembly settings. */
 export interface AudioAssembler {
+  readonly identity: string
   assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput>
 }
 
@@ -88,7 +92,12 @@ export interface ReusableSegmentQuery {
   readonly inputIdentity: string
 }
 
-/** Implemented by issue #27; reservations must be atomic and must never name an existing file. */
+/**
+ * Implemented by issue #27. Persist jobs through AudiobookJob.snapshot()/reconstitute(), not
+ * process-local object references. A reusable result may be returned only after the adapter proves
+ * the absolute path exists and its current bytes match sha256 and byteLength. Reservations must be
+ * atomic, pairwise-distinct, and must never name an existing file.
+ */
 export interface JobRepository {
   findJob(jobId: string): Promise<AudiobookJob | undefined>
   saveJob(job: AudiobookJob): Promise<void>

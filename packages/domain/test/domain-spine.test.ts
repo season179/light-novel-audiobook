@@ -3,6 +3,7 @@ import {
   AUDIOBOOK_JOB_STAGES,
   AUDIOBOOK_JOB_STATES,
   AudiobookJob,
+  Book,
   CHAPTER_STATES,
   Chapter,
   type DirectedSegment,
@@ -10,6 +11,7 @@ import {
   ExactSourceCoverage,
   InvalidStateTransitionError,
   OutputVersion,
+  Segment,
   SourceCoverageError,
   SourcePassage,
   StableIds,
@@ -20,6 +22,7 @@ import {
 const hash = 'a'.repeat(64)
 const bookId = StableIds.book(hash)
 const chapterId = StableIds.chapter(bookId, 1)
+const commandIdentity = 'd'.repeat(64)
 
 const makeChapter = (): Chapter =>
   new Chapter({
@@ -160,6 +163,65 @@ describe('stable identities and exact source coverage', () => {
       SourceCoverageError,
     )
   })
+
+  it('rejects globally duplicated passage and segment IDs across two chapters', () => {
+    const firstId = StableIds.chapter(bookId, 1)
+    const secondId = StableIds.chapter(bookId, 2)
+    const chapter = (id: string, position: number, passageId: string) =>
+      new Chapter({
+        id,
+        bookId,
+        position,
+        title: `Chapter ${position}`,
+        sourcePassages: [new SourcePassage({ id: passageId, chapterId: id, sourceText: 'Exact.' })],
+      })
+    const first = chapter(firstId, 1, 'globally-shared-passage')
+    const second = chapter(secondId, 2, 'globally-shared-passage')
+    expect(
+      () =>
+        new Book({
+          id: bookId,
+          title: 'Collision',
+          author: null,
+          coverPath: null,
+          source: { epubPath: '/book.epub', sha256: hash },
+          chapters: [first, second],
+        }),
+    ).toThrow('Duplicate source passage ID across book')
+
+    const uniqueFirst = chapter(firstId, 1, 'passage-one')
+    const uniqueSecond = chapter(secondId, 2, 'passage-two')
+    const duplicateSegment = (owner: Chapter) =>
+      new Segment({
+        id: 'globally-shared-segment',
+        chapterId: owner.id,
+        sourcePassageId: required(owner.sourcePassages[0]).id,
+        order: 1,
+        sourceText: 'Exact.',
+        kind: 'narration',
+        speakerId: null,
+        confidence: 1,
+        delivery: {
+          emotion: 'neutral',
+          pace: 'normal',
+          volume: 'normal',
+          pauseAfterMs: 0,
+        },
+      })
+    uniqueFirst.submitForReview([duplicateSegment(uniqueFirst)])
+    uniqueSecond.submitForReview([duplicateSegment(uniqueSecond)])
+    const aggregate = new Book({
+      id: bookId,
+      title: 'Collision',
+      author: null,
+      coverPath: null,
+      source: { epubPath: '/book.epub', sha256: hash },
+      chapters: [uniqueFirst, uniqueSecond],
+    })
+    expect(() => aggregate.assertGloballyUniqueSegmentIds()).toThrow(
+      'Duplicate segment ID across book',
+    )
+  })
 })
 
 describe('chapter lifecycle and stable casting', () => {
@@ -232,8 +294,10 @@ describe('audiobook job and numbered output lifecycle', () => {
   it('defines every valid and invalid job state and stage pair', () => {
     const validStates = new Set([
       'pending->running',
+      'running->abandoned',
       'running->failed',
       'running->completed',
+      'abandoned->running',
       'failed->running',
     ])
     for (const from of AUDIOBOOK_JOB_STATES) {
@@ -262,6 +326,8 @@ describe('audiobook job and numbered output lifecycle', () => {
   it('rejects skipped work and reaches a terminal completed state', () => {
     const job = new AudiobookJob('job-1')
     expect(() => job.beginDirection()).toThrow(InvalidStateTransitionError)
+    expect(() => job.start()).toThrow('Generation inputs must be bound')
+    job.bindCommand(commandIdentity)
     job.start()
     job.attachBook(bookId)
     job.beginDirection()
@@ -279,19 +345,88 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(job.state).toBe('completed')
     expect(job.stage).toBe('completed')
     expect(job.progress).toMatchObject({ completedSegments: 1, totalSegments: 1 })
-    expect(() => job.restart()).toThrow(InvalidStateTransitionError)
+    expect(() => job.retry()).toThrow(InvalidStateTransitionError)
     expect(version.label).toBe('v001')
     expect(version.fileName('My Book', 'm4b')).toBe('My Book-v001.m4b')
   })
 
   it('allows failed jobs to retry from extraction without changing their book', () => {
     const job = new AudiobookJob('job-retry')
+    job.bindCommand(commandIdentity)
     job.start()
     job.attachBook(bookId)
     job.fail('temporary failure')
-    job.restart()
+    job.retry()
     expect(job.stage).toBe('extracting')
     expect(job.error).toBeNull()
     expect(() => job.attachBook('another-book')).toThrow('cannot change its source book')
+  })
+
+  it('requires an explicit abandoned transition before recovering an active job', () => {
+    const job = new AudiobookJob('job-abandoned')
+    job.bindCommand(commandIdentity)
+    job.start()
+    expect(() => job.recoverAbandoned()).toThrow(InvalidStateTransitionError)
+    job.markAbandoned()
+    expect(job.state).toBe('abandoned')
+    job.recoverAbandoned()
+    expect(job.state).toBe('running')
+    expect(job.stage).toBe('extracting')
+  })
+
+  it('round-trips completed and failed snapshots without replaying transitions', () => {
+    const completed = new AudiobookJob('job-snapshot-completed')
+    completed.bindCommand(commandIdentity)
+    completed.start()
+    completed.attachBook(bookId)
+    completed.beginDirection()
+    completed.beginRendering(1)
+    completed.recordSegmentCompleted('segment-1')
+    completed.beginAssembly()
+    completed.complete({
+      version: new OutputVersion(3),
+      m4bPath: '/output/book-v003.m4b',
+      chapters: [{ chapterId, path: '/output/book-v003-ch01.flac' }],
+    })
+    const completedReloaded = AudiobookJob.reconstitute(
+      JSON.parse(JSON.stringify(completed.snapshot())),
+    )
+    expect(completedReloaded.snapshot()).toEqual(completed.snapshot())
+    expect(completedReloaded.output?.version.label).toBe('v003')
+
+    const failed = new AudiobookJob('job-snapshot-failed')
+    failed.bindCommand(commandIdentity)
+    failed.start()
+    failed.fail('disk unavailable')
+    const failedReloaded = AudiobookJob.reconstitute(JSON.parse(JSON.stringify(failed.snapshot())))
+    expect(failedReloaded.snapshot()).toEqual(failed.snapshot())
+    failedReloaded.retry()
+    expect(failedReloaded.state).toBe('running')
+  })
+
+  it('rejects corrupt snapshots and duplicate completed output paths', () => {
+    const pending = new AudiobookJob('job-invalid-snapshot').snapshot()
+    expect(() =>
+      AudiobookJob.reconstitute({
+        ...pending,
+        state: 'completed',
+        stage: 'completed',
+      }),
+    ).toThrow('require a command identity')
+
+    const job = new AudiobookJob('job-duplicate-output')
+    job.bindCommand(commandIdentity)
+    job.start()
+    job.beginDirection()
+    job.beginRendering(1)
+    job.recordSegmentCompleted('segment-1')
+    job.beginAssembly()
+    expect(() =>
+      job.complete({
+        version: new OutputVersion(1),
+        m4bPath: '/output/shared',
+        chapters: [{ chapterId, path: '/output/shared' }],
+      }),
+    ).toThrow('pairwise distinct')
   })
 })

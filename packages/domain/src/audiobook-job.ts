@@ -1,8 +1,14 @@
 import { DomainError, InvalidStateTransitionError } from './errors.js'
-import type { AudiobookOutput } from './output-version.js'
+import { type AudiobookOutput, OutputVersion } from './output-version.js'
 import type { FallbackReason } from './segment.js'
 
-export const AUDIOBOOK_JOB_STATES = ['pending', 'running', 'failed', 'completed'] as const
+export const AUDIOBOOK_JOB_STATES = [
+  'pending',
+  'running',
+  'abandoned',
+  'failed',
+  'completed',
+] as const
 export type AudiobookJobState = (typeof AUDIOBOOK_JOB_STATES)[number]
 
 export const AUDIOBOOK_JOB_STAGES = [
@@ -23,7 +29,8 @@ const nextStage: Readonly<Partial<Record<AudiobookJobStage, AudiobookJobStage>>>
 
 const allowedStateTransitions: Readonly<Record<AudiobookJobState, readonly AudiobookJobState[]>> = {
   pending: ['running'],
-  running: ['failed', 'completed'],
+  running: ['abandoned', 'failed', 'completed'],
+  abandoned: ['running'],
   failed: ['running'],
   completed: [],
 }
@@ -42,10 +49,34 @@ export interface AudiobookJobProgress {
   readonly latestMessage: string
 }
 
+export interface AudiobookOutputSnapshot {
+  readonly version: number
+  readonly m4bPath: string
+  readonly chapters: readonly {
+    readonly chapterId: string
+    readonly path: string
+  }[]
+}
+
+/** JSON-safe persistence shape for issue #27's repository adapter. */
+export interface AudiobookJobSnapshot {
+  readonly schemaVersion: 1
+  readonly id: string
+  readonly state: AudiobookJobState
+  readonly stage: AudiobookJobStage
+  readonly commandIdentity: string | null
+  readonly bookId: string | null
+  readonly progress: AudiobookJobProgress
+  readonly warnings: readonly FallbackVoiceWarning[]
+  readonly output: AudiobookOutputSnapshot | null
+  readonly error: string | null
+}
+
 export class AudiobookJob {
   readonly id: string
   private currentState: AudiobookJobState = 'pending'
   private currentStage: AudiobookJobStage = 'extracting'
+  private boundCommandIdentity: string | null = null
   private attachedBookId: string | null = null
   private currentProgress: AudiobookJobProgress = Object.freeze({
     currentChapterId: null,
@@ -70,6 +101,10 @@ export class AudiobookJob {
     return this.currentStage
   }
 
+  get commandIdentity(): string | null {
+    return this.boundCommandIdentity
+  }
+
   get bookId(): string | null {
     return this.attachedBookId
   }
@@ -90,30 +125,54 @@ export class AudiobookJob {
     return this.failureMessage
   }
 
+  bindCommand(commandIdentity: string): void {
+    if (!/^[a-f\d]{64}$/i.test(commandIdentity)) {
+      throw new DomainError('Generation command identity must be a SHA-256 value')
+    }
+    const normalized = commandIdentity.toLowerCase()
+    if (this.boundCommandIdentity !== null && this.boundCommandIdentity !== normalized) {
+      throw new DomainError('Audiobook job is bound to different generation inputs')
+    }
+    if (this.currentState !== 'pending' && this.boundCommandIdentity === null) {
+      throw new DomainError('A started job cannot be bound retroactively')
+    }
+    this.boundCommandIdentity = normalized
+  }
+
   start(): void {
     if (this.currentState !== 'pending') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
+    }
+    if (this.boundCommandIdentity === null) {
+      throw new DomainError('Generation inputs must be bound before a job starts')
     }
     this.currentState = 'running'
     this.report(null, 'Extracting EPUB')
   }
 
-  /** A failed or abandoned run starts deterministically from extraction and reuses valid audio. */
-  restart(): void {
-    if (this.currentState !== 'failed' && this.currentState !== 'running') {
+  retry(): void {
+    if (this.currentState !== 'failed') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
     }
-    this.currentState = 'running'
-    this.currentStage = 'extracting'
+    this.resetForRecovery('Retrying from EPUB extraction')
+  }
+
+  markAbandoned(): void {
+    if (this.currentState !== 'running') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'abandoned')
+    }
+    this.currentState = 'abandoned'
     this.currentProgress = Object.freeze({
-      currentChapterId: null,
-      completedSegments: 0,
-      totalSegments: 0,
-      latestMessage: 'Restarting from EPUB extraction',
+      ...this.currentProgress,
+      latestMessage: 'Job marked abandoned',
     })
-    this.fallbackWarnings = Object.freeze([])
-    this.completedOutput = null
-    this.failureMessage = null
+  }
+
+  recoverAbandoned(): void {
+    if (this.currentState !== 'abandoned') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
+    }
+    this.resetForRecovery('Recovering abandoned job from EPUB extraction')
   }
 
   attachBook(bookId: string): void {
@@ -165,6 +224,7 @@ export class AudiobookJob {
     if (this.currentState !== 'running' || this.currentStage !== 'rendering') {
       throw new DomainError('Segments can only complete during rendering')
     }
+    if (segmentId.length === 0) throw new DomainError('Completed segment ID is required')
     if (this.currentProgress.completedSegments >= this.currentProgress.totalSegments) {
       throw new DomainError('Completed segment count cannot exceed the total')
     }
@@ -179,6 +239,7 @@ export class AudiobookJob {
     if (this.currentState !== 'running' || this.currentStage !== 'directing') {
       throw new DomainError('Fallback warnings can only be added during direction')
     }
+    this.validateWarning(warning)
     if (this.fallbackWarnings.some((existing) => existing.segmentId === warning.segmentId)) return
     this.fallbackWarnings = Object.freeze([...this.fallbackWarnings, Object.freeze({ ...warning })])
   }
@@ -187,17 +248,12 @@ export class AudiobookJob {
     if (this.currentState !== 'running' || this.currentStage !== 'assembling') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'completed')
     }
-    if (
-      output.m4bPath.length === 0 ||
-      output.chapters.some((chapter) => chapter.path.length === 0)
-    ) {
-      throw new DomainError('Completed output paths are required')
-    }
+    this.validateOutput(output)
     this.currentStage = 'completed'
     this.currentState = 'completed'
     this.completedOutput = Object.freeze({
       ...output,
-      chapters: Object.freeze([...output.chapters]),
+      chapters: Object.freeze(output.chapters.map((chapter) => Object.freeze({ ...chapter }))),
     })
     this.reportCompleted('Audiobook completed')
   }
@@ -212,12 +268,164 @@ export class AudiobookJob {
     this.currentProgress = Object.freeze({ ...this.currentProgress, latestMessage: error })
   }
 
+  snapshot(): AudiobookJobSnapshot {
+    return Object.freeze({
+      schemaVersion: 1,
+      id: this.id,
+      state: this.currentState,
+      stage: this.currentStage,
+      commandIdentity: this.boundCommandIdentity,
+      bookId: this.attachedBookId,
+      progress: Object.freeze({ ...this.currentProgress }),
+      warnings: Object.freeze(
+        this.fallbackWarnings.map((warning) => Object.freeze({ ...warning })),
+      ),
+      output:
+        this.completedOutput === null
+          ? null
+          : Object.freeze({
+              version: this.completedOutput.version.value,
+              m4bPath: this.completedOutput.m4bPath,
+              chapters: Object.freeze(
+                this.completedOutput.chapters.map((chapter) => Object.freeze({ ...chapter })),
+              ),
+            }),
+      error: this.failureMessage,
+    })
+  }
+
+  static reconstitute(snapshot: AudiobookJobSnapshot): AudiobookJob {
+    AudiobookJob.validateSnapshot(snapshot)
+    const job = new AudiobookJob(snapshot.id)
+    job.currentState = snapshot.state
+    job.currentStage = snapshot.stage
+    job.boundCommandIdentity = snapshot.commandIdentity?.toLowerCase() ?? null
+    job.attachedBookId = snapshot.bookId
+    job.currentProgress = Object.freeze({ ...snapshot.progress })
+    job.fallbackWarnings = Object.freeze(
+      snapshot.warnings.map((warning) => Object.freeze({ ...warning })),
+    )
+    job.completedOutput =
+      snapshot.output === null
+        ? null
+        : Object.freeze({
+            version: new OutputVersion(snapshot.output.version),
+            m4bPath: snapshot.output.m4bPath,
+            chapters: Object.freeze(
+              snapshot.output.chapters.map((chapter) => Object.freeze({ ...chapter })),
+            ),
+          })
+    job.failureMessage = snapshot.error
+    return job
+  }
+
   static canTransition(from: AudiobookJobState, to: AudiobookJobState): boolean {
     return allowedStateTransitions[from].includes(to)
   }
 
   static canAdvanceStage(from: AudiobookJobStage, to: AudiobookJobStage): boolean {
     return nextStage[from] === to
+  }
+
+  private static validateSnapshot(snapshot: AudiobookJobSnapshot): void {
+    if (snapshot.schemaVersion !== 1 || snapshot.id.length === 0) {
+      throw new DomainError('Unsupported or invalid audiobook job snapshot')
+    }
+    if (
+      !AUDIOBOOK_JOB_STATES.includes(snapshot.state) ||
+      !AUDIOBOOK_JOB_STAGES.includes(snapshot.stage)
+    ) {
+      throw new DomainError('Audiobook job snapshot has an invalid state or stage')
+    }
+    if (snapshot.commandIdentity !== null && !/^[a-f\d]{64}$/i.test(snapshot.commandIdentity)) {
+      throw new DomainError('Audiobook job snapshot has an invalid command identity')
+    }
+    if (snapshot.state !== 'pending' && snapshot.commandIdentity === null) {
+      throw new DomainError('Started audiobook job snapshots require a command identity')
+    }
+    if (snapshot.state === 'pending' && snapshot.stage !== 'extracting') {
+      throw new DomainError('Pending audiobook job snapshots must be extracting')
+    }
+    if (snapshot.bookId !== null && snapshot.bookId.length === 0) {
+      throw new DomainError('Audiobook job snapshot has an invalid book ID')
+    }
+    if ((snapshot.stage === 'completed') !== (snapshot.state === 'completed')) {
+      throw new DomainError('Only completed jobs can use the completed stage')
+    }
+    if ((snapshot.output !== null) !== (snapshot.state === 'completed')) {
+      throw new DomainError('Only completed jobs can contain output')
+    }
+    if ((snapshot.error !== null) !== (snapshot.state === 'failed') || snapshot.error === '') {
+      throw new DomainError('Only failed jobs can contain a nonempty error')
+    }
+    const progress = snapshot.progress
+    if (
+      !Number.isSafeInteger(progress.completedSegments) ||
+      !Number.isSafeInteger(progress.totalSegments) ||
+      progress.completedSegments < 0 ||
+      progress.totalSegments < 0 ||
+      progress.completedSegments > progress.totalSegments ||
+      progress.latestMessage.length === 0
+    ) {
+      throw new DomainError('Audiobook job snapshot has invalid progress')
+    }
+    if (snapshot.state === 'completed' && progress.completedSegments !== progress.totalSegments) {
+      throw new DomainError('Completed audiobook snapshot has incomplete segments')
+    }
+    const validator = new AudiobookJob(snapshot.id)
+    const warningSegmentIds = new Set<string>()
+    for (const warning of snapshot.warnings) {
+      validator.validateWarning(warning)
+      if (warningSegmentIds.has(warning.segmentId)) {
+        throw new DomainError('Audiobook job snapshot has duplicate fallback warnings')
+      }
+      warningSegmentIds.add(warning.segmentId)
+    }
+    if (snapshot.output !== null) {
+      validator.validateOutput({
+        version: new OutputVersion(snapshot.output.version),
+        m4bPath: snapshot.output.m4bPath,
+        chapters: snapshot.output.chapters,
+      })
+    }
+  }
+
+  private validateWarning(warning: FallbackVoiceWarning): void {
+    if (
+      warning.segmentId.length === 0 ||
+      warning.voiceProfileId.length === 0 ||
+      !['unresolved_speaker', 'missing_speaker_voice'].includes(warning.reason)
+    ) {
+      throw new DomainError('Fallback warning is invalid')
+    }
+  }
+
+  private validateOutput(output: AudiobookOutput): void {
+    const paths = [output.m4bPath, ...output.chapters.map((chapter) => chapter.path)]
+    const chapterIds = output.chapters.map((chapter) => chapter.chapterId)
+    if (
+      output.chapters.length === 0 ||
+      paths.some((path) => path.length === 0) ||
+      new Set(paths).size !== paths.length ||
+      chapterIds.some((chapterId) => chapterId.length === 0) ||
+      new Set(chapterIds).size !== chapterIds.length
+    ) {
+      throw new DomainError('Completed output paths must be nonempty and pairwise distinct')
+    }
+  }
+
+  private resetForRecovery(message: string): void {
+    this.currentState = 'running'
+    this.currentStage = 'extracting'
+    this.currentProgress = Object.freeze({
+      currentChapterId: null,
+      completedSegments: 0,
+      totalSegments: 0,
+      latestMessage: message,
+    })
+    this.fallbackWarnings = Object.freeze([])
+    this.completedOutput = null
+    this.failureMessage = null
   }
 
   private advance(to: AudiobookJobStage, message: string): void {

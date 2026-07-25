@@ -8,6 +8,8 @@ import {
   type Segment,
   type VoiceCast,
 } from '@light-novel-audiobook/domain'
+import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
+import { createGenerationCommandIdentity } from './generation-command-identity.js'
 import type {
   AssemblyChapter,
   AudioAssembler,
@@ -22,7 +24,10 @@ import { createRenderInputIdentity } from './render-input-identity.js'
 export interface GenerateAudiobookCommand {
   readonly jobId: string
   readonly epubPath: string
+  readonly epubSha256: string
   readonly voices: VoiceCast
+  /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
+  readonly recoverAbandoned?: boolean
 }
 
 export interface GenerateAudiobookResult {
@@ -64,7 +69,22 @@ export class GenerateAudiobook {
   }
 
   async execute(command: GenerateAudiobookCommand): Promise<GenerateAudiobookResult> {
+    const commandIdentity = createGenerationCommandIdentity({
+      epubPath: command.epubPath,
+      epubSha256: command.epubSha256,
+      voices: command.voices,
+      directorIdentity: this.directorModel.identity,
+      speechEngineIdentity: this.speechEngine.identity,
+      audioAssemblerIdentity: this.audioAssembler.identity,
+    })
     let job = await this.jobs.findJob(command.jobId)
+    if (
+      job !== undefined &&
+      job.commandIdentity !== null &&
+      job.commandIdentity !== commandIdentity
+    ) {
+      throw new DomainError('Audiobook job result is stale for the requested generation inputs')
+    }
     if (job?.state === 'completed') {
       if (job.output === null) throw new DomainError('Completed job has no audiobook output')
       return {
@@ -77,20 +97,43 @@ export class GenerateAudiobook {
 
     if (job === undefined) {
       job = new AudiobookJob(command.jobId)
+      job.bindCommand(commandIdentity)
       await this.jobs.saveJob(job)
+    } else if (job.commandIdentity === null) {
+      job.bindCommand(commandIdentity)
     }
-    if (job.state === 'pending') job.start()
-    else job.restart()
+
+    if (job.state === 'pending') {
+      job.start()
+    } else if (job.state === 'failed') {
+      job.retry()
+    } else if (job.state === 'running') {
+      if (command.recoverAbandoned !== true) {
+        throw new DomainError('Audiobook job is already running; duplicate request rejected')
+      }
+      job.markAbandoned()
+      await this.jobs.saveJob(job)
+      job.recoverAbandoned()
+    } else if (job.state === 'abandoned') {
+      if (command.recoverAbandoned !== true) {
+        throw new DomainError('Audiobook job is abandoned; explicit recovery is required')
+      }
+      job.recoverAbandoned()
+    }
     await this.jobs.saveJob(job)
 
     try {
       const book = await this.epubExtractor.extract({ epubPath: command.epubPath })
+      if (book.source.sha256 !== command.epubSha256.toLowerCase()) {
+        throw new DomainError('Extracted EPUB identity does not match the generation command')
+      }
       job.attachBook(book.id)
       await this.jobs.saveBook(book)
       job.beginDirection()
       await this.jobs.saveJob(job)
 
       await this.directBook(book, command.voices, job)
+      book.assertGloballyUniqueSegmentIds()
       await this.jobs.saveBook(book)
 
       const planned = await this.planRendering(book, command.voices)
@@ -155,6 +198,7 @@ export class GenerateAudiobook {
         }
         chapter.submitForReview(segments)
         chapter.approve()
+        book.assertGloballyUniqueSegmentIds()
         await this.jobs.saveBook(book)
         await this.jobs.saveJob(job)
       }
@@ -165,8 +209,13 @@ export class GenerateAudiobook {
 
   private async planRendering(book: Book, voices: VoiceCast): Promise<readonly PlannedSegment[]> {
     const planned: PlannedSegment[] = []
+    const segmentIds = new Set<string>()
     for (const chapter of book.chapters) {
       for (const segment of chapter.segments) {
+        if (segmentIds.has(segment.id)) {
+          throw new DomainError(`Duplicate segment map key would misassemble audio: ${segment.id}`)
+        }
+        segmentIds.add(segment.id)
         const assignment = segment.voiceAssignment
         if (assignment === null) throw new DomainError(`Segment ${segment.id} has no voice`)
         const voice = voices.profile(assignment.voiceProfileId)
@@ -229,6 +278,9 @@ export class GenerateAudiobook {
             } else {
               reusedSegments += 1
             }
+            if (audioBySegment.has(item.segment.id)) {
+              throw new DomainError(`Duplicate segment audio map key: ${item.segment.id}`)
+            }
             audioBySegment.set(item.segment.id, audio)
             job.recordSegmentCompleted(item.segment.id)
             await this.jobs.saveJob(job)
@@ -260,13 +312,10 @@ export class GenerateAudiobook {
     segmentId: string,
     inputIdentity: string,
   ): void {
-    if (
-      audio.segmentId !== segmentId ||
-      audio.inputIdentity !== inputIdentity ||
-      audio.wavPath.length === 0
-    ) {
+    if (audio.segmentId !== segmentId || audio.inputIdentity !== inputIdentity) {
       throw new DomainError(`Speech output identity mismatch for segment ${segmentId}`)
     }
+    validateCompletedSegmentAudioMetadata(audio)
   }
 
   private validateReservation(
@@ -274,9 +323,11 @@ export class GenerateAudiobook {
     reservation: Awaited<ReturnType<JobRepository['reserveNextOutput']>>,
   ): void {
     const chapterIds = reservation.chapters.map((chapter) => chapter.chapterId)
+    const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
     if (
       reservation.bookId !== book.id ||
-      reservation.m4bPath.length === 0 ||
+      paths.some((path) => path.length === 0) ||
+      new Set(paths).size !== paths.length ||
       chapterIds.length !== book.chapters.length ||
       chapterIds.some((id, index) => id !== book.chapters[index]?.id) ||
       reservation.chapters.some((chapter) => chapter.path.length === 0)
