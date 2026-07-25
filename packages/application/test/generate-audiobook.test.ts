@@ -914,7 +914,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       epubSha256: sourceHash,
       voices,
     }
-    const firstUseCase = makeUseCase(wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock'))
+    const firstUseCase = makeUseCase(
+      wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock'),
+    )
     // The review gate stops the first attempt; the human decision lets the run reach rendering.
     await expect(firstUseCase.execute(command)).rejects.toThrow(PendingFallbackReviewError)
     await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
@@ -932,9 +934,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       new FakeDirector(app.events),
       'gemma-content:model-2:prompt-2:schema-1:settings-1',
     )
-    await expect(
-      makeUseCase(redirected).execute(command),
-    ).rejects.toThrow('stale for the requested generation inputs')
+    await expect(makeUseCase(redirected).execute(command)).rejects.toThrow(
+      'stale for the requested generation inputs',
+    )
   })
 
   // Issue #54 item 1. Pre-fix (#45 without this patch), the resume below re-extracted and

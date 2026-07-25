@@ -193,7 +193,9 @@ export class DirectAudiobook {
         // The command identity was already bound to the factory's value. A director that
         // disagrees would direct under inputs the job does not describe.
         await created.release()
-        throw new DomainError('Director identity does not match the identity its factory advertised')
+        throw new DomainError(
+          'Director identity does not match the identity its factory advertised',
+        )
       }
       directorModel = created
       return created
