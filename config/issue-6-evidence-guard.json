@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "implementationCommit": "49cb60e754ed55fdccfb44751fbb723153c3aea3",
+  "authorizedVerifierPatches": {
+    "packages/gemma-benchmark/scripts/verify-evidence.ts": "3e920d3135ffaa141e52126f0b04a4c033b944aab241ebccc8a012d759a8bd79"
+  }
+}
