@@ -36,25 +36,27 @@ function codePointLength(text: string): number {
  * preference in #55. Returns `undefined` when the point is mid-word, so a caller that only splits
  * at classified points can never break a word.
  */
-function classifyBoundary(clusters: string[], end: number): BoundaryTier | undefined {
+function classifyBoundary(clusters: readonly string[], end: number): BoundaryTier | undefined {
   if (end <= 0 || end > clusters.length) return undefined
-  const previous = clusters[end - 1]
+  const previous = clusters.at(end - 1)
   if (previous === undefined) return undefined
-  const next = end < clusters.length ? clusters[end] : undefined
+  const next = end < clusters.length ? clusters.at(end) : undefined
   const atWordBoundary = isWhitespace(previous) || (next !== undefined && isWhitespace(next))
   if (!atWordBoundary) return undefined
   // The triggering punctuation is the last non-whitespace, non-closing cluster before `end`.
-  let k = end - 1
-  while (k >= 0 && (isWhitespace(clusters[k]) || CLOSING_PUNCTUATION.has(clusters[k]))) k -= 1
-  if (k < 0) return 'word'
-  const trigger = clusters[k]
-  if (trigger !== undefined && SENTENCE_TERMINATORS.has(trigger)) return 'sentence'
-  if (trigger !== undefined && CLAUSE_TERMINATORS.has(trigger)) return 'clause'
+  for (let k = end - 1; k >= 0; k -= 1) {
+    const cluster = clusters.at(k)
+    if (cluster !== undefined && !isWhitespace(cluster) && !CLOSING_PUNCTUATION.has(cluster)) {
+      if (SENTENCE_TERMINATORS.has(cluster)) return 'sentence'
+      if (CLAUSE_TERMINATORS.has(cluster)) return 'clause'
+      return 'word'
+    }
+  }
   return 'word'
 }
 
 function latestBoundary(
-  clusters: string[],
+  clusters: readonly string[],
   start: number,
   maxEnd: number,
   tier: BoundaryTier,
@@ -65,6 +67,13 @@ function latestBoundary(
     if (classifyBoundary(clusters, end) === tier) return end
   }
   return undefined
+}
+
+/** Code points in `clusterCodePoints` over the half-open range [start, end). */
+function rangeCodePoints(clusterCodePoints: readonly number[], start: number, end: number): number {
+  let total = 0
+  for (let i = start; i < end; i += 1) total += clusterCodePoints.at(i) ?? 0
+  return total
 }
 
 /**
@@ -78,22 +87,22 @@ function splitText(text: string, maxCharacters: number, sourcePassageId: string)
   if (codePointLength(text) <= maxCharacters) return [text]
 
   const clusters = graphemes(text)
-  // Prefix sums of code points so the code-point length of clusters[start..end) is O(1).
-  const prefix = new Array<number>(clusters.length + 1)
-  prefix[0] = 0
-  for (let i = 0; i < clusters.length; i += 1)
-    prefix[i + 1] = prefix[i] + codePointLength(clusters[i])
+  const clusterCodePoints = clusters.map((cluster) => codePointLength(cluster))
 
   const pieces: string[] = []
   let start = 0
   while (start < clusters.length) {
-    if (prefix[clusters.length] - prefix[start] <= maxCharacters) {
+    if (rangeCodePoints(clusterCodePoints, start, clusters.length) <= maxCharacters) {
       pieces.push(clusters.slice(start).join(''))
       break
     }
-    // maxEnd: the largest end > start whose piece still fits the budget.
+    // maxEnd: the largest end > start whose piece still fits the budget (running accumulator, O(n)).
     let maxEnd = start
-    while (maxEnd + 1 <= clusters.length && prefix[maxEnd + 1] - prefix[start] <= maxCharacters) {
+    let accumulated = 0
+    while (maxEnd + 1 <= clusters.length) {
+      const next = clusterCodePoints.at(maxEnd) ?? 0
+      if (accumulated + next > maxCharacters) break
+      accumulated += next
       maxEnd += 1
     }
     if (maxEnd === start) {
