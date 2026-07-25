@@ -117,6 +117,10 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     expect(result).not.toBeNull()
     if (result === null) return
 
+    // A book whose title collides with another one gets v002 as its first export, so the numbering
+    // is explained where the version is shown rather than looking like a bug.
+    expect(result.textContent).toContain('counts output files, not books')
+
     const download = within(result).getByRole('link', {
       name: /Download the M4B \(the-lantern-courier-v001\.m4b\)/,
     })

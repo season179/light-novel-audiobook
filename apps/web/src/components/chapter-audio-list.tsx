@@ -12,6 +12,14 @@ export function ChapterAudioList({ output }: ChapterAudioListProps) {
   return (
     <section className="stack bordered" aria-labelledby="result-heading">
       <h3 id="result-heading">Audiobook {output.versionLabel}</h3>
+      {/*
+       * Static copy, not a rule: the version is assigned by the reservation ledger, which numbers
+       * output files and skips names another book already holds. Nothing here decides the number.
+       */}
+      <p className="hint">
+        The version number counts output files, not books — it skips numbers already taken by
+        another book with a similar title, so a first export can start above v001.
+      </p>
       <p>
         <a className="download" href={output.downloadUrl} download={output.m4bFileName}>
           Download the M4B ({output.m4bFileName})
