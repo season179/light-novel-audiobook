@@ -28,6 +28,7 @@ export const DOMAIN_EPUB_EXTRACTOR_SETTINGS = Object.freeze({
     empty_spine_documents: 'audit-as-non-story@1',
     metadata: 'preserve-opf-refinements@1',
     domain_mapping: 'issue-29-book-mapping@1',
+    identifiers: 'stable-ids-book-scoped@1',
   }),
 })
 
