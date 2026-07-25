@@ -172,7 +172,19 @@ function endHolderStdin(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
-/** Keeps a detached holder from holding this process' event loop open. */
+/**
+ * Keeps a detached holder from holding this process' event loop open, so a caller that never
+ * releases is not pinned alive by it.
+ *
+ * **Call this only after the handshake has settled. Never at spawn.** The placement is load-bearing,
+ * not tidiness. `acquire()` awaits events from this child -- the token on stdout, or its exit -- and
+ * an unref'd child with unref'd stdio is no longer a reason for the loop to stay alive. Detach at
+ * spawn and a caller with nothing else pending drains its loop while `acquire()` is still waiting,
+ * so the process just stops: no error, no rejection, nothing logged. It is invisible to in-process
+ * assertions, which is why `test/book-lock.unref-ordering.test.ts` observes it from a child process
+ * via an outcome file instead. That test fails deterministically if this call is hoisted; the same
+ * hoist was measured failing 24/24 in the issue #46 diagnosis.
+ */
 function detachFromEventLoop(child: ChildProcessWithoutNullStreams): void {
   child.unref()
   for (const stream of [child.stdin, child.stdout, child.stderr]) {
@@ -269,6 +281,8 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
 
       const groupPid = child.pid
       const holderPid = handshake.holderPid
+      // Must stay here, below the handshake: nothing above this line may run it. See
+      // `detachFromEventLoop`.
       detachFromEventLoop(child)
       let released = false
       return {
@@ -356,6 +370,14 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
    * while an orphaned holder kept the book locked, and EOF alone cannot be relied on: a holder that
    * is stopped, wedged, or ignoring stdin never acts on it. So EOF is sent unconditionally, the
    * group is given a grace period to leave on its own, and then it is killed.
+   *
+   * **The polling is also load-bearing for a second, less obvious reason.** By the time release
+   * runs, `detachFromEventLoop` has unref'd the holder and its stdio, so the child is no longer a
+   * reason for the caller's event loop to stay alive. `#waitForGroupExit` waits on a *timer*, which
+   * is, so release keeps the loop running until it settles. Replacing it with `await` on the child's
+   * `exit` event would leave a caller with nothing else pending draining its loop mid-release and
+   * exiting silently -- the same failure mode as detaching too early, and confirmed by mutating only
+   * this method during the issue #46 work. `test/book-lock.unref-ordering.test.ts` covers it too.
    */
   async #stopHolder(child: ChildProcessWithoutNullStreams): Promise<void> {
     endHolderStdin(child)
