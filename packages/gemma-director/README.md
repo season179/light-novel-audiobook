@@ -10,9 +10,12 @@ it does not add another benchmark or provider framework.
   maps directly to issue #29 domain `DirectedSegment` values.
 - A required `DirectorContextProvider` supplies story-bible/cast context that is intentionally not
   stored on the domain `Book`.
-- A required `DirectorRuntimeLifecycle` owns or delegates model shutdown. `release()` first cancels
-  and settles active direction calls, invokes lifecycle release exactly once, and is safe to call
-  repeatedly. Calls after release fail closed.
+- A required `DirectorRuntimeLifecycle` owns or delegates model start and shutdown. The adapter —
+  never the caller — sequences them: it acquires the exclusive GPU lease and only then calls
+  `start()`, so weights can never occupy VRAM before the lease exists. `release()` first cancels
+  and settles active direction calls, invokes lifecycle release exactly once, releases the GPU
+  lease even when that lifecycle release throws, and is safe to call repeatedly. Calls after
+  release fail closed.
 - Required `DirectorModel.identity` is a deterministic SHA-256 over canonical adapter/TanStack
   versions, model repository/revision/file/size/hash, prompt and JSON-schema versions/hashes,
   llama.cpp commit/endpoint/context/offload/cache/batch/thread settings, sampling parameters,
@@ -28,12 +31,22 @@ it does not add another benchmark or provider framework.
   reorder, text changes, and trailing omissions. Issue #29's `ExactSourceCoverage` validates the
   mapped fragments again at the application boundary.
 - Explicit unresolved speakers and known-speaker assignments below the configured threshold map to
-  domain `speakerId: null`, forcing issue #29 fallback voice semantics. The concrete result also
-  exposes review-required warnings with source ranges, candidate speaker, confidence, and threshold.
+  domain `speakerId: null`, forcing issue #29 fallback voice semantics. The threshold applies to
+  every kind: narrator-owned narration and sound cues below it raise a review-required
+  `low_confidence_kind` warning that keeps the narrator voice instead of rerouting to fallback.
+  The concrete result also exposes review-required warnings with source ranges, candidate speaker,
+  confidence, and threshold.
 - Gemma and Qwen use the same `@light-novel-audiobook/gpu-lease` kernel-`flock` protocol and stable
-  configurable path (`~/.local/state/light-novel-audiobook/gpu/exclusive.lock`). The first chapter
-  acquires owner `gemma`; contention fails before llama.cpp is called. The lease remains held across
-  chapters and is released only after `DirectorRuntimeLifecycle.release()` confirms model exit.
+  configurable path (`~/.local/state/light-novel-audiobook/gpu/exclusive.lock`). The first
+  `prepare()` or `directChapter()` acquires owner `gemma` and only then starts the runtime, so
+  contention fails before llama.cpp loads a single byte of weights. The lease remains held across
+  chapters and is released only after `DirectorRuntimeLifecycle.release()` confirms model exit —
+  including when that release fails.
+- The lease's post-lock `nvidia-smi` diagnostic excludes this process tree by PID. WSL2/GPU-PV
+  reports a real PID but `[Not Found]`/`[N/A]` for process name and per-process memory, so names
+  and per-process memory are never treated as data; a `--query-gpu=memory.used` ceiling
+  (`residentGpuMemoryThresholdMiB`, default 1024 MiB, comfortably above the ~231 MiB idle baseline)
+  covers residency the compute-app table cannot attribute.
 - Every run writes text-free progress and safe terminal errors through `DirectorProgressStore`.
   Caller cancellation, lease cancellation, release cancellation, and deadlines abort work.
 - The endpoint is server-side only and accepts only `http://127.0.0.1:<port>/v1`.
@@ -59,9 +72,10 @@ permission, and inference-slot occupation.
 
 `config/real-smoke.json` contains only public profile settings, loopback URL, external runtime
 location, confidence threshold, and deadlines. The command does **not** trust an existing endpoint:
-it refuses an occupied port, hashes the complete installed GGUF and binary, acquires the shared GPU
-lease before any model process starts, creates an ephemeral mode-`0600` API-key file, and launches
-the verified binary itself with the verified model path. It
+it refuses an occupied port, hashes the complete installed GGUF and binary, then calls
+`model.prepare()`, which acquires the shared GPU lease and only afterwards lets the owned
+lifecycle create an ephemeral mode-`0600` API-key file and launch the verified binary with the
+verified model path. It
 then proves `/proc/<pid>/exe`, exact process argv, and the sole `ss` loopback listener/PID all match
 that owned process before making any inference claim.
 

@@ -76,7 +76,10 @@ export interface DirectedAnnotation extends DomainDirectedSegment {
   readonly speakerReason: string | null
 }
 
-export type DirectorWarningCode = 'unresolved_speaker' | 'low_confidence_speaker'
+export type DirectorWarningCode =
+  | 'unresolved_speaker'
+  | 'low_confidence_speaker'
+  | 'low_confidence_kind'
 
 export interface DirectorWarning {
   readonly code: DirectorWarningCode
@@ -88,7 +91,8 @@ export interface DirectorWarning {
   readonly confidenceThreshold: number
   readonly message: string
   readonly reviewRequired: true
-  readonly usesFallback: true
+  /** False for narrator-owned segments: they flag for review without rerouting the voice. */
+  readonly usesFallback: boolean
 }
 
 export interface DirectorModelIdentity {
@@ -126,6 +130,7 @@ export type DirectorRunState =
   | 'started'
   | 'requesting'
   | 'response_started'
+  | 'streaming'
   | 'validating'
   | 'completed'
   | 'failed'
@@ -167,7 +172,13 @@ export interface DirectorHealth {
   readonly modelIds: readonly string[]
 }
 
-/** Owns or delegates shutdown/unload of the exact local runtime used by this adapter. */
+/** Owns or delegates start and shutdown/unload of the exact local runtime used by this adapter. */
 export interface DirectorRuntimeLifecycle {
+  /**
+   * Loads the runtime and its weights onto the GPU. The adapter calls this only while it already
+   * holds the exclusive GPU lease, so VRAM residency can never precede the lease. Implementations
+   * must be idempotent and must resolve only once the runtime is ready to serve requests.
+   */
+  start(): Promise<void>
   release(): Promise<void>
 }

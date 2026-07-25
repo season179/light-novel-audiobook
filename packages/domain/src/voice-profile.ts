@@ -124,7 +124,8 @@ export class VoiceCast {
   }
 
   resolve(segment: Segment): ResolvedVoice {
-    if (segment.kind === 'narration') {
+    // Sound cues are narrator-owned like narration; they never name a character speaker.
+    if (segment.kind === 'narration' || segment.kind === 'sound_cue') {
       return this.resolved(this.narrator, null)
     }
     if (segment.speakerId === null) {

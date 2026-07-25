@@ -47,18 +47,54 @@ export interface GemmaDirectorModelOptions {
   readonly confidenceThreshold: number
   readonly contextProvider: DirectorContextProvider
   readonly progressStore: DirectorProgressStore
-  /** Must unload/stop the runtime owned by the caller or launcher. */
+  /**
+   * Must start and unload/stop the runtime owned by the caller or launcher. The adapter drives the
+   * order: the exclusive GPU lease is always acquired before `start()` puts weights in VRAM.
+   */
   readonly lifecycle: DirectorRuntimeLifecycle
   readonly gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
   /** Must be the same stable file used by Qwen3-TTS (normally .../gpu/exclusive.lock). */
   readonly gpuLeaseLockFilePath: string
-  /** Used only when a composition root acquired the lease before starting an owned server. */
-  readonly initialGpuLease?: GpuLease
   readonly fetch?: typeof globalThis.fetch
 }
 
 interface ModelsResponse {
   readonly data?: readonly { readonly id?: unknown }[]
+}
+
+/** Longest source passage ID the request schema accepts; used to bridge stream chunk boundaries. */
+const MAX_PASSAGE_ID_LENGTH = 256
+
+/**
+ * The chapter is one request, so intra-chapter progress can only be inferred from the stream:
+ * a passage is complete once fragments for the next ordered passage begin arriving.
+ */
+class StreamedPassageProgress {
+  #completedPassages = 0
+  #tail = ''
+  readonly #pending: string[]
+
+  constructor(passageIds: readonly string[]) {
+    this.#pending = [...passageIds]
+  }
+
+  get completedPassages(): number {
+    return this.#completedPassages
+  }
+
+  /** Returns true when the completed count advanced. */
+  observe(delta: string): boolean {
+    const before = this.#completedPassages
+    const window = `${this.#tail}${delta}`
+    while (this.#pending.length > 1) {
+      const started = this.#pending[1]
+      if (started === undefined || !window.includes(started)) break
+      this.#pending.shift()
+      this.#completedPassages += 1
+    }
+    this.#tail = window.slice(-MAX_PASSAGE_ID_LENGTH)
+    return this.#completedPassages > before
+  }
 }
 
 export class GemmaDirectorModel implements ApplicationDirectorModel {
@@ -77,6 +113,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private readonly activeOperations = new Set<Promise<unknown>>()
   private gpuLease: GpuLease | undefined
   private gpuLeaseAcquisition: Promise<GpuLease> | undefined
+  private runtimeReady: Promise<void> | undefined
   private releasePromise: Promise<void> | undefined
   private released = false
 
@@ -101,15 +138,6 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     this.gpuLeaseLockFilePath = resolve(options.gpuLeaseLockFilePath)
     if (options.gpuLeaseLockFilePath.trim().length === 0) {
       throw new Error('Gemma Director GPU lease lock file path is required')
-    }
-    if (options.initialGpuLease !== undefined) {
-      if (
-        options.initialGpuLease.owner !== 'gemma' ||
-        resolve(options.initialGpuLease.lockFilePath) !== this.gpuLeaseLockFilePath
-      ) {
-        throw new Error('Initial GPU lease does not match the configured Gemma lock contract')
-      }
-      this.gpuLease = options.initialGpuLease
     }
     this.fetchImplementation = options.fetch ?? globalThis.fetch
     this.identity = createGemmaDirectorIdentity({
@@ -196,6 +224,15 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     return this.trackOperation(this.directChapterInternal(book, chapter, options))
   }
 
+  /**
+   * Acquires the exclusive GPU lease and only then starts the runtime. Direction calls do this
+   * automatically; composition roots can call it explicitly to fail fast before any work.
+   */
+  prepare(options: { signal?: AbortSignal } = {}): Promise<void> {
+    this.assertAvailable()
+    return this.trackOperation(this.ensureRuntimeReady(options.signal))
+  }
+
   release(): Promise<void> {
     if (this.releasePromise !== undefined) return this.releasePromise
     this.released = true
@@ -203,8 +240,20 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     const active = [...this.activeOperations]
     this.releasePromise = (async () => {
       await Promise.allSettled(active)
-      await this.lifecycle.release()
-      await this.gpuLease?.release()
+      // A runtime that refuses to exit must never strand the cross-process lease: both steps
+      // always run, and the runtime failure stays the reported cause.
+      let failure: unknown
+      try {
+        await this.lifecycle.release()
+      } catch (error: unknown) {
+        failure = error
+      }
+      try {
+        await this.gpuLease?.release()
+      } catch (error: unknown) {
+        failure ??= error
+      }
+      if (failure !== undefined) throw failure
     })()
     return this.releasePromise
   }
@@ -214,7 +263,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     chapter: Chapter,
     options: DirectionOptions,
   ): Promise<GemmaDirectedChapter> {
-    await this.ensureGpuLease(options.signal)
+    await this.ensureRuntimeReady(options.signal)
     const context = await this.contextProvider.forChapter(book, chapter)
     const requestId = `direction-${canonicalSha256({
       bookId: book.id,
@@ -292,6 +341,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       }
     }
 
+    const progress = new StreamedPassageProgress(request.passages.map((passage) => passage.id))
     const control = this.abortControl(
       options.signal,
       options.timeoutMs ?? 15 * 60_000,
@@ -326,9 +376,22 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       let output: DirectionWireOutput | undefined
       let responseStarted = false
       for await (const event of stream) {
-        if (event.type === 'TEXT_MESSAGE_CONTENT' && !responseStarted) {
-          responseStarted = true
-          await emit('response_started', 0, 'Gemma response streaming started')
+        if (event.type === 'TEXT_MESSAGE_CONTENT') {
+          if (!responseStarted) {
+            responseStarted = true
+            await emit(
+              'response_started',
+              progress.completedPassages,
+              'Gemma response streaming started',
+            )
+          }
+          if (progress.observe(event.delta)) {
+            await emit(
+              'streaming',
+              progress.completedPassages,
+              `Directed ${progress.completedPassages} of ${totalPassages} passages`,
+            )
+          }
         }
         if (event.type === 'RUN_ERROR') {
           if (event.code === 'structured-output-parse-failed') {
@@ -365,13 +428,20 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         throw new DirectorError('malformed_output', 'Gemma Director response did not complete')
       }
 
-      await emit('validating', 0, 'Validating exact source ranges and speaker semantics')
+      await emit(
+        'validating',
+        progress.completedPassages,
+        'Validating exact source ranges and speaker semantics',
+      )
       const validated = validateDirectionOutput(output, request, this.confidenceThreshold)
+      // Only fallback-bearing warnings drop the speaker; review-only warnings keep the voice.
       const warningRanges = new Set(
-        validated.warnings.map(
-          (warning) =>
-            `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
-        ),
+        validated.warnings
+          .filter((warning) => warning.usesFallback)
+          .map(
+            (warning) =>
+              `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+          ),
       )
       const segments = validated.annotations.map((annotation): DomainDirectedSegment => {
         const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
@@ -413,7 +483,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       try {
         await emit(
           classified.code === 'cancelled' ? 'cancelled' : 'failed',
-          0,
+          progress.completedPassages,
           classified.message,
           {
             code: classified.code,
@@ -464,6 +534,35 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     }
   }
 
+  /**
+   * The only ordering that makes the lease meaningful: exclusive GPU ownership first, model
+   * weights second. Nothing in this adapter can load the runtime without holding the lease.
+   */
+  private ensureRuntimeReady(signal?: AbortSignal): Promise<void> {
+    if (this.runtimeReady !== undefined) return this.runtimeReady
+    const attempt = (async (): Promise<void> => {
+      await this.ensureGpuLease(signal)
+      try {
+        await this.lifecycle.start()
+      } catch (error: unknown) {
+        if (error instanceof DirectorError) throw error
+        throw new DirectorError(
+          'unavailable',
+          'Gemma Director runtime failed to start while holding the GPU lease',
+          true,
+          { cause: error },
+        )
+      }
+    })()
+    // The lease is deliberately retained on a failed start; release() is the only way it is freed.
+    const ready = attempt.catch((error: unknown) => {
+      this.runtimeReady = undefined
+      throw error
+    })
+    this.runtimeReady = ready
+    return ready
+  }
+
   private async ensureGpuLease(signal?: AbortSignal): Promise<GpuLease> {
     if (this.gpuLease !== undefined) return this.gpuLease
     if (this.gpuLeaseAcquisition !== undefined) return await this.gpuLeaseAcquisition
@@ -497,17 +596,19 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
               },
             )
           }
+          // A held lease, a failed holder spawn, and another process on the GPU all clear with
+          // time; only an unrecognised failure is treated as permanent.
           throw new DirectorError(
             'gpu_busy',
             'Cannot acquire the shared cross-process GPU lease for Gemma',
-            error.code === 'busy',
+            error.code === 'busy' || error.code === 'unavailable' || error.code === 'diagnostic',
             { cause: error },
           )
         }
         throw new DirectorError(
           'gpu_busy',
           'Cannot acquire the shared cross-process GPU lease for Gemma',
-          true,
+          false,
           { cause: error },
         )
       })

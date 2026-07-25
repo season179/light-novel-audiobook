@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, open } from 'node:fs/promises'
+import { mkdir, open, readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -12,6 +12,9 @@ process.stdin.resume()
 process.stdin.on('end', () => process.exit(0))
 process.on('SIGTERM', () => process.exit(0))
 `
+/** Comfortably above an idle WSL2/GPU-PV baseline (~231 MiB) and far below any loaded model. */
+const DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB = 1_024
+const MAX_PROCESS_ANCESTRY_DEPTH = 64
 
 export type GpuOwner = 'composition' | 'gemma' | 'qwen3-tts'
 
@@ -45,6 +48,12 @@ export interface FileGpuLeaseCoordinatorConfig {
   readonly nvidiaSmiExecutable?: string
   /** Diagnostic fail-closed check for uncoordinated pre-existing GPU users; flock is the guarantee. */
   readonly inspectExistingComputeProcesses?: boolean
+  /**
+   * Total-residency ceiling, in MiB, used when the compute-app table attributes nothing to this
+   * process tree. WSL2/GPU-PV reports a real PID but `[Not Found]`/`[N/A]` for the name and
+   * per-process memory, so total used memory is the only remaining residency signal there.
+   */
+  readonly residentGpuMemoryThresholdMiB?: number
   readonly releaseGraceMs?: number
 }
 
@@ -54,11 +63,49 @@ interface HolderExit {
   readonly error?: unknown
 }
 
+type HolderHandshake = 'acquired' | 'exited' | 'unusable'
+
+interface ComputeApp {
+  readonly pid: number | undefined
+  readonly line: string
+}
+
+/** Reads the parent PID from `/proc/<pid>/stat`, tolerating spaces and parens in the comm field. */
+async function parentProcessId(pid: number): Promise<number | undefined> {
+  let raw: string
+  try {
+    raw = await readFile(`/proc/${pid}/stat`, 'utf8')
+  } catch {
+    return undefined
+  }
+  const fields = raw
+    .slice(raw.lastIndexOf(')') + 1)
+    .trim()
+    .split(/\s+/u)
+  const parent = Number(fields[1])
+  return Number.isSafeInteger(parent) && parent >= 0 ? parent : undefined
+}
+
+/** Fail-closed: only a PID provably inside this process tree is treated as our own. */
+async function isOwnProcessTree(pid: number): Promise<boolean> {
+  if (pid === process.pid) return true
+  let current = pid
+  for (let depth = 0; depth < MAX_PROCESS_ANCESTRY_DEPTH; depth += 1) {
+    const parent = await parentProcessId(current)
+    if (parent === undefined) return false
+    if (parent === process.pid) return true
+    if (parent <= 1) return false
+    current = parent
+  }
+  return false
+}
+
 export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly #lockFilePath: string
   readonly #flockExecutable: string
   readonly #nvidiaSmiExecutable: string
   readonly #inspectExistingComputeProcesses: boolean
+  readonly #residentGpuMemoryThresholdMiB: number
   readonly #releaseGraceMs: number
 
   constructor(config: FileGpuLeaseCoordinatorConfig) {
@@ -68,7 +115,15 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     this.#flockExecutable = config.flockExecutable ?? 'flock'
     this.#nvidiaSmiExecutable = config.nvidiaSmiExecutable ?? 'nvidia-smi'
     this.#inspectExistingComputeProcesses = config.inspectExistingComputeProcesses ?? true
+    this.#residentGpuMemoryThresholdMiB =
+      config.residentGpuMemoryThresholdMiB ?? DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB
     this.#releaseGraceMs = config.releaseGraceMs ?? 5_000
+    if (
+      !Number.isSafeInteger(this.#residentGpuMemoryThresholdMiB) ||
+      this.#residentGpuMemoryThresholdMiB < 1
+    ) {
+      throw new GpuLeaseError('unavailable', 'GPU residency threshold must be a positive integer')
+    }
     if (!Number.isSafeInteger(this.#releaseGraceMs) || this.#releaseGraceMs < 100) {
       throw new GpuLeaseError('unavailable', 'GPU lease release grace must be at least 100 ms')
     }
@@ -118,8 +173,17 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
-      acquired = await this.#waitForToken(child, exit, token)
-      if (!acquired) {
+      const handshake = await this.#waitForToken(child, exit, token)
+      acquired = handshake === 'acquired'
+      if (handshake === 'unusable') {
+        // The holder may still be alive and holding the kernel lock, so it must be stopped here.
+        await this.#stopHolderQuietly(child, exit)
+        throw new GpuLeaseError(
+          'unavailable',
+          'GPU lease holder produced an unusable handshake and was stopped',
+        )
+      }
+      if (handshake === 'exited') {
         const result = await exit
         if (signal?.aborted)
           throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled')
@@ -148,7 +212,8 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         },
       }
     } catch (error) {
-      if (acquired) await this.#stopHolder(child, exit)
+      // Stopping the holder must never replace the cause that made acquisition fail.
+      if (acquired) await this.#stopHolderQuietly(child, exit)
       if (error instanceof GpuLeaseError) throw error
       if (signal?.aborted)
         throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled', {
@@ -166,33 +231,69 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     child: ChildProcessWithoutNullStreams,
     exit: Promise<HolderExit>,
     token: string,
-  ): Promise<boolean> {
+  ): Promise<HolderHandshake> {
     child.stdout.setEncoding('utf8')
-    return await new Promise<boolean>((resolveReady) => {
+    return await new Promise<HolderHandshake>((resolveReady) => {
       let settled = false
       let output = ''
-      const finish = (value: boolean): void => {
+      const finish = (value: HolderHandshake): void => {
         if (settled) return
         settled = true
         resolveReady(value)
       }
       child.stdout.on('data', (chunk: string) => {
         output += chunk
-        if (output.split(/\r?\n/u).includes(token)) finish(true)
-        if (output.length > 4_000) finish(false)
+        if (output.split(/\r?\n/u).includes(token)) finish('acquired')
+        if (output.length > 4_000) finish('unusable')
       })
-      void exit.then(() => finish(false))
+      void exit.then(() => finish('exited'))
     })
   }
 
   async #diagnoseExistingCompute(signal?: AbortSignal): Promise<void> {
-    let stdout: string
-    try {
-      ;({ stdout } = await execFileAsync(
-        this.#nvidiaSmiExecutable,
+    const computeApps = this.#parseComputeApps(
+      await this.#queryNvidiaSmi(
         ['--query-compute-apps=pid,process_name,used_gpu_memory', '--format=csv,noheader,nounits'],
-        { encoding: 'utf8', maxBuffer: 64 * 1024, signal },
-      ))
+        signal,
+      ),
+    )
+    const foreign: string[] = []
+    let ownProcesses = 0
+    for (const app of computeApps) {
+      // Names and per-process memory are unreliable under GPU-PV; only the PID is trustworthy.
+      if (app.pid !== undefined && (await isOwnProcessTree(app.pid))) ownProcesses += 1
+      else foreign.push(app.line)
+    }
+    if (foreign.length > 0) {
+      throw new GpuLeaseError(
+        'diagnostic',
+        `Uncoordinated GPU compute process detected after lease acquisition: ${foreign.join('; ')}`,
+      )
+    }
+    // Our own runtime legitimately occupies VRAM, so total residency only decides the rest.
+    if (ownProcesses > 0) return
+    const used = this.#parseMemoryUsedMiB(
+      await this.#queryNvidiaSmi(
+        ['--query-gpu=memory.used', '--format=csv,noheader,nounits'],
+        signal,
+      ),
+    )
+    if (used !== undefined && used > this.#residentGpuMemoryThresholdMiB) {
+      throw new GpuLeaseError(
+        'diagnostic',
+        `Unattributed GPU residency of ${used} MiB exceeds the ${this.#residentGpuMemoryThresholdMiB} MiB threshold after lease acquisition`,
+      )
+    }
+  }
+
+  async #queryNvidiaSmi(args: readonly string[], signal?: AbortSignal): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(this.#nvidiaSmiExecutable, [...args], {
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024,
+        signal,
+      })
+      return stdout
     } catch (error) {
       if (signal?.aborted)
         throw new GpuLeaseError('cancelled', 'GPU diagnostic was cancelled', { cause: error })
@@ -200,15 +301,39 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         cause: error,
       })
     }
-    const active = stdout
+  }
+
+  #parseComputeApps(stdout: string): ComputeApp[] {
+    return stdout
       .split(/\r?\n/u)
       .map((line) => line.trim())
       .filter(Boolean)
-    if (active.length > 0) {
-      throw new GpuLeaseError(
-        'diagnostic',
-        `Uncoordinated GPU compute process detected after lease acquisition: ${active.join('; ')}`,
-      )
+      .map((line) => {
+        const pid = Number(line.split(',')[0]?.trim())
+        return {
+          pid: Number.isSafeInteger(pid) && pid > 0 ? pid : undefined,
+          line,
+        }
+      })
+  }
+
+  /** `[N/A]`, `[Not Found]`, and other non-numeric readings are absent data, never zero. */
+  #parseMemoryUsedMiB(stdout: string): number | undefined {
+    const values = stdout
+      .split(/\r?\n/u)
+      .map((line) => Number(line.trim()))
+      .filter((value) => Number.isFinite(value))
+    return values.length === 0 ? undefined : Math.max(...values)
+  }
+
+  async #stopHolderQuietly(
+    child: ChildProcessWithoutNullStreams,
+    exit: Promise<HolderExit>,
+  ): Promise<void> {
+    try {
+      await this.#stopHolder(child, exit)
+    } catch {
+      // The caller is already reporting a more informative failure.
     }
   }
 

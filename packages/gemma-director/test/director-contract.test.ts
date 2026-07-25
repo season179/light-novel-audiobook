@@ -2,7 +2,15 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DirectorModel as ApplicationDirectorModel } from '@light-novel-audiobook/application'
-import { Book, Chapter, ExactSourceCoverage, SourcePassage } from '@light-novel-audiobook/domain'
+import {
+  Book,
+  Chapter,
+  ExactSourceCoverage,
+  SourcePassage,
+  VoiceCast,
+  VoiceProfile,
+  type VoiceRole,
+} from '@light-novel-audiobook/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   createGemmaDirectorIdentity,
@@ -36,14 +44,40 @@ class MemoryProgressStore implements DirectorProgressStore {
   }
 }
 
+interface CountingLifecycle extends DirectorRuntimeLifecycle {
+  startCalls: number
+  releaseCalls: number
+}
+
 class FakeLifecycle implements DirectorRuntimeLifecycle {
+  startCalls = 0
   releaseCalls = 0
 
   constructor(private readonly events: string[] = []) {}
 
+  async start(): Promise<void> {
+    this.startCalls += 1
+    this.events.push('runtime-started')
+  }
+
   async release(): Promise<void> {
     this.releaseCalls += 1
     this.events.push('runtime-released')
+  }
+}
+
+/** A runtime that refuses to exit, as llama-server can when a request is wedged. */
+class UnstoppableLifecycle implements DirectorRuntimeLifecycle {
+  startCalls = 0
+  releaseCalls = 0
+
+  async start(): Promise<void> {
+    this.startCalls += 1
+  }
+
+  async release(): Promise<void> {
+    this.releaseCalls += 1
+    throw new Error('llama-server refused to exit')
   }
 }
 
@@ -101,6 +135,28 @@ function makeBook(): Book {
     source: { epubPath: '/private/fixture.epub', sha256: 'a'.repeat(64) },
     chapters: [chapter],
   })
+}
+
+function voiceProfile(id: string, role: VoiceRole, speakerId: string | null): VoiceProfile {
+  return new VoiceProfile({
+    id,
+    displayName: id,
+    role,
+    speakerId,
+    syntheticSpeaker: `${id}-synthetic`,
+    instruction: `Read as ${id}`,
+    seed: 7,
+    revision: 1,
+  })
+}
+
+/** The issue #29 cast the mapped segments are actually rendered with. */
+function voiceCast(): VoiceCast {
+  return new VoiceCast(
+    voiceProfile('narrator-voice', 'narrator', null),
+    voiceProfile('fallback-voice', 'fallback', null),
+    [voiceProfile('mira-voice', 'character', 'mira')],
+  )
 }
 
 const validationRequest: DirectionRequest = {
@@ -205,15 +261,16 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       gpuLeaseCoordinator?: ExclusiveGpuLeaseCoordinator
       gpuLeaseLockFilePath?: string
       lifecycleEvents?: string[]
+      lifecycle?: CountingLifecycle
     } = {},
   ): {
     model: GemmaDirectorModel
     progress: MemoryProgressStore
-    lifecycle: FakeLifecycle
+    lifecycle: CountingLifecycle
     gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
   } => {
     const progress = new MemoryProgressStore()
-    const lifecycle = new FakeLifecycle(overrides.lifecycleEvents)
+    const lifecycle = overrides.lifecycle ?? new FakeLifecycle(overrides.lifecycleEvents)
     const gpuLeaseCoordinator =
       overrides.gpuLeaseCoordinator ??
       new FakeGpuLeaseCoordinator(overrides.gpuLeaseLockFilePath, overrides.lifecycleEvents)
@@ -578,11 +635,186 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     await firstRelease
     expect(lifecycle.releaseCalls).toBe(1)
     expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
-    expect(events).toEqual(['lease-acquired:gemma', 'runtime-released', 'lease-released'])
+    expect(events).toEqual([
+      'lease-acquired:gemma',
+      'runtime-started',
+      'runtime-released',
+      'lease-released',
+    ])
     await waitFor(() => server.abortedRequests > 0)
     expect(() => model.directChapter(book, book.chapters[0] as Chapter)).toThrow(/released/)
     await model.release()
     expect(lifecycle.releaseCalls).toBe(1)
+  })
+
+  it('acquires the exclusive GPU lease before the runtime may occupy any VRAM', async () => {
+    const events: string[] = []
+    const gpuLeaseCoordinator = new FakeGpuLeaseCoordinator(
+      '/fixture/shared-gpu/exclusive.lock',
+      events,
+    )
+    const book = makeBook()
+    const { model, lifecycle } = create({ lifecycleEvents: events, gpuLeaseCoordinator })
+
+    expect(lifecycle.startCalls).toBe(0)
+    await model.prepare()
+    expect(events).toEqual(['lease-acquired:gemma', 'runtime-started'])
+
+    await model.directChapter(book, book.chapters[0] as Chapter)
+    await model.directChapter(book, book.chapters[0] as Chapter)
+    expect(lifecycle.startCalls).toBe(1)
+    expect(gpuLeaseCoordinator.acquireCalls).toBe(1)
+  })
+
+  it('never starts the runtime when the shared GPU lease cannot be acquired', async () => {
+    const root = join(tmpdir(), `gemma-lease-before-start-${crypto.randomUUID()}`)
+    const lockFilePath = join(root, 'exclusive.lock')
+    const holder = new FileGpuLeaseCoordinator({
+      lockFilePath,
+      inspectExistingComputeProcesses: false,
+    })
+    const held = await holder.acquire('qwen3-tts')
+    try {
+      const book = makeBook()
+      const { model, lifecycle } = create({
+        gpuLeaseCoordinator: new FileGpuLeaseCoordinator({
+          lockFilePath,
+          inspectExistingComputeProcesses: false,
+        }),
+        gpuLeaseLockFilePath: lockFilePath,
+      })
+      await expect(model.directChapter(book, book.chapters[0] as Chapter)).rejects.toMatchObject({
+        code: 'gpu_busy',
+      })
+      expect(lifecycle.startCalls).toBe(0)
+      expect(server.requests).toHaveLength(0)
+    } finally {
+      await held.release()
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  it('releases the GPU lease exactly once even when the runtime refuses to exit', async () => {
+    const gpuLeaseCoordinator = new FakeGpuLeaseCoordinator()
+    const lifecycle = new UnstoppableLifecycle()
+    const book = makeBook()
+    const { model } = create({ gpuLeaseCoordinator, lifecycle })
+    await model.directChapter(book, book.chapters[0] as Chapter)
+
+    await expect(model.release()).rejects.toThrow('llama-server refused to exit')
+    expect(lifecycle.releaseCalls).toBe(1)
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
+    // A memoised rejected release must not leave the kernel lock held by a live holder.
+    await expect(model.release()).rejects.toThrow('llama-server refused to exit')
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
+  })
+
+  it('classifies transient lease failures as retryable and unknown failures as permanent', async () => {
+    const book = makeBook()
+    const failing = (error: unknown): ExclusiveGpuLeaseCoordinator => ({
+      acquire: async () => {
+        throw error
+      },
+    })
+    const unavailable = create({
+      gpuLeaseCoordinator: failing(new GpuLeaseError('unavailable', 'flock could not be spawned')),
+    })
+    await expect(
+      unavailable.model.directChapter(book, book.chapters[0] as Chapter),
+    ).rejects.toMatchObject({ code: 'gpu_busy', retryable: true })
+
+    const diagnostic = create({
+      gpuLeaseCoordinator: failing(new GpuLeaseError('diagnostic', 'another process is resident')),
+    })
+    await expect(
+      diagnostic.model.directChapter(book, book.chapters[0] as Chapter),
+    ).rejects.toMatchObject({ code: 'gpu_busy', retryable: true })
+
+    const unknown = create({ gpuLeaseCoordinator: failing(new Error('unrecognised')) })
+    await expect(
+      unknown.model.directChapter(book, book.chapters[0] as Chapter),
+    ).rejects.toMatchObject({ code: 'gpu_busy', retryable: false })
+  })
+
+  it('keeps the narrator voice for sound cues instead of an unresolved-speaker fallback', async () => {
+    const output = validWireOutput()
+    const cue = output.segments[0]
+    if (cue === undefined) throw new Error('Missing fixture narration')
+    cue.kind = 'sound_cue'
+    server.respondWith(output)
+    const book = makeBook()
+    const { model } = create()
+    const result = await model.directChapter(book, book.chapters[0] as Chapter)
+
+    expect(result.segments[0]).toMatchObject({ kind: 'sound_cue', speakerId: null })
+    expect(
+      result.warnings.filter(
+        (warning) => warning.sourcePassageId === 'passage-001' && warning.sourceStart === 0,
+      ),
+    ).toEqual([])
+    const segments = ExactSourceCoverage.createSegments(
+      book.chapters[0] as Chapter,
+      result.segments,
+    )
+    const cast = voiceCast()
+    const soundCue = segments[0]
+    if (soundCue === undefined) throw new Error('Missing mapped sound cue segment')
+    expect(cast.resolve(soundCue).assignment).toEqual({
+      voiceProfileId: 'narrator-voice',
+      usesFallback: false,
+      fallbackReason: null,
+    })
+  })
+
+  it('applies the confidence threshold to narrator-owned kinds without rerouting the voice', async () => {
+    const output = validWireOutput()
+    const narration = output.segments[0]
+    const cue = output.segments[2]
+    if (narration === undefined || cue === undefined) throw new Error('Missing fixture segments')
+    narration.confidence = 0
+    cue.kind = 'sound_cue'
+    cue.speaker_id = 'narrator'
+    cue.confidence = 0.1
+    cue.unresolved_speaker = false
+    cue.speaker_reason = null
+    server.respondWith(output)
+    const book = makeBook()
+    const { model } = create()
+    const result = await model.directChapter(book, book.chapters[0] as Chapter)
+
+    expect(result.warnings.map((warning) => warning.code)).toEqual([
+      'low_confidence_kind',
+      'low_confidence_kind',
+    ])
+    expect(result.warnings[0]).toMatchObject({
+      sourcePassageId: 'passage-001',
+      confidence: 0,
+      confidenceThreshold: 0.8,
+      reviewRequired: true,
+      usesFallback: false,
+    })
+    const segments = ExactSourceCoverage.createSegments(
+      book.chapters[0] as Chapter,
+      result.segments,
+    )
+    const cast = voiceCast()
+    for (const segment of segments.filter((candidate) => candidate.kind !== 'dialogue')) {
+      expect(cast.resolve(segment).assignment.usesFallback).toBe(false)
+    }
+  })
+
+  it('reports intra-chapter passage progress while the response streams', async () => {
+    const book = makeBook()
+    const { model, progress } = create()
+    await model.directChapter(book, book.chapters[0] as Chapter)
+
+    const streaming = progress.events.filter((event) => event.state === 'streaming')
+    expect(streaming.map((event) => event.completedPassages)).toEqual([1])
+    expect(progress.events.at(-1)).toMatchObject({
+      state: 'completed',
+      completedPassages: 2,
+      totalPassages: 2,
+    })
   })
 })
 
@@ -705,6 +937,57 @@ describe('deterministic split-fragment validation', () => {
     })
     expect(() => validateDirectionOutput(output, validationRequest, CONFIDENCE_THRESHOLD)).toThrow(
       DirectorFidelityError,
+    )
+  })
+
+  it('rejects a fragment boundary that splits a UTF-16 surrogate pair', () => {
+    const passageText = 'Ah \u{1F600} ok'
+    const astralRequest: DirectionRequest = {
+      ...validationRequest,
+      passages: [{ id: 'passage-001', text: passageText }],
+    }
+    const split = {
+      segments: [
+        wireSegment('passage-001', 0, 4, passageText.slice(0, 4)),
+        wireSegment('passage-001', 4, passageText.length, passageText.slice(4)),
+      ],
+    }
+    try {
+      validateDirectionOutput(split, astralRequest, CONFIDENCE_THRESHOLD)
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(DirectorFidelityError)
+      expect((error as DirectorFidelityError).findings.map((finding) => finding.code)).toContain(
+        'split_grapheme',
+      )
+      const whole = {
+        segments: [wireSegment('passage-001', 0, passageText.length, passageText)],
+      }
+      expect(
+        validateDirectionOutput(whole, astralRequest, CONFIDENCE_THRESHOLD).annotations[0]
+          ?.sourceText,
+      ).toBe(passageText)
+      return
+    }
+    throw new Error('Expected a split surrogate pair to fail validation')
+  })
+
+  it('applies the confidence threshold to every kind, not only known character speakers', () => {
+    const output = validWireOutput()
+    const narration = output.segments[0]
+    if (narration === undefined) throw new Error('Missing fixture narration')
+    narration.confidence = 0
+    const validated = validateDirectionOutput(output, validationRequest, CONFIDENCE_THRESHOLD)
+
+    expect(validated.warnings).toContainEqual(
+      expect.objectContaining({
+        code: 'low_confidence_kind',
+        sourcePassageId: 'passage-001',
+        sourceStart: 0,
+        candidateSpeakerId: 'narrator',
+        confidence: 0,
+        reviewRequired: true,
+        usesFallback: false,
+      }),
     )
   })
 

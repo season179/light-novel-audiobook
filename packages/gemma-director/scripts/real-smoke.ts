@@ -57,15 +57,56 @@ class SanitizedProgressStore implements DirectorProgressStore {
   }
 }
 
+interface OwnedLlamaLifecycleOptions {
+  readonly binaryPath: string
+  readonly args: readonly string[]
+  readonly apiKey: string
+  readonly keyPath: string
+  readonly origin: string
+  readonly port: number
+  readonly startupTimeoutMs: number
+}
+
+/**
+ * The adapter calls start() only while it already holds the GPU lease, so this is the exact point
+ * at which the owned llama-server — and its VRAM residency — may come into existence.
+ */
 class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
+  private child: ChildProcess | undefined
+  private childError: Error | undefined
+  private startPromise: Promise<void> | undefined
   private releasePromise: Promise<void> | undefined
   cleanupComplete = false
 
-  constructor(
-    private readonly child: ChildProcess,
-    private readonly keyPath: string,
-    private readonly port: number,
-  ) {}
+  constructor(private readonly options: OwnedLlamaLifecycleOptions) {}
+
+  get processId(): number | undefined {
+    return this.child?.pid
+  }
+
+  start(): Promise<void> {
+    this.startPromise ??= this.startOnce()
+    return this.startPromise
+  }
+
+  private async startOnce(): Promise<void> {
+    await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
+    await chmod(this.options.keyPath, 0o600)
+    const child = spawn(this.options.binaryPath, [...this.options.args], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    this.child = child
+    child.on('error', (error: Error) => {
+      this.childError = error
+    })
+    await waitForHealth({
+      origin: this.options.origin,
+      apiKey: this.options.apiKey,
+      child,
+      childError: () => this.childError,
+      timeoutMs: this.options.startupTimeoutMs,
+    })
+  }
 
   release(): Promise<void> {
     if (this.releasePromise !== undefined) return this.releasePromise
@@ -74,19 +115,21 @@ class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   }
 
   private async releaseOnce(): Promise<void> {
+    const child = this.child
     try {
-      if (!childExited(this.child)) {
-        this.child.kill('SIGTERM')
-        if (!(await waitForChildExit(this.child, 15_000))) {
-          this.child.kill('SIGKILL')
-          if (!(await waitForChildExit(this.child, 10_000))) {
+      if (child !== undefined && !childExited(child)) {
+        child.kill('SIGTERM')
+        if (!(await waitForChildExit(child, 15_000))) {
+          child.kill('SIGKILL')
+          if (!(await waitForChildExit(child, 10_000))) {
             throw new Error('Owned llama-server did not exit after SIGKILL')
           }
         }
       }
     } finally {
-      await rm(this.keyPath, { force: true })
-      await waitForPortFree(this.port, 10_000)
+      child?.removeAllListeners('error')
+      await rm(this.options.keyPath, { force: true })
+      await waitForPortFree(this.options.port, 10_000)
     }
     this.cleanupComplete = true
   }
@@ -248,7 +291,6 @@ async function main(): Promise<void> {
   const keyPath = resolve(runtimeRoot, `.gemma-director-smoke-key-${process.pid}`)
   const gpuLeasePath = expandHome(process.env.GEMMA_DIRECTOR_GPU_LEASE_PATH ?? config.gpuLeasePath)
   const gpuLeaseCoordinator = new FileGpuLeaseCoordinator({ lockFilePath: gpuLeasePath })
-  const gpuLease = await gpuLeaseCoordinator.acquire('gemma')
   const args = [
     '--model',
     modelPath,
@@ -289,20 +331,19 @@ async function main(): Promise<void> {
     '--slots',
     '--log-disable',
   ]
-  let child: ChildProcess | undefined
   let lifecycle: OwnedLlamaLifecycle | undefined
   let model: GemmaDirectorModel | undefined
   let sanitizedResult: Record<string, unknown> | undefined
-  let childError: Error | undefined
-  const onChildError = (error: Error): void => {
-    childError = error
-  }
   try {
-    await writeFile(keyPath, `${apiKey}\n`, { flag: 'wx', mode: 0o600 })
-    await chmod(keyPath, 0o600)
-    child = spawn(canonicalBinary, args, { stdio: ['ignore', 'ignore', 'ignore'] })
-    child.on('error', onChildError)
-    lifecycle = new OwnedLlamaLifecycle(child, keyPath, endpoint.port)
+    lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: canonicalBinary,
+      args,
+      apiKey,
+      keyPath,
+      origin: endpoint.origin,
+      port: endpoint.port,
+      startupTimeoutMs: config.startupTimeoutMs,
+    })
     const progress = new SanitizedProgressStore()
     model = new GemmaDirectorModel({
       baseUrl: endpoint.baseUrl,
@@ -320,19 +361,14 @@ async function main(): Promise<void> {
       lifecycle,
       gpuLeaseCoordinator,
       gpuLeaseLockFilePath: gpuLeasePath,
-      initialGpuLease: gpuLease,
     })
-    await waitForHealth({
-      origin: endpoint.origin,
-      apiKey,
-      child,
-      childError: () => childError,
-      timeoutMs: config.startupTimeoutMs,
-    })
-    if (child.pid === undefined) throw new Error('Owned llama-server has no process ID')
+    // Acquires the exclusive GPU lease and only then starts the owned server; never the reverse.
+    await model.prepare()
+    const serverPid = lifecycle.processId
+    if (serverPid === undefined) throw new Error('Owned llama-server has no process ID')
     const [observedExecutable, rawCommandLine, listener] = await Promise.all([
-      realpath(await readlink(`/proc/${child.pid}/exe`)),
-      readFile(`/proc/${child.pid}/cmdline`),
+      realpath(await readlink(`/proc/${serverPid}/exe`)),
+      readFile(`/proc/${serverPid}/cmdline`),
       execFile('ss', ['-H', '-ltnp', `( sport = :${endpoint.port} )`]),
     ])
     const observedArgv = rawCommandLine.toString('utf8').split('\u0000').filter(Boolean)
@@ -342,7 +378,7 @@ async function main(): Promise<void> {
       expectedArgv: [canonicalBinary, ...args],
       observedArgv,
     })
-    assertOwnedLoopbackListener(listener.stdout, child.pid, endpoint.host, endpoint.port)
+    assertOwnedLoopbackListener(listener.stdout, serverPid, endpoint.host, endpoint.port)
     const browserBoundary = await probeBrowserBoundary({
       origin: endpoint.origin,
       apiKey,
@@ -382,18 +418,13 @@ async function main(): Promise<void> {
       absolutePathsIncluded: false,
     }
   } finally {
-    try {
-      if (model !== undefined) {
-        await model.release()
-      } else if (lifecycle !== undefined) {
-        await lifecycle.release()
-        await gpuLease.release()
-      } else {
-        await rm(keyPath, { force: true })
-        await gpuLease.release()
-      }
-    } finally {
-      child?.removeListener('error', onChildError)
+    // The adapter owns the lease, so its release is the only path that frees both.
+    if (model !== undefined) {
+      await model.release()
+    } else if (lifecycle !== undefined) {
+      await lifecycle.release()
+    } else {
+      await rm(keyPath, { force: true })
     }
   }
   if (lifecycle?.cleanupComplete !== true) {

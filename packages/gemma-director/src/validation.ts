@@ -15,6 +15,7 @@ export type FidelityFindingCode =
   | 'overlap'
   | 'invalid_range'
   | 'text_mismatch'
+  | 'split_grapheme'
   | 'unknown_speaker'
   | 'speaker_semantics'
 
@@ -86,6 +87,18 @@ function speakerFindings(item: DirectedWireSegment, request: DirectionRequest): 
     return [finding('Resolved speaker must set unresolved_speaker false and speaker_reason null')]
   }
   return []
+}
+
+/**
+ * Offsets are raw UTF-16 code units, so a boundary can land inside an astral character. Both
+ * halves would still concatenate back to the source, but each fragment handed to TTS and SQLite
+ * would carry a lone surrogate instead of the character.
+ */
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  if (offset <= 0 || offset >= text.length) return false
+  const high = text.charCodeAt(offset - 1)
+  const low = text.charCodeAt(offset)
+  return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff
 }
 
 function fidelityFindings(
@@ -164,6 +177,16 @@ function fidelityFindings(
         message: 'Fragment range extends beyond the immutable source passage',
       })
     }
+    if (
+      splitsSurrogatePair(expectedPassage.text, item.source_start) ||
+      splitsSurrogatePair(expectedPassage.text, item.source_end)
+    ) {
+      findings.push({
+        code: 'split_grapheme',
+        sourcePassageId: item.source_passage_id,
+        message: 'Fragment boundary splits a UTF-16 surrogate pair inside one source character',
+      })
+    }
     const expectedText = expectedPassage.text.slice(item.source_start, item.source_end)
     if (item.source_text !== expectedText) {
       findings.push({
@@ -215,22 +238,32 @@ function warningFor(
       usesFallback: true,
     }
   }
-  const knownSpeaker = request.speakers.some((speaker) => speaker.id === item.speaker_id)
-  if (knownSpeaker && item.confidence < confidenceThreshold) {
+  if (item.confidence >= confidenceThreshold) return undefined
+  const range = {
+    sourcePassageId: item.source_passage_id,
+    sourceStart: item.source_start,
+    sourceEnd: item.source_end,
+    candidateSpeakerId: item.speaker_id,
+    confidence: item.confidence,
+    confidenceThreshold,
+    reviewRequired: true,
+  } as const
+  // Narration and sound cues are the majority of a light novel and always belong to the narrator,
+  // so they are flagged for review without rerouting a voice that fallback cannot improve.
+  if (item.speaker_id === request.narratorSpeakerId) {
     return {
-      code: 'low_confidence_speaker',
-      sourcePassageId: item.source_passage_id,
-      sourceStart: item.source_start,
-      sourceEnd: item.source_end,
-      candidateSpeakerId: item.speaker_id,
-      confidence: item.confidence,
-      confidenceThreshold,
-      message: 'Known-speaker assignment is below the configured confidence threshold',
-      reviewRequired: true,
-      usesFallback: true,
+      ...range,
+      code: 'low_confidence_kind',
+      message: 'Narrator-owned segment is below the configured confidence threshold',
+      usesFallback: false,
     }
   }
-  return undefined
+  return {
+    ...range,
+    code: 'low_confidence_speaker',
+    message: 'Known-speaker assignment is below the configured confidence threshold',
+    usesFallback: true,
+  }
 }
 
 /** Schema parsing is intentionally separate from semantic/source-fidelity validation. */
