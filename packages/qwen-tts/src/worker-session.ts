@@ -255,6 +255,11 @@ export class QwenWorkerSession {
     if (Buffer.byteLength(line.value) > MAX_PROTOCOL_LINE_BYTES) {
       throw protocolError('event line is too large')
     }
+    // #62: skip blank lines only (empty or whitespace-only). A genuine protocol event always has
+    // non-whitespace content, so this cannot swallow a malformed event -- it only absorbs a
+    // library that prints a blank line to stdout (the protocol channel) during rendering.
+    // Non-blank unparseable lines still throw below, so the strict parser is preserved.
+    if (line.value.trim().length === 0) return await this.#nextEvent()
     let event: WorkerEvent
     try {
       event = JSON.parse(line.value) as WorkerEvent
