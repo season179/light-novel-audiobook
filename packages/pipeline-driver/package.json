@@ -1,0 +1,23 @@
+{
+  "name": "@light-novel-audiobook/pipeline-driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run test"
+  },
+  "dependencies": {
+    "@light-novel-audiobook/application": "workspace:*",
+    "@light-novel-audiobook/audio-assembly": "workspace:*",
+    "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/epub-ingestion": "workspace:*",
+    "@light-novel-audiobook/gemma-director": "workspace:*",
+    "@light-novel-audiobook/gpu-lease": "workspace:*",
+    "@light-novel-audiobook/persistence": "workspace:*",
+    "@light-novel-audiobook/qwen-tts": "workspace:*"
+  }
+}
