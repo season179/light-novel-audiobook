@@ -85,4 +85,20 @@ the normal `tsc` command is TypeScript 7, checks the strict compiler options, ty
 workspace package, and runs the test suite. CI repeats these commands on native Linux with Node
 24 and a frozen lockfile.
 
-Neither setup nor CI downloads books, model weights, voices, or generated audio.
+Neither normal project setup nor CI downloads books, model weights, voices, or generated audio.
+
+## VoxCPM2 runtime spike
+
+The opt-in issue #7 harness is intentionally separate from normal setup and CI:
+
+```sh
+pnpm voxcpm2:verify
+pnpm voxcpm2:setup
+pnpm voxcpm2:probe -- --output docs/evidence/issue-7-voxcpm2-wsl2.json
+```
+
+It fails closed unless its runtime, model, audio, and raw-log roots are external WSL ext4 paths,
+and it keeps the TTS runtime separate from the standard llama.cpp brain runtime. Setup downloads
+about 3.55 GB of checksum-pinned public GGUF assets. See
+[`spikes/voxcpm2-runtime.md`](spikes/voxcpm2-runtime.md) before using it; the pinned server has a
+known streaming crash and is not approved for a production adapter.

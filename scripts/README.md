@@ -7,3 +7,12 @@ Development, model benchmarking, and operational helper scripts belong here. Pro
 `pnpm test:topology` runs the synthetic SQLite, canonical-root/symlink, process-identity, fixed-port collision/restart, atomic-manifest, and loopback/LAN-isolation integration tests. `pnpm probe:topology` records redacted host evidence and repeats SQLite checks only after verifying WSL ext4 and an explicit mounted-Windows DrvFS/9p root.
 
 The configured host probe binds the review, brain, and TTS fixtures to `127.0.0.1` ports 3000, 8080, and 8081. Set `TOPOLOGY_WINDOWS_BROWSER` to mounted Windows Chrome to test `http://localhost:3000` directly without a shell wrapper. The same explicit host run invokes Windows `ipconfig.exe` and `curl.exe` directly, requires localhost success for every configured service, and requires every configured service port to fail through every reported non-loopback Windows IPv4 address and routable non-loopback IPv6 address. The redacted evidence records the complete service/address-family attempt matrix; unavailable IPv6 is labeled explicitly. A default run without host proof exits nonzero. `--skip-network` is only a successful CI synthetic mode and is labeled non-acceptance. See [`docs/adr/0001-wsl2-runtime-topology.md`](../docs/adr/0001-wsl2-runtime-topology.md).
+
+## VoxCPM2 runtime spike
+
+`pnpm voxcpm2:verify` checks the pinned llama.cpp-omni and VoxCPM2 revisions, licenses,
+provenance, sizes, and SHA-256 values without downloading weights. `pnpm voxcpm2:setup` creates
+the isolated ext4 checkout/build/model trees and builds the two CUDA targets. `pnpm
+voxcpm2:probe` runs the CLI, persistent loopback server, synthetic API characterization, resource
+measurements, and destructive streaming-crash check. Raw logs, weights, source, builds, and audio
+stay outside Git. See [`docs/spikes/voxcpm2-runtime.md`](../docs/spikes/voxcpm2-runtime.md).
