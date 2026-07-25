@@ -1,0 +1,518 @@
+import {
+  type AudiobookJob,
+  type AudiobookOutput,
+  Book,
+  Chapter,
+  type DirectedSegment,
+  OutputVersion,
+  SourceCoverageError,
+  SourcePassage,
+  StableIds,
+  VoiceCast,
+  VoiceProfile,
+} from '@light-novel-audiobook/domain'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  type AssembleAudiobookRequest,
+  type AudioAssembler,
+  type CompletedSegmentAudio,
+  type DirectedChapter,
+  type DirectorModel,
+  type EpubExtractionRequest,
+  type EpubExtractor,
+  GenerateAudiobook,
+  type JobRepository,
+  type OutputReservation,
+  type ReusableSegmentQuery,
+  type SpeechEngine,
+  type SpeechRenderRequest,
+} from '../src/index.js'
+
+const sourceHash = 'b'.repeat(64)
+const bookId = StableIds.book(sourceHash)
+
+const makeBook = (): Book => {
+  const chapterOneId = StableIds.chapter(bookId, 1)
+  const chapterTwoId = StableIds.chapter(bookId, 2)
+  return new Book({
+    id: bookId,
+    title: 'A Small Story',
+    author: 'Example Author',
+    coverPath: '/workspace/cover.jpg',
+    source: { epubPath: '/uploads/story.epub', sha256: sourceHash },
+    chapters: [
+      new Chapter({
+        id: chapterOneId,
+        bookId,
+        position: 1,
+        title: 'Dawn',
+        sourcePassages: [
+          new SourcePassage({
+            id: StableIds.passage(chapterOneId, 1),
+            chapterId: chapterOneId,
+            sourceText: 'A cold dawn. “Hello,” Alice said.',
+          }),
+        ],
+      }),
+      new Chapter({
+        id: chapterTwoId,
+        bookId,
+        position: 2,
+        title: 'A Stranger',
+        sourcePassages: [
+          new SourcePassage({
+            id: StableIds.passage(chapterTwoId, 1),
+            chapterId: chapterTwoId,
+            sourceText: '“Who are you?”',
+          }),
+        ],
+      }),
+    ],
+  })
+}
+
+const delivery = {
+  emotion: 'neutral',
+  pace: 'normal' as const,
+  volume: 'normal' as const,
+  pauseAfterMs: 100,
+}
+
+const directionFor = (chapter: Chapter): readonly DirectedSegment[] => {
+  const passageId = chapter.sourcePassages[0]?.id
+  if (passageId === undefined) throw new Error('fixture passage missing')
+  if (chapter.position === 1) {
+    return [
+      {
+        sourcePassageId: passageId,
+        sourceText: 'A cold dawn. ',
+        kind: 'narration',
+        speakerId: null,
+        confidence: 1,
+        delivery,
+      },
+      {
+        sourcePassageId: passageId,
+        sourceText: '“Hello,”',
+        kind: 'dialogue',
+        speakerId: 'alice',
+        confidence: 0.99,
+        delivery: { ...delivery, emotion: 'warm' },
+      },
+      {
+        sourcePassageId: passageId,
+        sourceText: ' Alice said.',
+        kind: 'narration',
+        speakerId: null,
+        confidence: 1,
+        delivery,
+      },
+    ]
+  }
+  return [
+    {
+      sourcePassageId: passageId,
+      sourceText: '“Who are you?”',
+      kind: 'dialogue',
+      speakerId: null,
+      confidence: 0.4,
+      delivery: { ...delivery, emotion: 'wary' },
+    },
+  ]
+}
+
+const voice = (
+  id: string,
+  role: 'narrator' | 'character' | 'fallback',
+  speakerId: string | null,
+  revision = 1,
+): VoiceProfile =>
+  new VoiceProfile({
+    id,
+    displayName: id,
+    role,
+    speakerId,
+    syntheticSpeaker: role === 'narrator' ? 'Aiden' : 'Ryan',
+    instruction: `${id} restrained delivery revision ${revision}`,
+    seed: 42,
+    revision,
+  })
+
+const makeCast = (fallbackRevision = 1): VoiceCast =>
+  new VoiceCast(
+    voice('narrator-calm', 'narrator', null),
+    voice('fallback-dialogue', 'fallback', null, fallbackRevision),
+    [voice('alice-voice', 'character', 'alice')],
+  )
+
+class FakeExtractor implements EpubExtractor {
+  calls: EpubExtractionRequest[] = []
+
+  async extract(request: EpubExtractionRequest): Promise<Book> {
+    this.calls.push(request)
+    return makeBook()
+  }
+}
+
+class FakeDirector implements DirectorModel {
+  readonly events: string[]
+  readonly corrupt: boolean
+  releaseCalls = 0
+
+  constructor(events: string[], corrupt = false) {
+    this.events = events
+    this.corrupt = corrupt
+  }
+
+  async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
+    this.events.push(`direct:${chapter.id}`)
+    const segments = directionFor(chapter)
+    if (this.corrupt && chapter.position === 1) {
+      const first = segments[0]
+      if (first === undefined) throw new Error('fixture direction missing')
+      return { chapterId: chapter.id, segments: [{ ...first, sourceText: 'Rewritten. ' }] }
+    }
+    return { chapterId: chapter.id, segments }
+  }
+
+  async release(): Promise<void> {
+    this.releaseCalls += 1
+    this.events.push('director:release')
+  }
+}
+
+class FakeSpeechEngine implements SpeechEngine {
+  readonly identity = 'fake-qwen:model-revision-1:settings-1'
+  readonly events: string[]
+  renderCalls: SpeechRenderRequest[] = []
+  beginCalls = 0
+  endCalls = 0
+  failOnceAtRenderCall: number | null = null
+  returnWrongIdentity = false
+
+  constructor(events: string[]) {
+    this.events = events
+  }
+
+  async beginBatch(): Promise<void> {
+    this.beginCalls += 1
+    this.events.push('speech:begin')
+  }
+
+  async render(request: SpeechRenderRequest): Promise<CompletedSegmentAudio> {
+    this.renderCalls.push(request)
+    this.events.push(`speech:${request.segment.id}`)
+    if (this.failOnceAtRenderCall === this.renderCalls.length) {
+      this.failOnceAtRenderCall = null
+      throw new Error('synthetic speech failure')
+    }
+    return {
+      segmentId: request.segment.id,
+      inputIdentity: this.returnWrongIdentity ? 'wrong' : request.inputIdentity,
+      wavPath: `/workspace/wav/${request.segment.id}-${request.inputIdentity.slice(0, 8)}.wav`,
+    }
+  }
+
+  async endBatch(): Promise<void> {
+    this.endCalls += 1
+    this.events.push('speech:end')
+  }
+}
+
+class FakeAssembler implements AudioAssembler {
+  readonly events: string[]
+  calls: AssembleAudiobookRequest[] = []
+
+  constructor(events: string[]) {
+    this.events = events
+  }
+
+  async assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput> {
+    this.calls.push(request)
+    this.events.push(`assemble:${request.reservation.version.label}`)
+    return {
+      version: request.reservation.version,
+      m4bPath: request.reservation.m4bPath,
+      chapters: request.reservation.chapters,
+    }
+  }
+}
+
+class InMemoryJobRepository implements JobRepository {
+  readonly jobs = new Map<string, AudiobookJob>()
+  readonly books = new Map<string, Book>()
+  readonly audio = new Map<string, CompletedSegmentAudio>()
+  readonly reservations: OutputReservation[] = []
+  private readonly versionByBook = new Map<string, number>()
+  private readonly reservedPaths = new Set<string>()
+
+  async findJob(jobId: string): Promise<AudiobookJob | undefined> {
+    return this.jobs.get(jobId)
+  }
+
+  async saveJob(job: AudiobookJob): Promise<void> {
+    this.jobs.set(job.id, job)
+  }
+
+  async saveBook(book: Book): Promise<void> {
+    this.books.set(book.id, book)
+  }
+
+  async findReusableSegment(
+    query: ReusableSegmentQuery,
+  ): Promise<CompletedSegmentAudio | undefined> {
+    return this.audio.get(this.audioKey(query.segmentId, query.inputIdentity))
+  }
+
+  async saveCompletedSegment(segment: CompletedSegmentAudio): Promise<void> {
+    this.audio.set(this.audioKey(segment.segmentId, segment.inputIdentity), segment)
+  }
+
+  async reserveNextOutput(book: Book): Promise<OutputReservation> {
+    const next = (this.versionByBook.get(book.id) ?? 0) + 1
+    this.versionByBook.set(book.id, next)
+    const version = new OutputVersion(next)
+    const base = book.title.replaceAll(' ', '-')
+    const reservation: OutputReservation = {
+      bookId: book.id,
+      version,
+      m4bPath: `/workspace/${version.fileName(base, 'm4b')}`,
+      chapters: book.chapters.map((chapter) => ({
+        chapterId: chapter.id,
+        path: `/workspace/${base}-${version.label}-ch${String(chapter.position).padStart(2, '0')}.flac`,
+      })),
+    }
+    const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
+    if (paths.some((path) => this.reservedPaths.has(path))) throw new Error('output overwrite')
+    for (const path of paths) this.reservedPaths.add(path)
+    this.reservations.push(reservation)
+    return reservation
+  }
+
+  private audioKey(segmentId: string, inputIdentity: string): string {
+    return `${segmentId}:${inputIdentity}`
+  }
+}
+
+interface Harness {
+  readonly events: string[]
+  readonly extractor: FakeExtractor
+  readonly director: FakeDirector
+  readonly speech: FakeSpeechEngine
+  readonly assembler: FakeAssembler
+  readonly repository: InMemoryJobRepository
+  readonly useCase: GenerateAudiobook
+}
+
+const harness = (options: { corruptDirection?: boolean } = {}): Harness => {
+  const events: string[] = []
+  const extractor = new FakeExtractor()
+  const director = new FakeDirector(events, options.corruptDirection)
+  const speech = new FakeSpeechEngine(events)
+  const assembler = new FakeAssembler(events)
+  const repository = new InMemoryJobRepository()
+  return {
+    events,
+    extractor,
+    director,
+    speech,
+    assembler,
+    repository,
+    useCase: new GenerateAudiobook({
+      epubExtractor: extractor,
+      directorModel: director,
+      speechEngine: speech,
+      audioAssembler: assembler,
+      jobs: repository,
+    }),
+  }
+}
+
+describe('GenerateAudiobook with in-memory boundary fakes', () => {
+  let app: Harness
+
+  beforeEach(() => {
+    app = harness()
+  })
+
+  it('orchestrates the complete exact-text happy path and exposes useful progress', async () => {
+    const result = await app.useCase.execute({
+      jobId: 'job-001',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+
+    expect(result.job.state).toBe('completed')
+    expect(result.job.stage).toBe('completed')
+    expect(result.job.progress).toMatchObject({ completedSegments: 4, totalSegments: 4 })
+    expect(result.generatedSegments).toBe(4)
+    expect(result.reusedSegments).toBe(0)
+    expect(result.output.version.label).toBe('v001')
+    expect(result.output.m4bPath).toBe('/workspace/A-Small-Story-v001.m4b')
+    expect(result.job.warnings).toEqual([
+      expect.objectContaining({
+        speakerId: null,
+        voiceProfileId: 'fallback-dialogue',
+        reason: 'unresolved_speaker',
+      }),
+    ])
+
+    expect(app.extractor.calls).toEqual([{ epubPath: '/uploads/story.epub' }])
+    expect(app.director.releaseCalls).toBe(1)
+    expect(app.speech.beginCalls).toBe(1)
+    expect(app.speech.endCalls).toBe(1)
+    expect(app.events.indexOf('director:release')).toBeLessThan(app.events.indexOf('speech:begin'))
+    expect(app.assembler.calls).toHaveLength(1)
+
+    const assembled = app.assembler.calls[0]
+    expect(assembled?.chapters.map((chapter) => chapter.chapter.state)).toEqual([
+      'rendered',
+      'rendered',
+    ])
+    expect(
+      assembled?.chapters.flatMap((chapter) =>
+        chapter.segments.map((item) => item.segment.sourceText),
+      ),
+    ).toEqual(['A cold dawn. ', '“Hello,”', ' Alice said.', '“Who are you?”'])
+    expect(
+      assembled?.chapters.flatMap((chapter) =>
+        chapter.segments.map((item) => item.audio.segmentId),
+      ),
+    ).toEqual(
+      assembled?.chapters.flatMap((chapter) => chapter.segments.map((item) => item.segment.id)),
+    )
+  })
+
+  it('reuses every unchanged completed segment and reserves successive outputs without overwrite', async () => {
+    const first = await app.useCase.execute({
+      jobId: 'job-first',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+    const renderCallsAfterFirst = app.speech.renderCalls.length
+    const second = await app.useCase.execute({
+      jobId: 'job-second',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+
+    expect(first.output.version.label).toBe('v001')
+    expect(second.output.version.label).toBe('v002')
+    expect(second.generatedSegments).toBe(0)
+    expect(second.reusedSegments).toBe(4)
+    expect(app.speech.renderCalls).toHaveLength(renderCallsAfterFirst)
+    expect(app.speech.beginCalls).toBe(1)
+    expect(app.repository.reservations.map((item) => item.m4bPath)).toEqual([
+      '/workspace/A-Small-Story-v001.m4b',
+      '/workspace/A-Small-Story-v002.m4b',
+    ])
+    expect(new Set(app.repository.reservations.map((item) => item.m4bPath)).size).toBe(2)
+  })
+
+  it('does not rerun or reserve another output when the same completed job is requested again', async () => {
+    const first = await app.useCase.execute({
+      jobId: 'job-idempotent',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+    const calls = {
+      extract: app.extractor.calls.length,
+      direct: app.events.filter((event) => event.startsWith('direct:')).length,
+      render: app.speech.renderCalls.length,
+      assemble: app.assembler.calls.length,
+    }
+    const repeated = await app.useCase.execute({
+      jobId: 'job-idempotent',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+
+    expect(repeated.output.m4bPath).toBe(first.output.m4bPath)
+    expect(app.extractor.calls).toHaveLength(calls.extract)
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(calls.direct)
+    expect(app.speech.renderCalls).toHaveLength(calls.render)
+    expect(app.assembler.calls).toHaveLength(calls.assemble)
+    expect(app.repository.reservations).toHaveLength(1)
+  })
+
+  it('invalidates only audio whose approved voice inputs changed', async () => {
+    await app.useCase.execute({
+      jobId: 'job-original-cast',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(1),
+    })
+    const changed = await app.useCase.execute({
+      jobId: 'job-changed-fallback',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(2),
+    })
+
+    expect(changed.generatedSegments).toBe(1)
+    expect(changed.reusedSegments).toBe(3)
+    expect(app.speech.renderCalls).toHaveLength(5)
+    expect(app.speech.renderCalls.at(-1)?.voice.id).toBe('fallback-dialogue')
+  })
+
+  it('resumes after a render failure and reuses segments completed before the failure', async () => {
+    app.speech.failOnceAtRenderCall = 3
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-resume',
+        epubPath: '/uploads/story.epub',
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('synthetic speech failure')
+
+    const failedJob = app.repository.jobs.get('job-resume')
+    expect(failedJob?.state).toBe('failed')
+    expect(failedJob?.progress.completedSegments).toBe(2)
+    expect(app.repository.audio.size).toBe(2)
+    expect(app.speech.endCalls).toBe(1)
+
+    const resumed = await app.useCase.execute({
+      jobId: 'job-resume',
+      epubPath: '/uploads/story.epub',
+      voices: makeCast(),
+    })
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.reusedSegments).toBe(2)
+    expect(resumed.generatedSegments).toBe(2)
+    expect(app.speech.endCalls).toBe(2)
+  })
+
+  it('rejects source fidelity failures before speech and persists a failed job', async () => {
+    app = harness({ corruptDirection: true })
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-bad-source',
+        epubPath: '/uploads/story.epub',
+        voices: makeCast(),
+      }),
+    ).rejects.toBeInstanceOf(SourceCoverageError)
+
+    expect(app.director.releaseCalls).toBe(1)
+    expect(app.speech.beginCalls).toBe(0)
+    expect(app.speech.renderCalls).toHaveLength(0)
+    expect(app.assembler.calls).toHaveLength(0)
+    expect(app.repository.jobs.get('job-bad-source')?.state).toBe('failed')
+    expect(app.repository.jobs.get('job-bad-source')?.error).toContain(
+      'rewritten, omitted, or duplicated',
+    )
+  })
+
+  it('rejects mismatched speech artifacts, ends the batch, and never assembles them', async () => {
+    app.speech.returnWrongIdentity = true
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-bad-audio',
+        epubPath: '/uploads/story.epub',
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('Speech output identity mismatch')
+
+    expect(app.speech.endCalls).toBe(1)
+    expect(app.repository.audio.size).toBe(0)
+    expect(app.assembler.calls).toHaveLength(0)
+    expect(app.repository.jobs.get('job-bad-audio')?.state).toBe('failed')
+  })
+})
