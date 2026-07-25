@@ -5,6 +5,7 @@ export interface FallbackReviewPanelProps {
   readonly review: FallbackReviewView
   readonly busy: boolean
   readonly onApproveAll: () => void
+  readonly onApprove: (segmentId: string) => void
   readonly onRevoke: (segmentId: string) => void
   readonly onRender: () => void
 }
@@ -23,6 +24,7 @@ export function FallbackReviewPanel({
   review,
   busy,
   onApproveAll,
+  onApprove,
   onRevoke,
   onRender,
 }: FallbackReviewPanelProps) {
@@ -74,9 +76,15 @@ export function FallbackReviewPanel({
                       : 'not decided'}
                 </em>
               </span>
-              {item.decision !== 'approved' ? null : (
+              {item.decision === 'approved' ? (
                 <button type="button" onClick={() => onRevoke(item.segmentId)} disabled={busy}>
                   Withdraw
+                </button>
+              ) : (
+                // A withdrawal deliberately outranks the book-wide grant, so approving all cannot
+                // undo one. Without this control a withdrawn speaker could never be approved again.
+                <button type="button" onClick={() => onApprove(item.segmentId)} disabled={busy}>
+                  Approve this speaker
                 </button>
               )}
             </li>

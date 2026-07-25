@@ -1,11 +1,12 @@
 import { extname } from 'node:path'
 import type {
+  FallbackApprovalRepository,
   JobRepository,
   PendingFallbackApproval,
   ReviewFallbackApprovals,
 } from '@light-novel-audiobook/application'
-import { RenderInProgressError } from '@light-novel-audiobook/application'
-import type { VoiceCast } from '@light-novel-audiobook/domain'
+import { inspectCompletedOutput, RenderInProgressError } from '@light-novel-audiobook/application'
+import type { AudiobookJob, AudiobookJobSnapshot, VoiceCast } from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
@@ -71,6 +72,11 @@ export interface AudiobookWebApiDependencies {
    * request: see `resolveReviewerIdentity`.
    */
   readonly reviewer: string
+  /**
+   * Read on every access to a stored output, so a revoked audiobook stops being downloadable the
+   * moment the decision commits rather than when something happens to reopen the job.
+   */
+  readonly approvals: FallbackApprovalRepository
 }
 
 /** The review queue for one job, plus whether a book-wide decision has already been made. */
@@ -123,6 +129,7 @@ export class AudiobookWebApi {
   private readonly voices: VoiceCast
   private readonly review: ReviewFallbackApprovals
   private readonly reviewer: string
+  private readonly approvals: FallbackApprovalRepository
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -133,6 +140,7 @@ export class AudiobookWebApi {
     this.voices = dependencies.voices
     this.review = dependencies.review
     this.reviewer = dependencies.reviewer
+    this.approvals = dependencies.approvals
   }
 
   /**
@@ -324,8 +332,48 @@ export class AudiobookWebApi {
       const failure = this.runner.startupFailure(input.jobId)
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
     }
-    const view = buildJobStateView(job.snapshot(), this.books.find(job.bookId))
+    const snapshot = await this.authorizedSnapshot(job)
+    const view = buildJobStateView(snapshot, this.books.find(job.bookId))
     return this.withRunnerStatus(view)
+  }
+
+  /**
+   * The job snapshot as a reader may see it: a completed output whose fallback approvals have since
+   * changed is stripped, so the page, the chapter listing and the download link all disappear
+   * together. `listChapterAudio` needs no gate of its own because it reads this projection.
+   *
+   * On a denial the job is also reopened, so the UI says "awaiting review" rather than "completed
+   * with nothing to play" — but the strip above does not depend on that save succeeding. Round 3's
+   * reopen was best-effort and a single failed save left an audiobook downloadable indefinitely;
+   * recomputing the gate on every read is what makes the denial durable instead.
+   */
+  private async authorizedSnapshot(job: AudiobookJob): Promise<AudiobookJobSnapshot> {
+    const snapshot = job.snapshot()
+    if (snapshot.state !== 'completed') return snapshot
+    const status = await inspectCompletedOutput(job, this.approvals)
+    if (status.exposable) return snapshot
+    // When the reopen lands, report the reopened job: saying `completed` with nothing to download
+    // would tell the page the run finished successfully and then offer it no audio. When it does not
+    // land, the output is still stripped, so the file is withheld either way.
+    return (await this.reopenStaleOutput(job)) ?? { ...snapshot, output: null }
+  }
+
+  /**
+   * Best-effort, and deliberately so. A failure here must not turn a read into an error and must not
+   * re-expose the file: the caller has already decided to withhold it, and every later read recomputes
+   * the gate and withholds it again.
+   *
+   * Returns the reopened snapshot when it was persisted, so a reader can project the truth.
+   */
+  private async reopenStaleOutput(job: AudiobookJob): Promise<AudiobookJobSnapshot | undefined> {
+    if (this.runner.isActive(job.id)) return undefined
+    try {
+      job.reopenForReview()
+      await this.jobs.saveJob(job)
+      return job.snapshot()
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -396,10 +444,21 @@ export class AudiobookWebApi {
     if (job === undefined) {
       throw new WebApiError('unknown_job', 'That job is not in the local workspace.')
     }
-    const output = job.output
-    if (output === null) {
+    // Both file routes come through here, so this is where a revoked audiobook stops being readable.
+    // Checked against a live catalog rather than against the job's state alone, because the job can
+    // still say `completed` while the decision that authorized its audio has been withdrawn.
+    const status = await inspectCompletedOutput(job, this.approvals)
+    if (!status.exposable) {
+      if (status.denial === 'approval-catalog-moved') {
+        await this.reopenStaleOutput(job)
+        throw new WebApiError(
+          'output_unavailable',
+          'A fallback-voice decision for this audiobook changed after it was assembled, so this file is no longer approved. Review the unresolved speakers and render again.',
+        )
+      }
       throw new WebApiError('output_unavailable', 'This audiobook has not been assembled yet.')
     }
+    const output = status.output
     if (chapterId === null) return output.m4bPath
     const chapter = output.chapters.find((entry) => entry.chapterId === chapterId)
     if (chapter === undefined) {

@@ -159,6 +159,7 @@ export const createAudiobookWebApi = async (
     runner,
     voices,
     review: new ReviewFallbackApprovals({ jobs, approvals }),
+    approvals,
     reviewer: options.reviewer ?? resolveReviewerIdentity(),
   })
 }

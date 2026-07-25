@@ -33,6 +33,11 @@ export interface AudiobookClient {
    * client-supplied actor would be self-attestation, and issue #45 is about approvals being evidence.
    */
   approveAllFallbacks(input: { readonly jobId: string }): Promise<WebApiResult<FallbackReviewView>>
+  /** Approves one speaker, which also clears an earlier withdrawal of that same speaker. */
+  approveFallback(input: {
+    readonly jobId: string
+    readonly segmentId: string
+  }): Promise<WebApiResult<FallbackReviewView>>
   revokeFallback(input: {
     readonly jobId: string
     readonly segmentId: string

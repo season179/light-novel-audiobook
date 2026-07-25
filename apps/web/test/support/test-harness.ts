@@ -121,6 +121,7 @@ export const createInProcessClient = (api: AudiobookWebApi): AudiobookClient => 
     toWebApiResult('listFallbackReview', () => api.listFallbackReview(input)),
   approveAllFallbacks: (input) =>
     toWebApiResult('approveAllFallbacks', () => api.approveAllFallbacks(input)),
+  approveFallback: (input) => toWebApiResult('approveFallback', () => api.approveFallback(input)),
   revokeFallback: (input) => toWebApiResult('revokeFallback', () => api.revokeFallback(input)),
   renderApprovedScript: (input) =>
     toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),

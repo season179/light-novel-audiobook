@@ -101,6 +101,22 @@ export const approveAllFallbacksFn = createServerFn({ method: 'POST' })
       ),
   )
 
+/**
+ * Approves one speaker. Needed as its own action because an explicit withdrawal deliberately outranks
+ * the book-wide grant — without this, withdrawing a speaker would be a dead end no UI could undo.
+ */
+export const approveFallbackFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string; segmentId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
+      toWebApiResult('approveFallback', async () =>
+        (await api()).approveFallback({
+          jobId: requireIdInput(data.jobId, 'Job ID'),
+          segmentId: requireIdInput(data.segmentId, 'Segment ID'),
+        }),
+      ),
+  )
+
 export const revokeFallbackFn = createServerFn({ method: 'POST' })
   .validator((data: { jobId: string; segmentId: string }) => data)
   .handler(

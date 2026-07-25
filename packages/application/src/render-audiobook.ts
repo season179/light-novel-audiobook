@@ -6,6 +6,7 @@ import type {
   Segment,
 } from '@light-novel-audiobook/domain'
 import { DomainError, type VoiceCast } from '@light-novel-audiobook/domain'
+import { inspectCompletedOutput } from './completed-output.js'
 import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
 import { errorMessage } from './direct-audiobook.js'
 import {
@@ -140,14 +141,15 @@ export class RenderAudiobook {
     if (initialState === 'completed') {
       if (job.output === null) throw new DomainError('Completed job has no audiobook output')
       if (job.bookId === null) throw new DomainError('A completed job must have an attached book')
-      // A revocation can land in the instant between a render's final catalog check and its commit,
-      // so a completed output is only served while the catalog it was produced under still stands.
-      // Otherwise the job goes back to review and is re-derived: the decision wins, not the race.
-      const { revision } = await this.approvals.readCatalog(job.bookId)
-      if (job.catalogRevision === revision) {
+      // The same gate every other reader of a stored output uses. A revocation can land in the
+      // instant between this render's final catalog check and its commit, so a completed output is
+      // served only while the catalog it was produced under still stands; otherwise the job goes
+      // back to review and is re-derived. The decision wins, not the race.
+      const status = await inspectCompletedOutput(job, this.approvals)
+      if (status.exposable) {
         return {
           job,
-          output: job.output,
+          output: status.output,
           generatedSegments: 0,
           reusedSegments: job.progress.totalSegments,
         }
