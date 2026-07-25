@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
@@ -257,12 +257,6 @@ export class SqliteJobRepository implements JobRepository {
       .prepare('SELECT MAX(version) AS v FROM output_reservations WHERE book_id = ?')
       .get(book.id) as { v: number | null } | undefined
 
-    // Existing entries are read once: nothing writes into these directories until the
-    // reservation has been claimed, so the listings cannot go stale inside this loop.
-    const chapterEntries = new Map(
-      chapterOutputs.map((ch) => [ch.dir, listExistingEntries(ch.dir)] as const),
-    )
-
     let candidate = (existing?.v ?? 0) + 1
     let busyAttempts = 0
     const deadline = Date.now() + CLAIM_BUSY_DEADLINE_MS
@@ -272,7 +266,10 @@ export class SqliteJobRepository implements JobRepository {
       const m4bPath = join(this.layout.outputDir, `${baseName}-${label}.m4b`)
       const chapterPaths = chapterOutputs.map((ch) => ({
         chapterId: ch.chapterId,
-        path: join(ch.dir, `${ch.stem}-${label}`),
+        // The M1 assembler's fixed settings always emit FLAC chapter masters, just as the final
+        // container is always M4B. If a second assembler with another chapter container appears,
+        // this extension must become an explicit concern of the AudioAssembler port.
+        path: join(ch.dir, `${ch.stem}-${label}.flac`),
       }))
 
       assertReservablePaths(realRoot, [m4bPath, ...chapterPaths.map((cp) => cp.path)])
@@ -281,10 +278,7 @@ export class SqliteJobRepository implements JobRepository {
       // that already holds anything, however it got there (restored database, deleted database,
       // output copied in by hand).
       const takenOnDisk =
-        pathOccupied(m4bPath) ||
-        chapterOutputs.some((ch) =>
-          hasVersionedOutput(chapterEntries.get(ch.dir) ?? [], `${ch.stem}-${label}`),
-        )
+        pathOccupied(m4bPath) || chapterPaths.some((chapter) => pathOccupied(chapter.path))
       if (takenOnDisk) {
         candidate += 1
         continue
@@ -469,35 +463,6 @@ function ensureContainedDirectory(realRoot: string, directory: string): void {
  */
 function pathOccupied(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined
-}
-
-/**
- * Entry names directly inside `dir`, or an empty list when it does not exist yet. Every entry
- * type is reported -- a directory at an output path blocks it just as a file does -- but
- * dot-entries are skipped: #32 creates `.lna-assembly-*` staging directories beside a reserved
- * output and a SIGKILL can leave one behind, and a leftover must never read as a finished output.
- */
-function listExistingEntries(dir: string): readonly string[] {
-  try {
-    return readdirSync(dir).filter((name) => !name.startsWith('.'))
-  } catch {
-    return []
-  }
-}
-
-/**
- * Whether anything is already named `<versionedStem>.<ext>` for this exact version, whatever its
- * entry type. The assembler picks the chapter master's container, so matching a single hard-coded
- * extension here would embed a cross-package assumption this package cannot verify. The version
- * suffix is required and the extension must be alphanumeric, so no other version can match, and
- * `listExistingEntries` has already dropped the dot-prefixed staging leftovers.
- */
-function hasVersionedOutput(entries: readonly string[], versionedStem: string): boolean {
-  if (!/-v\d{3,}$/.test(versionedStem)) return false
-  return entries.some((name) => {
-    if (!name.startsWith(`${versionedStem}.`)) return false
-    return /^[A-Za-z0-9]+$/.test(name.slice(versionedStem.length + 1))
-  })
 }
 
 interface SegmentRow {

@@ -87,6 +87,10 @@ importers:
       '@light-novel-audiobook/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
+      '@light-novel-audiobook/persistence':
+        specifier: workspace:*
+        version: link:../persistence
 
   packages/contracts:
     dependencies:
