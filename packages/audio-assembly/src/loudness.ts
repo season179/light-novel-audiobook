@@ -79,10 +79,15 @@ export const computeLoudnessGainDb = (input: LoudnessGainInput): LoudnessGainDec
   }
 
   const loudnessGain = input.targetLoudnessLufs - integratedLufs
-  const peakGain =
-    truePeakDbtp === null ? Number.POSITIVE_INFINITY : input.maxTruePeakDbtp - truePeakDbtp
+  // No true-peak reading means no known headroom, so no boost is allowed. Treating it as unlimited
+  // headroom would let an `inf` report produce an unbounded gain.
+  const peakGain = truePeakDbtp === null ? 0 : input.maxTruePeakDbtp - truePeakDbtp
   const limitedBy: LoudnessGainLimit = peakGain < loudnessGain ? 'true_peak' : 'loudness'
-  const gainDb = Math.round(Math.min(loudnessGain, peakGain) * 100) / 100
+  // Truncate rather than round: rounding a peak-limited gain up would put true peak above the
+  // ceiling. The `toFixed` step first removes binary-subtraction noise, so a gain that is exactly a
+  // hundredth of a decibel does not lose that hundredth.
+  const limited = Math.min(loudnessGain, peakGain)
+  const gainDb = Math.floor(Number.parseFloat((limited * 100).toFixed(6))) / 100
 
   return {
     gainDb,

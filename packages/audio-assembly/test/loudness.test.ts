@@ -80,6 +80,45 @@ describe('computeLoudnessGainDb', () => {
     expect(decision.warning).toMatch(/True peak headroom limited/u)
   })
 
+  it('truncates the gain so a peak-limited run cannot exceed the ceiling', () => {
+    // Rounding these up to 5.00 dB would put true peak above -3 dBTP.
+    for (const truePeak of [-7.996, -7.9951]) {
+      const decision = decide(-30, truePeak)
+      expect(decision.gainDb).toBe(4.99)
+      expect(decision.limitedBy).toBe('true_peak')
+      expect(truePeak + decision.gainDb).toBeLessThanOrEqual(settings.maxTruePeakDbtp)
+    }
+  })
+
+  it('keeps an exact hundredth of a decibel instead of truncating binary noise away', () => {
+    expect(decide(-22.55, -18.06).gainDb).toBe(4.55)
+    expect(decide(-18.3, -12).gainDb).toBe(0.3)
+    expect(decide(-14, -9).gainDb).toBe(-4)
+  })
+
+  it('allows no boost when true peak is unknown', () => {
+    // A literal "inf" true peak must not read as unlimited headroom.
+    const decision = decide(-30, null)
+    expect(decision.gainDb).toBe(0)
+    expect(decision.limitedBy).toBe('true_peak')
+    expect(
+      computeLoudnessGainDb({
+        measurement: {
+          integratedLufs: -30,
+          truePeakDbtp: parseLoudnormMeasurement(
+            loudnormOutput({ input_i: '-30.00', input_tp: 'inf' }),
+          ).truePeakDbtp,
+          loudnessRangeLu: 1,
+        },
+        targetLoudnessLufs: settings.targetLoudnessLufs,
+        maxTruePeakDbtp: settings.maxTruePeakDbtp,
+        loudnessFloorLufs: settings.loudnessFloorLufs,
+      }).gainDb,
+    ).toBe(0)
+    // Attenuation stays available, because reducing level cannot raise a peak.
+    expect(decide(-10, null).gainDb).toBe(-8)
+  })
+
   it('never applies gain when the material is unmeasurable', () => {
     for (const measurement of [null, -70, -80] as const) {
       const decision = decide(measurement, null)

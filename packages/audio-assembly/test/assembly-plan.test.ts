@@ -21,11 +21,11 @@ const twoChapterRequest = (): AssembleAudiobookRequest => {
 }
 
 describe('resolveSegmentPauseMs', () => {
-  it('uses the directed pause and falls back to the default when none was directed', () => {
+  it('honours a directed pause of zero instead of substituting the default', () => {
     const { book } = makeBook({ chapters: [{ title: 'One', pauses: [0, 700] }] })
     const [first, second] = book.chapters[0]?.segments ?? []
     if (first === undefined || second === undefined) throw new Error('fixture segments missing')
-    expect(resolveSegmentPauseMs(first, settings)).toBe(settings.defaultSegmentPauseMs)
+    expect(resolveSegmentPauseMs(first, settings)).toBe(0)
     expect(resolveSegmentPauseMs(second, settings)).toBe(700)
   })
 
@@ -41,6 +41,14 @@ describe('resolveSegmentPauseMs', () => {
     expect(resolveSegmentPauseMs(first, clamped)).toBe(100)
     expect(resolveSegmentPauseMs(second, clamped)).toBe(500)
   })
+
+  it('lets a directed zero through even when the pause floor is above zero', () => {
+    const floored = resolveAssemblySettings({ minSegmentPauseMs: 250, defaultSegmentPauseMs: 350 })
+    const { book } = makeBook({ chapters: [{ title: 'One', pauses: [0] }] })
+    const [only] = book.chapters[0]?.segments ?? []
+    if (only === undefined) throw new Error('fixture segment missing')
+    expect(resolveSegmentPauseMs(only, floored)).toBe(0)
+  })
 })
 
 describe('planAssembly', () => {
@@ -55,17 +63,30 @@ describe('planAssembly', () => {
     ])
   })
 
-  it('gives every segment its directed pause and the chapter tail to the last segment', () => {
+  it('gives every segment exactly its directed pause, including zero', () => {
     const plan = planAssembly(twoChapterRequest(), settings)
+    // Chapter one is directed [200, 0, 900]: the zero stands, and the chapter tail wins over 900.
     expect(plan.chapters[0]?.segments.map((segment) => segment.padMs)).toStrictEqual([
       200,
-      settings.defaultSegmentPauseMs,
+      0,
       settings.chapterTailPauseMs,
     ])
     expect(plan.chapters[1]?.segments.map((segment) => segment.padMs)).toStrictEqual([
-      settings.defaultSegmentPauseMs,
+      0,
       settings.chapterTailPauseMs,
     ])
+  })
+
+  it('keeps a directed pause at a chapter end when it is longer than the chapter tail', () => {
+    const { book } = makeBook({
+      chapters: [
+        { title: 'Long tail', pauses: [100, 2_500] },
+        { title: 'Short tail', pauses: [100, 250] },
+      ],
+    })
+    const plan = planAssembly(makeRequest({ book, outputDirectory, wavDirectory }), settings)
+    expect(plan.chapters[0]?.segments.at(-1)?.padMs).toBe(2_500)
+    expect(plan.chapters[1]?.segments.at(-1)?.padMs).toBe(settings.chapterTailPauseMs)
   })
 
   it('splits a long chapter into ordered passes without losing or reordering a segment', () => {
@@ -120,7 +141,41 @@ describe('planAssembly', () => {
         ...request.chapters.slice(1),
       ],
     }
-    expect(() => planAssembly(shuffled, settings)).toThrow(/declares order/u)
+    expect(() => planAssembly(shuffled, settings)).toThrow(
+      /was assembled at position 1 of chapter/u,
+    )
+  })
+
+  it('rejects a chapter assembled from only a prefix of its approved segments', () => {
+    const request = twoChapterRequest()
+    const first = request.chapters[0]
+    if (first === undefined) throw new Error('fixture chapter missing')
+    const truncated: AssembleAudiobookRequest = {
+      ...request,
+      chapters: [
+        { chapter: first.chapter, segments: first.segments.slice(0, 2) },
+        ...request.chapters.slice(1),
+      ],
+    }
+    expect(() => planAssembly(truncated, settings)).toThrow(
+      /assembled from 2 segments but the approved chapter has 3/u,
+    )
+  })
+
+  it('rejects a chapter assembled from a segment the approved chapter does not have there', () => {
+    const request = twoChapterRequest()
+    const first = request.chapters[0]
+    const second = request.chapters[1]
+    const foreign = second?.segments[0]
+    if (first === undefined || foreign === undefined) throw new Error('fixture segments missing')
+    const substituted: AssembleAudiobookRequest = {
+      ...request,
+      chapters: [
+        { chapter: first.chapter, segments: [foreign, ...first.segments.slice(1)] },
+        ...request.chapters.slice(1),
+      ],
+    }
+    expect(() => planAssembly(substituted, settings)).toThrow(AssemblyOrderError)
   })
 
   it('rejects audio rendered for a different segment', () => {
@@ -208,6 +263,76 @@ describe('planAssembly', () => {
         settings,
       ),
     ).toThrow(/pairwise distinct/u)
+  })
+
+  it('rejects a reserved path that is relative or not canonical', () => {
+    const request = twoChapterRequest()
+    const chapters = request.reservation.chapters
+    const first = chapters[0]
+    if (first === undefined) throw new Error('fixture reservation missing')
+    for (const m4bPath of [
+      'work/output/book-v001.m4b',
+      './work/output/book-v001.m4b',
+      '/work/output/./sub/../book-v001.m4b',
+      '/work//output/book-v001.m4b',
+    ]) {
+      expect(() =>
+        planAssembly({ ...request, reservation: { ...request.reservation, m4bPath } }, settings),
+      ).toThrow(/must be an absolute canonical path/u)
+    }
+    for (const path of ['output/ch01.flac', '/work/output/../output/ch01.flac']) {
+      expect(() =>
+        planAssembly(
+          {
+            ...request,
+            reservation: {
+              ...request.reservation,
+              chapters: [{ ...first, path }, ...chapters.slice(1)],
+            },
+          },
+          settings,
+        ),
+      ).toThrow(/must be an absolute canonical path/u)
+    }
+    // A trailing separator is rejected too, by the container check that runs first.
+    expect(() =>
+      planAssembly(
+        {
+          ...request,
+          reservation: { ...request.reservation, m4bPath: '/work/output/book-v001.m4b/' },
+        },
+        settings,
+      ),
+    ).toThrow(AudioAssemblyError)
+  })
+
+  it('returns reserved paths verbatim so the application can compare them by string', () => {
+    const request = twoChapterRequest()
+    const plan = planAssembly(request, settings)
+    expect(plan.m4bPath).toBe(request.reservation.m4bPath)
+    expect(plan.chapters.map((chapter) => chapter.outputPath)).toStrictEqual(
+      request.reservation.chapters.map((chapter) => chapter.path),
+    )
+  })
+
+  it('rejects a manifest path that would collide with a reserved chapter master', () => {
+    const request = twoChapterRequest()
+    const chapters = request.reservation.chapters
+    const first = chapters[0]
+    if (first === undefined) throw new Error('fixture reservation missing')
+    const collidingManifest = request.reservation.m4bPath.replace(/\.m4b$/u, '.manifest.json')
+    expect(() =>
+      planAssembly(
+        {
+          ...request,
+          reservation: {
+            ...request.reservation,
+            chapters: [{ ...first, path: collidingManifest }, ...chapters.slice(1)],
+          },
+        },
+        settings,
+      ),
+    ).toThrow(/must end in \.flac/u)
   })
 
   it('records the reserved version so the output cannot be renumbered later', () => {

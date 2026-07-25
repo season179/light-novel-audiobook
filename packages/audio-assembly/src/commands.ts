@@ -143,7 +143,14 @@ export interface LoudnessAnalysisCommand {
   readonly settings: AssemblySettings
 }
 
-/** Measures the whole book in one pass and discards the audio; only the printed report is used. */
+/**
+ * Measures the whole book in one pass and discards the audio; only the printed report is used.
+ *
+ * Chapters are opened together rather than in batches. `maxInputsPerPass` guards the segment passes
+ * because a chapter's segment count is unbounded, whereas the chapter count is the book's spine
+ * length — tens, not thousands — and measuring in batches would defeat the point of one book-wide
+ * measurement. The same reasoning applies to the export below.
+ */
 export const buildLoudnessAnalysisArgs = (command: LoudnessAnalysisCommand): readonly string[] => {
   requireInputs('Loudness analysis', command.inputPaths.length)
   const args = ['-nostdin', '-hide_banner']

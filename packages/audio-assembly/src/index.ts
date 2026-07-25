@@ -1,4 +1,5 @@
 export {
+  assertAbsoluteCanonicalPath,
   metadataArguments,
   normalizeMetadataValue,
   safeFileArgument,
@@ -89,6 +90,7 @@ export {
   assertOutputPresent,
   claimOutputPath,
   pathExists,
+  rollbackClaimedOutputs,
 } from './no-overwrite.js'
 export {
   audiobookFileName,

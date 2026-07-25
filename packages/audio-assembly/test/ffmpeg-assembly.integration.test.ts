@@ -56,7 +56,7 @@ const CHAPTER_ONE: readonly SegmentFixture[] = [
     channels: 2,
     frequency: 400,
     levelDb: -30,
-    directedPauseMs: 0,
+    directedPauseMs: 450,
   },
   {
     durationMs: 1_000,
@@ -82,14 +82,16 @@ const CHAPTER_TWO: readonly SegmentFixture[] = [
     channels: 1,
     frequency: 500,
     levelDb: -36,
-    directedPauseMs: 0,
+    directedPauseMs: 2_000,
   },
 ]
 
-const DEFAULT_PAUSE_MS = 350
 const TAIL_PAUSE_MS = 1_000
-const CHAPTER_ONE_MS = 1_500 + 200 + 2_000 + DEFAULT_PAUSE_MS + 1_000 + TAIL_PAUSE_MS
-const CHAPTER_TWO_MS = 1_200 + DEFAULT_PAUSE_MS + 800 + TAIL_PAUSE_MS
+// Chapter one exercises a directed pause, another directed pause, and a directed zero at the end
+// (where the chapter tail wins). Chapter two exercises a directed zero *between* segments — so the
+// two tones run together with no gap at all — and a directed 2000 ms end pause that beats the tail.
+const CHAPTER_ONE_MS = 1_500 + 200 + 2_000 + 450 + 1_000 + TAIL_PAUSE_MS
+const CHAPTER_TWO_MS = 1_200 + 0 + 800 + 2_000
 
 let workspace = ''
 let outputDirectory = ''
@@ -350,19 +352,32 @@ describe('FFmpeg assembly against real audio', () => {
     expect(intervals[0]?.startMs).toBeCloseTo(1_500, -2)
     expect(intervals[0]?.endMs).toBeCloseTo(1_700, -2)
     expect(intervals[1]?.startMs).toBeCloseTo(3_700, -2)
-    expect(intervals[1]?.endMs).toBeCloseTo(4_050, -2)
-    expect(intervals[2]?.startMs).toBeCloseTo(5_050, -2)
+    expect(intervals[1]?.endMs).toBeCloseTo(4_150, -2)
+    expect(intervals[2]?.startMs).toBeCloseTo(5_150, -2)
 
     // Each segment was rendered at its own level, so the level pattern proves which audio landed
     // in which slot. A swapped pair would invert these differences.
     const [first, second, third] = await Promise.all([
       rmsDbOfWindow(firstChapter, 200, 1_100),
       rmsDbOfWindow(firstChapter, 1_900, 1_600),
-      rmsDbOfWindow(firstChapter, 4_200, 700),
+      rmsDbOfWindow(firstChapter, 4_300, 700),
     ])
     expect(third - first).toBeCloseTo(-6, 0)
     // Segment two is the stereo fixture, so its stereo-to-mono downmix costs a further 3 dB.
     expect(second - first).toBeCloseTo(-21, 0)
+  })
+
+  it('inserts no silence where the director asked for none, and keeps a longer end pause', async () => {
+    const secondChapter = result.chapters[1]?.path
+    if (secondChapter === undefined) throw new Error('chapter master missing')
+
+    const intervals = await silenceIntervals(secondChapter)
+    // Only the end pause is silent: the directed zero between the two tones produced no gap at all.
+    expect(intervals).toHaveLength(1)
+    expect(intervals[0]?.startMs).toBeCloseTo(2_000, -2)
+    // The directed 2000 ms end pause is respected instead of being cut back to the 1000 ms tail.
+    expect(result.chapters[1]?.durationMs).toBeCloseTo(CHAPTER_TWO_MS, -1)
+    expect(CHAPTER_TWO_MS - 2_000).toBe(2_000)
   })
 
   it('exports a mono AAC-LC m4b at roughly the configured bitrate', async () => {
@@ -372,7 +387,10 @@ describe('FFmpeg assembly against real audio', () => {
     expect(probe.audio?.profile).toBe('LC')
     expect(probe.audio?.channels).toBe(1)
     expect(probe.audio?.sampleRate).toBe(48_000)
-    expect(probe.bitRateBps ?? 0).toBeGreaterThan(50_000)
+    // 64 kbps is the encoder target, not a floor: this fixture is tones and silence, which AAC
+    // encodes for far less, so the achieved container average sits below nominal.
+    expect(result.manifest.encoding.audiobookBitrateKbps).toBe(64)
+    expect(probe.bitRateBps ?? 0).toBeGreaterThan(20_000)
     expect(probe.bitRateBps ?? 0).toBeLessThan(80_000)
     expect(probe.durationSeconds ?? 0).toBeCloseTo((CHAPTER_ONE_MS + CHAPTER_TWO_MS) / 1000, 1)
     expect(probe.streamCodecs).toContain('png')

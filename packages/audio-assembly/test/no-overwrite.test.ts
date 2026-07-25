@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import {
   assertOutputPresent,
   claimOutputPath,
   pathExists,
+  rollbackClaimedOutputs,
 } from '../src/no-overwrite.js'
 
 let workspace = ''
@@ -54,6 +55,50 @@ describe('claimOutputPath', () => {
     await expect(claimOutputPath(staged, final)).rejects.toBeInstanceOf(OutputExistsError)
     expect(await readFile(final, 'utf8')).toBe('existing export')
     expect(await readFile(staged, 'utf8')).toBe('new export')
+  })
+})
+
+describe('claimOutputPath when the staged copy cannot be removed', () => {
+  it('keeps the claimed output instead of reporting it as pre-existing', async () => {
+    const stagingRoot = join(workspace, 'staging')
+    await mkdir(stagingRoot)
+    const staged = join(stagingRoot, 'audiobook.m4b')
+    const final = join(workspace, 'book-v001.m4b')
+    await writeFile(staged, 'assembled', 'utf8')
+    // A read-only staging directory lets the link succeed and the staged unlink fail, which is the
+    // shape of a drvfs EPERM. Treating that as a link failure would retry the copy against the
+    // destination the link just created and report this run's own output as pre-existing.
+    await chmod(stagingRoot, 0o500)
+    try {
+      await expect(claimOutputPath(staged, final)).resolves.toBeUndefined()
+      expect(await readFile(final, 'utf8')).toBe('assembled')
+    } finally {
+      await chmod(stagingRoot, 0o700)
+    }
+  })
+})
+
+describe('rollbackClaimedOutputs', () => {
+  it('removes every output the failed run had already claimed', async () => {
+    const claimed = [join(workspace, 'ch01.flac'), join(workspace, 'book-v001.m4b')]
+    for (const path of claimed) await writeFile(path, 'claimed', 'utf8')
+
+    await rollbackClaimedOutputs(claimed)
+
+    for (const path of claimed) expect(await pathExists(path)).toBe(false)
+  })
+
+  it('ignores a path that is already gone and still removes the rest', async () => {
+    const survivor = join(workspace, 'kept.flac')
+    const removed = join(workspace, 'removed.flac')
+    await writeFile(removed, 'claimed', 'utf8')
+
+    await expect(
+      rollbackClaimedOutputs([join(workspace, 'never-existed.flac'), removed]),
+    ).resolves.toBeUndefined()
+
+    expect(await pathExists(removed)).toBe(false)
+    expect(await pathExists(survivor)).toBe(false)
   })
 })
 

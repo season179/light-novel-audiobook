@@ -23,6 +23,8 @@ export interface FakeFfmpegOptions {
   readonly coverCodec?: string
   /** Chapter marker boundaries to report instead of the true ones, to prove the adapter checks. */
   readonly reportedChapterMarkers?: readonly (readonly [startMs: number, endMs: number])[]
+  /** Container duration to report for the export, standing in for a muxer that wrote less audio. */
+  readonly reportedDurationMs?: number
 }
 
 const SAMPLE_RATE = 48_000
@@ -150,7 +152,9 @@ export class FakeFfmpeg implements CommandRunner {
         ],
         format: {
           format_name: 'mov,mp4,m4a,3gp,3g2,mj2',
-          duration: ((markers.at(-1)?.end ?? 0) / 1000).toFixed(6),
+          duration: ((this.options.reportedDurationMs ?? markers.at(-1)?.end ?? 0) / 1000).toFixed(
+            6,
+          ),
           size: '65536',
           bit_rate: '64000',
           tags: { title: 'probed title' },

@@ -351,6 +351,49 @@ describe('FfmpegAudioAssembler.assemble', () => {
     )
   })
 
+  it('fails when the encoded book is shorter than the markers claim', async () => {
+    const request = await buildRequest()
+    // The muxer stores whatever ffmetadata declares, so only the encoded duration can catch a
+    // divergence between the chapter boundaries and the audio actually behind them.
+    const runner = new FakeFfmpeg({
+      chapterDurationsMs: CHAPTER_DURATIONS_MS,
+      reportedDurationMs: 6_000,
+    })
+    await expect(assemblerFor(runner).assemble(request)).rejects.toThrow(
+      /is 6000 ms long but its chapter markers cover 8500 ms/u,
+    )
+    expect(await readdir(outputDirectory)).toStrictEqual([])
+  })
+
+  it('accepts encoder priming drift below the tolerance', async () => {
+    const request = await buildRequest()
+    const runner = new FakeFfmpeg({
+      chapterDurationsMs: CHAPTER_DURATIONS_MS,
+      reportedDurationMs: 8_479,
+    })
+    await expect(assemblerFor(runner).assemble(request)).resolves.toBeDefined()
+  })
+
+  it('rejects a non-canonical reservation before encoding anything', async () => {
+    const request = await buildRequest()
+    const relative: AssembleAudiobookRequest = {
+      ...request,
+      reservation: {
+        ...request.reservation,
+        m4bPath: request.reservation.m4bPath.replace(`${outputDirectory}/`, ''),
+      },
+    }
+    const runner = new FakeFfmpeg({ chapterDurationsMs: CHAPTER_DURATIONS_MS })
+
+    await expect(assemblerFor(runner).assemble(relative)).rejects.toThrow(
+      /must be an absolute canonical path/u,
+    )
+    // Failing here rather than after the encode is the point: a resolved path would be written
+    // somewhere the application never reserved, wedging every later retry on OutputExistsError.
+    expect(runner.invocations).toHaveLength(0)
+    expect(await readdir(outputDirectory)).toStrictEqual([])
+  })
+
   it('rejects a request whose chapters are out of order before touching FFmpeg', async () => {
     const request = await buildRequest()
     const reordered: AssembleAudiobookRequest = {

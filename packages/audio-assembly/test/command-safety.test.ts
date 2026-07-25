@@ -40,6 +40,16 @@ describe('normalizeMetadataValue', () => {
     expect(normalizeMetadataValue(`Ti${NUL}tle[31m`)).toBe('Title[31m')
   })
 
+  it('drops bidirectional overrides that would render as text the title does not contain', () => {
+    const rtlOverride = String.fromCodePoint(0x202e)
+    const popDirectional = String.fromCodePoint(0x202c)
+    expect(normalizeMetadataValue(`Book${rtlOverride}gpm.4v${popDirectional}`)).toBe('Bookgpm.4v')
+    // Format characters that carry linguistic meaning are kept.
+    expect(normalizeMetadataValue(`ab${String.fromCodePoint(0x200d)}c`)).toBe(
+      `ab${String.fromCodePoint(0x200d)}c`,
+    )
+  })
+
   it('preserves punctuation and non-ASCII text', () => {
     expect(normalizeMetadataValue(HOSTILE_TITLE)).toBe('The "Book"; #1 = a\\path/name と日本語 ★')
   })

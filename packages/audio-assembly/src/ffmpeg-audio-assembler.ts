@@ -83,6 +83,13 @@ interface StagedChapter {
 const COPYABLE_COVER_CODECS = new Set(['mjpeg', 'png'])
 
 /**
+ * How far the encoded book may sit from the span its chapter markers cover. Lossy encoding and
+ * container edit lists are exact enough on the pinned build that this only fires on a real
+ * divergence, not on normal priming or per-chapter millisecond rounding.
+ */
+const MAX_TOTAL_DURATION_DRIFT_MS = 50
+
+/**
  * FFmpeg/FFprobe implementation of the application's `AudioAssembler` port.
  *
  * Every output is encoded into a staging directory first and only then claimed at its reserved path,
@@ -164,6 +171,10 @@ export class FfmpegAudioAssembler implements AudioAssembler {
       if (gain.warning !== null) warnings.push(gain.warning)
 
       const staged: StagedChapter[] = []
+      // Marker positions accumulate chapter durations already rounded to whole milliseconds, so a
+      // marker can sit up to half a millisecond per preceding chapter away from the exact sample
+      // boundary. The chapter timebase is milliseconds, so that rounding is unavoidable and the drift
+      // stays far below anything audible or seekable.
       let cursorMs = 0
       for (const [index, chapter] of plan.chapters.entries()) {
         const rawPath = rawChapters[index]
@@ -400,6 +411,16 @@ export class FfmpegAudioAssembler implements AudioAssembler {
           `Chapter marker ${index + 1} spans ${marker.startMs}..${marker.endMs} ms but chapter audio spans ${expected.startMs}..${expected.endMs} ms`,
         )
       }
+    }
+    // The marker comparison above is a round trip of numbers this adapter wrote: the muxer stores
+    // whatever ffmetadata declares, even a span longer than the audio. Only the encoded stream's own
+    // duration can catch a real divergence between the chapter boundaries and the audio behind them.
+    const expectedTotalMs = staged.at(-1)?.endMs ?? 0
+    const encodedTotalMs = probedDurationMs(probe)
+    if (Math.abs(encodedTotalMs - expectedTotalMs) > MAX_TOTAL_DURATION_DRIFT_MS) {
+      throw new AudioAssemblyError(
+        `Audiobook export is ${encodedTotalMs} ms long but its chapter markers cover ${expectedTotalMs} ms`,
+      )
     }
   }
 
