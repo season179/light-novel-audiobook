@@ -92,12 +92,7 @@ export {
   pathExists,
   rollbackClaimedOutputs,
 } from './no-overwrite.js'
-export {
-  audiobookFileName,
-  chapterAudioFileName,
-  manifestFileNameFor,
-  sanitizeFileNameComponent,
-} from './output-naming.js'
+export { sanitizeFileNameComponent } from './output-naming.js'
 export {
   type AssemblySettings,
   DEFAULT_ASSEMBLY_SETTINGS,
