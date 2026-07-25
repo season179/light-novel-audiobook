@@ -1,0 +1,799 @@
+{
+  "evidenceSchemaVersion": 1,
+  "probeVersion": 1,
+  "capturedAt": "2026-07-25T00:27:18.717Z",
+  "provenance": {
+    "generatedFromCommit": "d14b64f0f82b78e8c3582cdea98d4e68757abcb8",
+    "probeSourceSha256": "2dd86a351bd65435ab564526104049c2517b1cf8ed59350d000424fdbaf50c5b",
+    "harnessSourceSha256": "007032a2d54e8d5902708ad195bb53861608d2312c5ac6a0156932f2b30cb4ef",
+    "lockSha256": "22801d1970f6712073764977e7272db78d74eff56d507f2c9d82891c22dd41c3",
+    "runtime": {
+      "repository": "https://github.com/tc-mb/llama.cpp-omni.git",
+      "revision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+      "tag": "b258",
+      "license": "MIT",
+      "licenseUrl": "https://raw.githubusercontent.com/tc-mb/llama.cpp-omni/74699a53df6ca0f4947ff37066f851532c20b12d/LICENSE",
+      "licenseSha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "voxcpmReadmeSha256": "9045fece7def27e1ee4c9a3f8bffa36b840d738bb118f861d5f874d8f66fbc2a"
+    },
+    "officialModel": {
+      "repository": "openbmb/VoxCPM2",
+      "revision": "bffb3df5a29440629464e5e839f4d214c8714c3d",
+      "license": "Apache-2.0",
+      "modelCardSha256": "7384fad93ce2d98f47d5c3170597f3b31d414c12c92e7fdf3121fa90f19fe29d",
+      "sourceRepository": "https://github.com/OpenBMB/VoxCPM.git",
+      "sourceRevision": "616d3d3e630a9c96c2853250eef91b0f39dcd5fa",
+      "sourceLicenseSha256": "4f10acc209addacfad28293315c74c4cd648f771ee1263a748f1781d1e0265e4"
+    },
+    "ggufModel": {
+      "repository": "DennisHuang648/VoxCPM2-GGUF",
+      "revision": "169f64d8b98bbaab1761e4ca3a83e6af653456cc",
+      "license": "Apache-2.0",
+      "modelCardSha256": "da819ef91f34127819d38bf5e32e46d32d691c2fa071c3481c1336df42ab1102",
+      "provenance": "GGUF conversion of openbmb/VoxCPM2 published by an OpenBMB Hugging Face organization member",
+      "assets": [
+        {
+          "name": "VoxCPM2-BaseLM-Q8_0.gguf",
+          "size": 1727309920,
+          "sha256": "0113177abd11303503bf0b705e1613ec5f0a8508cc74a7dfd0f99312b962a962"
+        },
+        {
+          "name": "VoxCPM2-Acoustic-F16.gguf",
+          "size": 1825096352,
+          "sha256": "5bde898488ad635ff55d24da53543768fa33d5e5cdc538ce190e5ef831038e85"
+        }
+      ]
+    }
+  },
+  "host": {
+    "environment": "WSL2",
+    "kernel": "6.6.87.2-microsoft-standard-WSL2",
+    "effectiveRamMiB": 56238.1484375,
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "memoryTotalMiB": 16303,
+      "driver": "610.74",
+      "baselineUsedMiB": 517
+    }
+  },
+  "reproduction": {
+    "commands": [
+      "pnpm voxcpm2:setup",
+      "pnpm voxcpm2:probe -- --output ./docs/evidence/issue-7-voxcpm2-wsl2.json"
+    ],
+    "privateInputsUsed": false,
+    "syntheticInputsOnly": true
+  },
+  "isolation": {
+    "filesystem": "ext4",
+    "artifactsOutsideGit": true,
+    "ttsAndBrainDirectoriesSeparate": true,
+    "rawLogsOutsideGit": true,
+    "generatedAudioOutsideGit": true,
+    "configuredEndpoint": "http://127.0.0.1:8081",
+    "loopbackListenerObserved": true
+  },
+  "build": {
+    "status": "pass",
+    "cuda": true,
+    "cudaArchitecture": "120",
+    "nvcc": "Build cuda_13.0.r13.0/compiler.36424714_0",
+    "configureTiming": {
+      "elapsedSeconds": 14.1,
+      "peakRamMiB": 185.375
+    },
+    "compileTiming": {
+      "elapsedSeconds": 270.04,
+      "peakRamMiB": 711.17578125
+    },
+    "targets": {
+      "voxcpm2-cli": {
+        "sha256": "fddd711f808f140fc3f52f3a195bf2e9aea99c5d67fc7b81a0a2f470500a171d"
+      },
+      "llama-tts-server": {
+        "sha256": "89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac"
+      }
+    }
+  },
+  "cli": {
+    "status": "pass",
+    "wallSeconds": 2.694945187,
+    "generationSeconds": 0.988,
+    "rtf": 0.309,
+    "peakRamMiB": 1941.59375,
+    "audio": {
+      "container": "RIFF/WAVE",
+      "declaredRiffSize": 307236,
+      "encoding": "PCM",
+      "channels": 1,
+      "sampleRateHz": 48000,
+      "bitsPerSample": 16,
+      "frames": 153600,
+      "durationSeconds": 3.2,
+      "bytes": 307244,
+      "dataDeclaredSize": 307200,
+      "sha256": "f6d45cdc83488d8eb3fca789a5394018a061e2485f8a68ea0c8ea5ed922f979b"
+    }
+  },
+  "server": {
+    "status": "pass-non-streaming",
+    "loadSeconds": 1.364008597,
+    "health": {
+      "engine": "voxcpm2",
+      "status": "ok"
+    },
+    "models": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "feat_dim": 64,
+            "id": "voxcpm",
+            "object": "model",
+            "patch_size": 4,
+            "sample_rate": 48000
+          }
+        ],
+        "object": "list"
+      }
+    },
+    "gracefulExit": {
+      "code": 0,
+      "signal": null
+    },
+    "modelLoadOccurrences": 1,
+    "persistence": {
+      "count": 20,
+      "minimumSeconds": 0.09784905799999978,
+      "meanSeconds": 0.1253089197000001,
+      "maximumSeconds": 0.47693724699999984,
+      "meanRtf": 0.15663614962500014,
+      "processStayedAlive": true,
+      "modelLoadedOnce": true,
+      "requests": [
+        {
+          "request": 1,
+          "status": 200,
+          "elapsedSeconds": 0.47693724699999984,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "78a111339c833fa2857e768224009d4ea3bec455d91cbf64510a3c433e690b4b"
+          }
+        },
+        {
+          "request": 2,
+          "status": 200,
+          "elapsedSeconds": 0.09784905799999978,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "b31720de91472fe1efd298b23a4f655c9b4155d02bdb2fbf86a2560b20204470"
+          }
+        },
+        {
+          "request": 3,
+          "status": 200,
+          "elapsedSeconds": 0.10334414699999979,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "03e06c987fcf528b7cbeda77b8c01f04c901c4da2556d2a8164f3860e15bed14"
+          }
+        },
+        {
+          "request": 4,
+          "status": 200,
+          "elapsedSeconds": 0.11556611599999997,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "562225322b51aeeb73aaf8d9b310196fc7f8e84ddc72de38e30fe2c68d65b990"
+          }
+        },
+        {
+          "request": 5,
+          "status": 200,
+          "elapsedSeconds": 0.100283918000001,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "760a6501fba8443d1f518704d4f176cb1e763e9b4a98bf47cdb8eb15cd3f7058"
+          }
+        },
+        {
+          "request": 6,
+          "status": 200,
+          "elapsedSeconds": 0.1035645229999991,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "f23161ccde9f7be38072308c4c2b7129b12d629399cbc9a9db16b87bd92a16c2"
+          }
+        },
+        {
+          "request": 7,
+          "status": 200,
+          "elapsedSeconds": 0.09901429199999984,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "871c8739db4e4e16a8562f2e3d137b868b404b4fafe58883d282bb69e5964d7f"
+          }
+        },
+        {
+          "request": 8,
+          "status": 200,
+          "elapsedSeconds": 0.11545479300000079,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "2b1ad27db6978eb34606bc69bb02a3b8aa79d7baab60b65e4db71cf67f77d5be"
+          }
+        },
+        {
+          "request": 9,
+          "status": 200,
+          "elapsedSeconds": 0.11467162200000167,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "80ff4c3fdc1ffd79d02e6a0ad7bd23ac380ba6bc26c9d0d49cbc2c2cea8be5d9"
+          }
+        },
+        {
+          "request": 10,
+          "status": 200,
+          "elapsedSeconds": 0.11701149100000112,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "50bf3db24d26e4e3ac6bf2a1e3ed6aed390445e2a1098f6a9f87eee43dbda7ec"
+          }
+        },
+        {
+          "request": 11,
+          "status": 200,
+          "elapsedSeconds": 0.10644871200000125,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "57e161a28b2017331536872ea299c4764e35f5739dae9ad1f2a77ae83587687b"
+          }
+        },
+        {
+          "request": 12,
+          "status": 200,
+          "elapsedSeconds": 0.10030371999999989,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "05178c9acb8d4f2447a03c9139376146178cd305fbf71b675a3854fa8d56f943"
+          }
+        },
+        {
+          "request": 13,
+          "status": 200,
+          "elapsedSeconds": 0.10279484299999968,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "c7a8ff90e00589853d8f0ca90e01ef4d16128ccd492a07b28d55ba38f6c63054"
+          }
+        },
+        {
+          "request": 14,
+          "status": 200,
+          "elapsedSeconds": 0.11339499199999954,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "56cfd086afabe7c6728ad6ddd0d4e199449e0a68f8c7b09382b021a00f9e75c4"
+          }
+        },
+        {
+          "request": 15,
+          "status": 200,
+          "elapsedSeconds": 0.09793421399999898,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "bead4b02ff15c437eb303b67576949f8fb9be0330eb085034d7b5bf1d35e65aa"
+          }
+        },
+        {
+          "request": 16,
+          "status": 200,
+          "elapsedSeconds": 0.10375597899999957,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "b380a7d774404599cad6f26e0375314e6b781897d743a28e37b94fc659dc74c1"
+          }
+        },
+        {
+          "request": 17,
+          "status": 200,
+          "elapsedSeconds": 0.11448529100000088,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "6a446331ec90edb6fa64d29b38e9462c4c176b736d9b446182da7631326273a1"
+          }
+        },
+        {
+          "request": 18,
+          "status": 200,
+          "elapsedSeconds": 0.10930301599999984,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "c73526c786c351218a3889b55e5c88f763d694cc14d17c63d444f58ab2c2fad3"
+          }
+        },
+        {
+          "request": 19,
+          "status": 200,
+          "elapsedSeconds": 0.11090938199999982,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "aa08b4aacbe7cda77ab1f41d488feaad3963c02f2d4c132d8700949d53f2008e"
+          }
+        },
+        {
+          "request": 20,
+          "status": 200,
+          "elapsedSeconds": 0.10315103799999997,
+          "audio": {
+            "container": "RIFF/WAVE",
+            "declaredRiffSize": 76836,
+            "encoding": "PCM",
+            "channels": 1,
+            "sampleRateHz": 48000,
+            "bitsPerSample": 16,
+            "frames": 38400,
+            "durationSeconds": 0.8,
+            "bytes": 76844,
+            "dataDeclaredSize": 76800,
+            "sha256": "3c28bcdf2e68c1ed9c3503fdea9b95aef5d6a30ce231861cdfe7f4a84194cc2c"
+          }
+        }
+      ]
+    },
+    "responseMetadata": {
+      "contentType": "audio/wav",
+      "contentLength": "76844",
+      "customGenerationHeaders": []
+    },
+    "exercisedParameters": [
+      "model",
+      "input",
+      "response_format",
+      "seed",
+      "cfg_value",
+      "inference_timesteps",
+      "max_steps",
+      "temperature",
+      "reference_audio"
+    ],
+    "resources": {
+      "sampleCount": 126,
+      "peakRamMiB": 1037.04296875,
+      "steadyRamMiB": 826.5703125,
+      "peakDeviceVramMiB": 5850,
+      "peakIncrementalVramMiB": 5333,
+      "steadyDeviceVramMiB": 814,
+      "steadyIncrementalVramMiB": 297,
+      "peakGpuUtilizationPercent": 93,
+      "loadedSteady": {
+        "ramMiB": 520.74609375,
+        "deviceVramMiB": 5540,
+        "incrementalVramMiB": 5023
+      },
+      "afterRequestsSteady": {
+        "ramMiB": 1036.36328125,
+        "deviceVramMiB": 5674,
+        "incrementalVramMiB": 5157
+      }
+    },
+    "errors": [
+      {
+        "name": "missing-input",
+        "status": 500,
+        "contentType": "application/json",
+        "body": "{\"error\":{\"message\":\"\\\"input\\\" is required\",\"type\":\"invalid_request_error\"}}"
+      },
+      {
+        "name": "unknown-model",
+        "status": 500,
+        "contentType": "application/json",
+        "body": "{\"error\":{\"message\":\"unknown model: \\\"bad\\\", expected \\\"voxcpm\\\"\",\"type\":\"invalid_request_error\"}}"
+      },
+      {
+        "name": "bad-format",
+        "status": 500,
+        "contentType": "application/json",
+        "body": "{\"error\":{\"message\":\"supported response_format: wav, pcm\",\"type\":\"invalid_request_error\"}}"
+      },
+      {
+        "name": "invalid-reference",
+        "status": 500,
+        "contentType": "application/json",
+        "body": "{\"error\":{\"message\":\"Invalid reference_audio WAV data\",\"type\":\"invalid_request_error\"}}"
+      },
+      {
+        "name": "malformed-json",
+        "status": 500,
+        "contentType": null,
+        "body": ""
+      }
+    ],
+    "parameters": [
+      {
+        "name": "max-steps-5",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 76844,
+        "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 76836,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 38400,
+          "durationSeconds": 0.8,
+          "bytes": 76844,
+          "dataDeclaredSize": 76800,
+          "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda"
+        }
+      },
+      {
+        "name": "max-steps-10",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 153644,
+        "sha256": "cc19c841c19245edb741ae963d72ad8152b1759848a912c454f2933b27ed19f8",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 153636,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 76800,
+          "durationSeconds": 1.6,
+          "bytes": 153644,
+          "dataDeclaredSize": 153600,
+          "sha256": "cc19c841c19245edb741ae963d72ad8152b1759848a912c454f2933b27ed19f8"
+        }
+      },
+      {
+        "name": "seed-43",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 76844,
+        "sha256": "b23657d9096a3845f3c1e717e37ae5768d38912c14b8ea90fd79c3d552954cd6",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 76836,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 38400,
+          "durationSeconds": 0.8,
+          "bytes": 76844,
+          "dataDeclaredSize": 76800,
+          "sha256": "b23657d9096a3845f3c1e717e37ae5768d38912c14b8ea90fd79c3d552954cd6"
+        }
+      },
+      {
+        "name": "model-alias",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 76844,
+        "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 76836,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 38400,
+          "durationSeconds": 0.8,
+          "bytes": 76844,
+          "dataDeclaredSize": 76800,
+          "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda"
+        }
+      },
+      {
+        "name": "unknown-field",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 76844,
+        "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 76836,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 38400,
+          "durationSeconds": 0.8,
+          "bytes": 76844,
+          "dataDeclaredSize": 76800,
+          "sha256": "5360302500137409b9a7ea7d5df4de4df1239ffb850d67aeaef09df58e4caeda"
+        }
+      },
+      {
+        "name": "wrong-types-defaulted",
+        "status": 200,
+        "contentType": "audio/wav",
+        "bytes": 230444,
+        "sha256": "d6e01449940fef1f185c0231fa85648e7a1ca162a6116565575cd5fa4e4307dc",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 230436,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 115200,
+          "durationSeconds": 2.4,
+          "bytes": 230444,
+          "dataDeclaredSize": 230400,
+          "sha256": "d6e01449940fef1f185c0231fa85648e7a1ca162a6116565575cd5fa4e4307dc"
+        }
+      },
+      {
+        "name": "pcm",
+        "status": 200,
+        "contentType": "audio/pcm",
+        "bytes": 153600,
+        "sha256": "11235fe67e0119c93f3422f977a54e687d34c2a66e0937d30b44586c43f69645",
+        "pcm": {
+          "encoding": "float32-le",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "samples": 38400
+        }
+      },
+      {
+        "name": "synthetic-reference-audio",
+        "status": 200,
+        "contentType": "audio/wav",
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 76836,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "bitsPerSample": 16,
+          "frames": 38400,
+          "durationSeconds": 0.8,
+          "bytes": 76844,
+          "dataDeclaredSize": 76800,
+          "sha256": "3b0848f595fec1a67309590cd0ebe8167946069dd2e320ef958ab61edeca02c5"
+        },
+        "referenceProvenance": "VoxCPM2 CLI-generated synthetic audio; no human recording"
+      }
+    ],
+    "cancellationAndTimeout": [
+      {
+        "mode": "manual-abort",
+        "clientResult": "AbortError",
+        "elapsedSeconds": 0.02592349699999977,
+        "serverCancellation": "not implemented; generation continues after client disconnect",
+        "healthAfterWait": 200
+      },
+      {
+        "mode": "timeout",
+        "clientResult": "TimeoutError",
+        "elapsedSeconds": 0.02532997299999988,
+        "serverCancellation": "not implemented; generation continues after client disconnect",
+        "healthAfterWait": 200
+      }
+    ],
+    "boundary": {
+      "arbitrary-host": {
+        "status": 200,
+        "accessControlAllowOrigin": null
+      },
+      "browser-origin": {
+        "status": 200,
+        "accessControlAllowOrigin": null
+      }
+    },
+    "streaming": {
+      "clientError": "terminated",
+      "processExit": {
+        "code": null,
+        "signal": "SIGABRT"
+      },
+      "assertion": "GGML_ASSERT(lp0 <= x->ne[0]) failed",
+      "characterization": "short streaming requests can abort the whole server; do not use this endpoint"
+    }
+  },
+  "limitations": [
+    "The streaming endpoint can crash the process on a valid short request.",
+    "Client abort and timeout do not cancel server-side generation.",
+    "Invalid client requests use HTTP 500 instead of HTTP 400; malformed JSON has an empty 500 response.",
+    "Wrong parameter types silently fall back to defaults and unknown fields are ignored.",
+    "No generation timing, seed, or model identity is returned in response headers.",
+    "The server accepts arbitrary Host and browser Origin headers, though it emits no CORS permission.",
+    "The runtime does not serialize generation calls; future adapters must enforce one in-flight request.",
+    "The streaming WAV header uses unknown 0x7fffffff sizes and needs finalization before normal WAV tooling."
+  ],
+  "decision": {
+    "result": "NO-GO for production SpeechEngine adapter at this upstream revision",
+    "nonStreamingSpike": "GO for isolated CLI and single-request-at-a-time persistent experiments",
+    "blockers": [
+      "upstream streaming process crash",
+      "no server-side cancellation/deadline handling",
+      "no request serialization or safe concurrency contract"
+    ]
+  },
+  "redaction": {
+    "absolutePaths": "omitted",
+    "processIds": "omitted",
+    "rawLogs": "external only",
+    "privateTextOrHumanReferenceAudio": "not used"
+  }
+}

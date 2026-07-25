@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "repository": "https://github.com/tc-mb/llama.cpp-omni.git",
+    "revision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+    "tag": "b258",
+    "license": "MIT",
+    "licenseUrl": "https://raw.githubusercontent.com/tc-mb/llama.cpp-omni/74699a53df6ca0f4947ff37066f851532c20b12d/LICENSE",
+    "licenseSha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    "voxcpmReadmeSha256": "9045fece7def27e1ee4c9a3f8bffa36b840d738bb118f861d5f874d8f66fbc2a"
+  },
+  "officialModel": {
+    "repository": "openbmb/VoxCPM2",
+    "revision": "bffb3df5a29440629464e5e839f4d214c8714c3d",
+    "license": "Apache-2.0",
+    "modelCardSha256": "7384fad93ce2d98f47d5c3170597f3b31d414c12c92e7fdf3121fa90f19fe29d",
+    "sourceRepository": "https://github.com/OpenBMB/VoxCPM.git",
+    "sourceRevision": "616d3d3e630a9c96c2853250eef91b0f39dcd5fa",
+    "sourceLicenseSha256": "4f10acc209addacfad28293315c74c4cd648f771ee1263a748f1781d1e0265e4"
+  },
+  "ggufModel": {
+    "repository": "DennisHuang648/VoxCPM2-GGUF",
+    "revision": "169f64d8b98bbaab1761e4ca3a83e6af653456cc",
+    "license": "Apache-2.0",
+    "modelCardSha256": "da819ef91f34127819d38bf5e32e46d32d691c2fa071c3481c1336df42ab1102",
+    "provenance": "GGUF conversion of openbmb/VoxCPM2 published by an OpenBMB Hugging Face organization member",
+    "assets": [
+      {
+        "name": "VoxCPM2-BaseLM-Q8_0.gguf",
+        "size": 1727309920,
+        "sha256": "0113177abd11303503bf0b705e1613ec5f0a8508cc74a7dfd0f99312b962a962"
+      },
+      {
+        "name": "VoxCPM2-Acoustic-F16.gguf",
+        "size": 1825096352,
+        "sha256": "5bde898488ad635ff55d24da53543768fa33d5e5cdc538ce190e5ef831038e85"
+      }
+    ]
+  },
+  "build": {
+    "cudaArchitecture": "120",
+    "targets": ["voxcpm2-cli", "llama-tts-server"]
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8081
+  }
+}
