@@ -5,8 +5,9 @@
 - Runtime: `qwen-tts==0.1.1` on locked uv/Python 3.12
 - Attention: PyTorch SDPA; no FlashAttention
 - License/provenance: [`../licenses/qwen3-tts-custom-voice.md`](../licenses/qwen3-tts-custom-voice.md)
-- Host evidence: generated only by the committed harness at
-  `../evidence/issue-8-qwen3-tts-custom-voice-wsl2.json`
+- Host evidence:
+  [`../evidence/issue-8-qwen3-tts-custom-voice-wsl2.json`](../evidence/issue-8-qwen3-tts-custom-voice-wsl2.json)
+- Technical decision: **GO for Qwen3-TTS technical evaluation**
 - Human listening: **PENDING** until the external review form is completed
 
 ## Boundary
@@ -98,8 +99,42 @@ instructions. Its JSON form leaves intelligibility, naturalness, style fit, stab
 distinction, and cross-line consistency explicitly null. Technical evidence may be committed,
 but listening and production decisions remain pending until a person completes that form.
 
+## Measured host results
+
+The immutable host run was generated from implementation commit
+`ce94ed7acef3e288dd9e95daf50e3bc5e6e9803d`. It independently rechecked all 13 snapshot files:
+4,520,218,951 payload bytes, including the 3,833,402,552-byte main weights and 682,293,092-byte
+speech-tokenizer weights with their locked SHA-256 values. It loaded only the local snapshot,
+confirmed SDPA on both model and speech-tokenizer configurations, found no FlashAttention,
+confirmed all three built-in speakers and English, and used no reference audio. The isolated
+environment contained 103 installed packages from the complete uv lock on CPython 3.12.13.
+
+Both exact 3 × 3 primary matrices and both three-repeat sets passed identity and strict WAV
+checks. All 24 files were canonical mono 24 kHz 16-bit PCM. Durations ranged from 2.32 to 3.92
+seconds, active-frame fractions ranged from 0.821 to 0.958, and no near-clipped samples were
+measured. The nine stock primary calls took 59.90 seconds and produced 28.72 seconds of audio;
+the nine greedy primary calls took 50.71 seconds and produced 26.16 seconds. All 24 calls took
+143.89 seconds, including repeats.
+
+Every same-run stock-seeded repeat matched its primary WAV byte-for-byte. Every same-run greedy
+repeat also matched. The evidence records all 12 compared hashes and limits each claim to this
+exact run and locked environment; it makes no cross-host repeatability claim.
+
+Model load took 1.86 seconds and the child worker took 159.32 seconds end to end. Peak observed
+VRAM was 4,619 MiB on the 16,303 MiB RTX 5070 Ti, versus a 161 MiB baseline. Peak child RSS was
+3,987.96 MiB; peak observed system-used RAM was 6,403.71 MiB of 56,238.15 MiB. After the child
+exited, GPU use returned to 162 MiB, within 1 MiB of baseline. The old eSpeak/VoxCPM2 paths
+remained absent. External artifacts and raw logs have private permissions, and committed
+evidence contains no absolute paths, process IDs, audio, or logs.
+
+The immutable external review bundle contains all 18 primary clips, exact transcripts and style
+instructions, `manual-review.json`, `review.html`, instructions, and a hashed artifact manifest.
+All subjective fields remain null pending a human review.
+
 ## Decision
 
-**Pending the real host run.** A technical GO requires every provenance, isolation, matrix,
-WAV/activity/clipping, resource-cleanup, and review-bundle gate to pass. Even a technical GO does
-not imply human listening approval or production `SpeechEngine` readiness.
+**GO for Qwen3-TTS technical evaluation.** Every locked provenance, isolation, exact-matrix,
+WAV/activity/clipping, resource-cleanup, permission, sanitization, and review-bundle gate passed.
+This technical GO does not imply human listening approval or production `SpeechEngine`
+readiness. Both remain explicitly unassessed until the listening form is completed and later
+adapter requirements are tested.
