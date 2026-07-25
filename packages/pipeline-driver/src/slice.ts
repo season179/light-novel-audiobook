@@ -33,9 +33,15 @@ export interface SliceReport {
  * carries no position invariant, and `ExactSourceCoverage` then runs over the sliced book, so
  * "every passage represented exactly once" still means exactly that for the slice.
  *
- * `identity` is passed through unchanged on purpose. It identifies the extractor, and the extractor
- * is the real one; the slice is recorded in the run report instead, where it cannot be mistaken for a
- * property of the extraction itself.
+ * `identity` binds the slice bounds. `GenerateAudiobook` folds the extractor identity into the command
+ * identity, and a completed job returns its stored output without re-extracting — so an unbound slice
+ * would let a second run with different bounds silently reuse the first run's audio. On a
+ * 2,328-passage book that is the difference between three paragraphs and an unintended full render.
+ * With the bounds bound in, changing them changes the command identity, and the same job ID is
+ * rejected as stale instead of quietly resurfacing the old result.
+ *
+ * An unbounded slice reports the inner identity verbatim, so wrapping without limits stays
+ * indistinguishable from not wrapping at all.
  */
 export class SlicingEpubExtractor implements EpubExtractor {
   readonly identity: string
@@ -45,7 +51,18 @@ export class SlicingEpubExtractor implements EpubExtractor {
     private readonly inner: EpubExtractor,
     private readonly limits: SliceLimits,
   ) {
-    this.identity = inner.identity
+    this.identity = SlicingEpubExtractor.#identityFor(inner.identity, limits)
+  }
+
+  static #identityFor(innerIdentity: string, limits: SliceLimits): string {
+    const bounds = [
+      ['maxChapters', limits.maxChapters],
+      ['maxPassagesPerChapter', limits.maxPassagesPerChapter],
+    ]
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => `${String(name)}=${String(value)}`)
+    if (bounds.length === 0) return innerIdentity
+    return `${innerIdentity}+slice(${bounds.join(',')})`
   }
 
   /** Populated once `extract` has run; the numbers a run report should quote. */

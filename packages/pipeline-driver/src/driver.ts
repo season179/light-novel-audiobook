@@ -138,11 +138,11 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   })
 
   // --- speech: real engine over the selected transport.
-  // The engine creates its own output directory but expects the snapshot directory to exist, so the
-  // composition root owns both; it is the thing that knows the workspace layout.
-  const speechSnapshotPath = path.join(options.workspaceRoot, 'tts-snapshot')
+  // The snapshot path comes from the transport, never from the workspace: it is where the pinned model
+  // weights actually live, and the real Python worker validates that directory against the model lock
+  // before `from_pretrained`. A fresh workspace subdirectory would be an empty directory, so real mode
+  // would fail at model load. The output directory *is* workspace-shaped, so this owns only that.
   const speechOutputDirectory = path.join(options.workspaceRoot, 'segments')
-  await mkdir(speechSnapshotPath, { recursive: true, mode: 0o700 })
   await mkdir(speechOutputDirectory, { recursive: true, mode: 0o700 })
   const engine = await QwenTtsSpeechEngine.create({
     pythonExecutable: transports.speech.pythonExecutable,
@@ -151,7 +151,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
     modelLockPath: path.join(options.repositoryRoot, 'config/qwen3-tts-custom-voice.lock.json'),
     runtimeManifestPath: transports.speech.runtimeManifestPath,
     uvLockPath: path.join(options.repositoryRoot, 'scripts/qwen3-tts-runtime/uv.lock'),
-    snapshotPath: speechSnapshotPath,
+    snapshotPath: transports.speech.modelSnapshotPath,
     outputDirectory: speechOutputDirectory,
     repositoryRoot: options.repositoryRoot,
     gpuGate: transports.gpu.coordinator,

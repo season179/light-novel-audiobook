@@ -1,12 +1,18 @@
-import { copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
-import type { DirectorRuntimeLifecycle } from '@light-novel-audiobook/gemma-director'
+import {
+  type DirectorRuntimeLifecycle,
+  GemmaDirectorEndpoint,
+} from '@light-novel-audiobook/gemma-director'
 import {
   type ExclusiveGpuLeaseCoordinator,
   FileGpuLeaseCoordinator,
   type GpuLease,
   type GpuOwner,
 } from '@light-novel-audiobook/gpu-lease'
+import { llamaRuntimePaths, llamaServerArgs, OwnedLlamaLifecycle } from './llama-lifecycle.js'
 
 /**
  * Everything about a run that is a *transport* rather than an adapter: where the director's HTTP
@@ -26,6 +32,13 @@ export interface PipelineTransports {
     readonly pythonExecutable: string
     readonly workerScriptPath: string
     readonly runtimeManifestPath: string
+    /**
+     * Directory holding the pinned Qwen model snapshot. The transport owns this because it is a
+     * property of the runtime, not of the workspace: the real Python worker resolves this exact path,
+     * validates its files against `config/qwen3-tts-custom-voice.lock.json` and then calls
+     * `from_pretrained` on it, so a fresh workspace subdirectory can never be correct.
+     */
+    readonly modelSnapshotPath: string
     readonly processEnvironment: Readonly<Record<string, string>>
   }
   readonly gpu: {
@@ -108,7 +121,11 @@ export async function createFakeTransports(
   const events: string[] = []
   const runtimeManifestPath = path.join(paths.runtimeDirectory, 'runtime-manifest.json')
   const workerScriptPath = path.join(paths.runtimeDirectory, 'fake-qwen-process.mjs')
+  // The fake worker loads no weights, so its snapshot directory is genuinely scratch — but it must
+  // exist, because the engine realpaths it. Real mode resolves the pinned snapshot instead.
+  const modelSnapshotPath = path.join(paths.runtimeDirectory, 'tts-snapshot')
   await mkdir(paths.runtimeDirectory, { recursive: true })
+  await mkdir(modelSnapshotPath, { recursive: true, mode: 0o700 })
   await writeFile(runtimeManifestPath, `${JSON.stringify(FAKE_RUNTIME_MANIFEST)}\n`)
   await copyFile(
     path.join(paths.repositoryRoot, 'packages/qwen-tts/test/fixtures/fake-qwen-process.mjs'),
@@ -126,6 +143,7 @@ export async function createFakeTransports(
       pythonExecutable: process.execPath,
       workerScriptPath,
       runtimeManifestPath,
+      modelSnapshotPath,
       processEnvironment: { FAKE_QWEN_MODE: 'normal' },
     },
     gpu: {
@@ -141,44 +159,116 @@ export async function createFakeTransports(
 }
 
 export interface RealTransportConfig {
-  /** llama.cpp OpenAI-compatible base URL, e.g. `http://127.0.0.1:8080/v1`. */
+  /** Loopback `/v1` URL the owned llama.cpp server binds to, e.g. `http://127.0.0.1:8080/v1`. */
   readonly directorBaseUrl: string
-  readonly directorApiKey: string
+  /** Built brain runtime: `<root>/llama.cpp/build/bin/llama-server` and `<root>/models/<gguf>`. */
+  readonly llamaRuntimeRoot: string
   /** `uv`-managed interpreter for the pinned Qwen runtime. */
   readonly pythonExecutable: string
   readonly workerScriptPath: string
   readonly runtimeManifestPath: string
+  /** Pinned Qwen snapshot directory. See {@link resolveDefaultModelSnapshotPath}. */
+  readonly modelSnapshotPath: string
   /** Shared with the director so the two models can never be co-resident. */
   readonly gpuLockFilePath: string
+  readonly startupTimeoutMs?: number
+}
+
+async function assertDirectory(candidate: string, what: string): Promise<void> {
+  const stats = await stat(candidate).catch(() => undefined)
+  if (stats === undefined || !stats.isDirectory()) {
+    throw new Error(`${what} is not a directory: ${candidate}`)
+  }
+}
+
+async function assertExecutable(candidate: string, what: string): Promise<void> {
+  const stats = await stat(candidate).catch(() => undefined)
+  if (stats === undefined || !stats.isFile() || (stats.mode & 0o111) === 0) {
+    throw new Error(`${what} is not an executable file: ${candidate}`)
+  }
 }
 
 /**
- * Real transports: a running llama.cpp server, the pinned Python worker, and the real kernel-held GPU
- * lease from `packages/gpu-lease`.
- *
- * The director lifecycle is intentionally a no-op that only records. `DirectorRuntimeLifecycle` is
- * meant to load and unload the runtime, and this driver does not own the llama.cpp process — the
- * launcher does. Starting or stopping someone else's server from here would be the wrong boundary, so
- * the contract is: bring the server up before running, and the GPU lease still serialises Gemma
- * against Qwen because both use the same lock file.
- *
- * Not executed yet: `loadWorkerRuntimeIdentity` currently throws for everyone (issue #59), so the
- * speech engine cannot start in real mode. Nothing here works around that, deliberately — the moment
- * #59 lands this path should work unchanged.
+ * The pinned Qwen snapshot location, derived from the lock rather than restated: the extension script
+ * installs it at `<data root>/models/tts/qwen3-tts-custom-voice/<model.revision>/snapshot`, and the
+ * revision is whatever `config/qwen3-tts-custom-voice.lock.json` pins. Deriving it means a lock bump
+ * moves this default automatically instead of silently pointing at a stale revision.
  */
-export function createRealTransports(config: RealTransportConfig): PipelineTransports {
+export async function resolveDefaultModelSnapshotPath(repositoryRoot: string): Promise<string> {
+  const lockPath = path.join(repositoryRoot, 'config/qwen3-tts-custom-voice.lock.json')
+  const lock = JSON.parse(await readFile(lockPath, 'utf8')) as { model?: { revision?: unknown } }
+  const revision = lock.model?.revision
+  if (typeof revision !== 'string' || !/^[a-f0-9]{40}$/.test(revision)) {
+    throw new Error(`Pinned Qwen lock has no usable model revision: ${lockPath}`)
+  }
+  const dataRoot =
+    process.env.QWEN3_TTS_DATA_ROOT ??
+    path.join(
+      process.env.XDG_DATA_HOME ?? path.join(homedir(), '.local/share'),
+      'light-novel-audiobook',
+    )
+  return path.join(dataRoot, 'models/tts/qwen3-tts-custom-voice', revision, 'snapshot')
+}
+
+/**
+ * Real transports: an *owned* llama.cpp server, the pinned Python worker against the pinned model
+ * snapshot, and the real kernel-held GPU lease from `packages/gpu-lease`.
+ *
+ * The director lifecycle owns the llama.cpp process on purpose, and this is the load-bearing detail of
+ * real mode. `GemmaDirectorModel` calls `start()` only while it holds the exclusive lease and
+ * `release()` before dropping it, so spawning and reaping the server at those two points is what makes
+ * VRAM residency inseparable from the lease. Sharing one lock file is *not* sufficient on its own: if
+ * the server outlives `release()`, the lease passes to Qwen while Gemma is still resident and both
+ * models sit in VRAM together. `OwnedLlamaLifecycle.release()` therefore waits for actual process exit
+ * and a free port before returning.
+ */
+export async function createRealTransports(
+  config: RealTransportConfig,
+): Promise<PipelineTransports> {
   const events: string[] = []
+  const endpoint = new GemmaDirectorEndpoint(config.directorBaseUrl)
+  const { binaryPath, modelPath } = llamaRuntimePaths(config.llamaRuntimeRoot)
+
+  await assertExecutable(binaryPath, 'Owned llama-server binary')
+  await assertDirectory(config.modelSnapshotPath, 'Pinned Qwen model snapshot')
+  const modelStats = await stat(modelPath).catch(() => undefined)
+  if (modelStats === undefined || !modelStats.isFile()) {
+    throw new Error(`Pinned Gemma model file is missing: ${modelPath}`)
+  }
+
+  // Generated per run and passed by file, never on argv, so it cannot leak through the process table.
+  const apiKey = randomBytes(32).toString('base64url')
+  const keyPath = path.join(config.llamaRuntimeRoot, `.pipeline-driver-key-${process.pid}`)
+  const owned = new OwnedLlamaLifecycle({
+    binaryPath,
+    args: llamaServerArgs({
+      modelPath,
+      host: endpoint.host,
+      port: endpoint.port,
+      keyPath,
+    }),
+    apiKey,
+    keyPath,
+    origin: endpoint.origin,
+    port: endpoint.port,
+    startupTimeoutMs: config.startupTimeoutMs ?? 600_000,
+  })
+
   return {
     mode: 'real',
     director: {
-      baseUrl: config.directorBaseUrl,
-      apiKey: config.directorApiKey,
+      baseUrl: endpoint.baseUrl,
+      apiKey,
       lifecycle: {
         start: async () => {
-          events.push('director:start')
+          await owned.start()
+          // Recorded after the process is serving, so the event cannot precede GPU residency.
+          events.push(`director:start:pid=${owned.processId ?? 'unknown'}`)
         },
         release: async () => {
-          events.push('director:release')
+          await owned.release()
+          // Recorded only after the process has exited and its port is free.
+          events.push('director:release:process-exited')
         },
       },
     },
@@ -186,6 +276,7 @@ export function createRealTransports(config: RealTransportConfig): PipelineTrans
       pythonExecutable: config.pythonExecutable,
       workerScriptPath: config.workerScriptPath,
       runtimeManifestPath: config.runtimeManifestPath,
+      modelSnapshotPath: config.modelSnapshotPath,
       processEnvironment: {},
     },
     gpu: {
@@ -193,6 +284,9 @@ export function createRealTransports(config: RealTransportConfig): PipelineTrans
       lockFilePath: config.gpuLockFilePath,
     },
     lifecycleEvents: events,
-    close: async () => undefined,
+    // Safety net: a failure between start() and release() must not leave a model resident.
+    close: async () => {
+      await owned.release()
+    },
   }
 }

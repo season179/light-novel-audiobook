@@ -11,16 +11,21 @@
  *   --passages <n>             Keep at most N passages per chapter. Default: 3.
  *   --characters <a,b>         Character speaker IDs to cast. Default: none (narration only).
  *   --transports fake|real     Default: fake. `real` loads actual models; see below.
- *   --director-url <url>       Real mode: llama.cpp OpenAI-compatible base URL.
- *   --director-key <key>       Real mode: server-side API key.
+ *   --director-url <url>       Real mode: loopback /v1 URL the owned llama-server binds to.
+ *   --llama-runtime-root <p>   Real mode: built brain runtime root. Default: the pinned profile's.
  *   --python <path>            Real mode: pinned uv-managed interpreter.
  *   --worker <path>            Real mode: Qwen worker script.
  *   --runtime-manifest <path>  Real mode: pinned runtime manifest.
+ *   --snapshot <path>          Real mode: pinned Qwen model snapshot. Default: derived from the lock.
  *   --gpu-lock <path>          Real mode: GPU lock file shared by Gemma and Qwen.
  *
  * Fake transports are the default on purpose: no GPU, no model weights, no network beyond loopback,
  * so this is safe to run anywhere and in CI. Real transports load Gemma and Qwen for real and must be
  * asked for explicitly.
+ *
+ * In real mode this driver *owns* the llama.cpp process: it is spawned once Gemma holds the GPU lease
+ * and reaped before the lease is released, which is what keeps the two models from being co-resident.
+ * There is no `--director-key`; a key is generated per run and passed to the server by file.
  *
  * Only sanitized evidence is printed — counts, hashes, byte sizes, durations, paths. Never story text.
  */
@@ -28,9 +33,14 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import { runPipeline } from '../src/driver.js'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
-import { createFakeTransports, createRealTransports } from '../src/transports.js'
+import {
+  createFakeTransports,
+  createRealTransports,
+  resolveDefaultModelSnapshotPath,
+} from '../src/transports.js'
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -77,12 +87,17 @@ const transports =
         { runtimeDirectory: path.join(workspaceRoot, 'runtime'), repositoryRoot: REPOSITORY_ROOT },
         (directorServer as NarrationEchoDirectorServer).baseUrl,
       )
-    : createRealTransports({
+    : await createRealTransports({
         directorBaseUrl: required('director-url'),
-        directorApiKey: required('director-key'),
+        llamaRuntimeRoot: path.resolve(
+          flag('llama-runtime-root') ?? SELECTED_GEMMA_PROFILE.defaultRuntimeRoot,
+        ),
         pythonExecutable: path.resolve(required('python')),
         workerScriptPath: path.resolve(required('worker')),
         runtimeManifestPath: path.resolve(required('runtime-manifest')),
+        modelSnapshotPath: path.resolve(
+          flag('snapshot') ?? (await resolveDefaultModelSnapshotPath(REPOSITORY_ROOT)),
+        ),
         gpuLockFilePath: path.resolve(required('gpu-lock')),
       })
 
