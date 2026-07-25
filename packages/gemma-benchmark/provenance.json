@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-07-25",
+  "model": {
+    "repository": "google/gemma-4-26B-A4B-it-qat-q4_0-gguf",
+    "revision": "d1c082be9cf3c8a514acf63b8761f4b41935842e",
+    "revisionPublic": true,
+    "revisionGated": false,
+    "file": "gemma-4-26B_q4_0-it.gguf",
+    "sizeBytes": 14439363584,
+    "sha256": "3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d",
+    "lfsPointerSize": 136,
+    "lfsBlobId": "dd8728aa225128f4cfc9c21c0d41550ee5171bea",
+    "apiVerification": "The pinned Hugging Face revision API with blobs=true reported the file size and LFS SHA-256.",
+    "independentVerification": "The pinned resolve endpoint reported matching x-linked-size and x-linked-etag; preparation additionally hashes all downloaded bytes.",
+    "textOnly": true,
+    "mmprojDownloaded": false,
+    "defaultLocalPath": "${XDG_CACHE_HOME:-$HOME/.cache}/light-novel-audiobook/issue-6-brain/models/gemma-4-26B_q4_0-it.gguf",
+    "cardSha256": "f9e8c5e65c069adf1ea0e212f5c20303e68e78469bf549d10e631fe9c3612873",
+    "gitAttributesSha256": "e33a964fc605748fe74d1c47c08def72764bd8fe0300648a3d1e8fc305944eaa"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "huggingFaceApiDeclaration": "apache-2.0",
+    "modelCardDeclaration": "apache-2.0",
+    "modelCardLicenseLink": "https://ai.google.dev/gemma/docs/gemma_4_license",
+    "officialGoogleLicensePageTitleVerified": "Apache License 2.0",
+    "apacheTextUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "apacheTextSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "llamaCpp": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "commit": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
+    "license": "MIT",
+    "licenseSha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    "build": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "GGML_CUDA": "ON",
+      "LLAMA_CURL": "OFF",
+      "LLAMA_BUILD_TESTS": "OFF",
+      "LLAMA_BUILD_EXAMPLES": "OFF",
+      "LLAMA_BUILD_SERVER": "ON",
+      "target": "llama-server"
+    },
+    "isolation": "Dedicated issue-6 ext4 root, separate from llama.cpp-omni and Git"
+  }
+}

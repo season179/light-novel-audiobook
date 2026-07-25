@@ -1,0 +1,21 @@
+{
+  "name": "@light-novel-audiobook/gemma-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/gemma-benchmark/test",
+    "generate:schemas": "tsx scripts/generate-schemas.ts && biome format --write ../../schemas/evaluation/benchmark-context.schema.json",
+    "prepare:host": "bash scripts/prepare-host.sh",
+    "benchmark": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@light-novel-audiobook/scoring-harness": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

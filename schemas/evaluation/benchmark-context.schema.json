@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "benchmark-context@1"
+    },
+    "context_version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*@[1-9][0-9]*$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "corpus_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "story_context": {
+      "type": "string"
+    },
+    "characters": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "character_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": ["character_id", "aliases"],
+        "additionalProperties": false
+      }
+    },
+    "narrator_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "fallback_dialogue_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "governance": {
+      "type": "object",
+      "properties": {
+        "lawful_access_confirmed": {
+          "type": "boolean",
+          "const": true
+        },
+        "permitted_use": {
+          "type": "string",
+          "const": "local_evaluation"
+        },
+        "redistribution": {
+          "type": "string",
+          "enum": ["workspace_only", "committed_allowed"]
+        },
+        "gold_annotations_completed_before_model_runs": {
+          "type": "boolean",
+          "const": true
+        },
+        "gold_annotators_blind_to_model_outputs": {
+          "type": "boolean",
+          "const": true
+        },
+        "independent_annotator_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9007199254740991
+        },
+        "disagreements_adjudicated": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "lawful_access_confirmed",
+        "permitted_use",
+        "redistribution",
+        "gold_annotations_completed_before_model_runs",
+        "gold_annotators_blind_to_model_outputs",
+        "independent_annotator_count",
+        "disagreements_adjudicated"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "context_version",
+    "source_sha256",
+    "corpus_sha256",
+    "story_context",
+    "characters",
+    "narrator_id",
+    "fallback_dialogue_id",
+    "governance"
+  ],
+  "additionalProperties": false,
+  "$id": "https://local.invalid/light-novel-audiobook/evaluation/benchmark-context@1"
+}
