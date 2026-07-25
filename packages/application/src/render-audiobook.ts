@@ -22,6 +22,7 @@ import type {
   SpeechEngine,
   SpeechEngineFactory,
 } from './ports.js'
+import { createRenderContract } from './render-contract.js'
 import { createRenderInputIdentity } from './render-input-identity.js'
 
 export interface RenderAudiobookCommand {
@@ -70,6 +71,37 @@ export class UnapprovedFallbackSegmentsError extends DomainError {
       }`,
     )
     this.segmentIds = Object.freeze([...segmentIds])
+  }
+}
+
+/**
+ * Raised when a human fallback decision moved while this render was in flight, so the audio it
+ * produced is no longer the audio the live catalog authorizes.
+ */
+export class StaleFallbackCatalogError extends DomainError {
+  override readonly name = 'StaleFallbackCatalogError'
+  readonly claimedRevision: number
+  readonly currentRevision: number
+
+  constructor(claimedRevision: number, currentRevision: number) {
+    super(
+      `Fallback approvals changed during rendering (claimed revision ${claimedRevision}, now ${currentRevision}); this render cannot complete`,
+    )
+    this.claimedRevision = claimedRevision
+    this.currentRevision = currentRevision
+  }
+}
+
+/**
+ * Raised when a standalone continuation was handed different render inputs than direction used.
+ */
+export class RenderContractMismatchError extends DomainError {
+  override readonly name = 'RenderContractMismatchError'
+
+  constructor(jobId: string) {
+    super(
+      `Audiobook job ${jobId} was directed under a different cast, speech engine or assembler; the supplied render inputs do not match its bound contract`,
+    )
   }
 }
 
@@ -134,7 +166,10 @@ export class RenderAudiobook {
       )
     }
 
-    const approvalsBySegment = await this.resolveApprovals(book)
+    // Claimed as one atomic read. The revision is re-checked before anything is published, so a
+    // decision that lands mid-render cannot let this render complete under a withdrawn approval.
+    const claimed = await this.resolveApprovals(book)
+    const approvalsBySegment = claimed.approvals
 
     // Constructed here and nowhere earlier: the catalog is only complete once review is done, and an
     // engine built alongside the extractor and director would always carry an empty one.
@@ -148,7 +183,18 @@ export class RenderAudiobook {
       )
     }
 
+    // Verified before the job leaves its resting state, so a mismatched continuation never renders.
+    const contract = createRenderContract({
+      voices: command.voices,
+      speechEngineIdentity: this.speechEngineFactory.identity,
+      audioAssemblerIdentity: this.audioAssembler.identity,
+    })
+    if (job.renderContract !== null && job.renderContract !== contract) {
+      throw new RenderContractMismatchError(command.jobId)
+    }
+
     job.resumeApprovedRender()
+    job.bindRenderContract(contract)
     await this.jobs.saveJob(job)
 
     try {
@@ -168,6 +214,14 @@ export class RenderAudiobook {
         planned,
         speechEngine,
       )
+
+      // The barrier. Nothing is published until the catalog this render claimed is proven unmoved,
+      // so a revocation that landed after `resolveApprovals()` stops the render here instead of
+      // completing a book whose audio a human has since withdrawn.
+      const current = await this.approvals.readCatalog(book.id)
+      if (current.revision !== claimed.revision) {
+        throw new StaleFallbackCatalogError(claimed.revision, current.revision)
+      }
 
       job.beginAssembly()
       await this.jobs.saveJob(job)
@@ -197,12 +251,16 @@ export class RenderAudiobook {
    * longer describes its segment. Failing here rather than mid-render matters: an unapproved segment
    * discovered by the engine after an hour of rendering has already burned that hour.
    */
-  private async resolveApprovals(book: Book): Promise<Map<string, PersistedFallbackApproval>> {
+  private async resolveApprovals(book: Book): Promise<{
+    readonly revision: number
+    readonly approvals: Map<string, PersistedFallbackApproval>
+  }> {
     const subjects = collectFallbackSubjects(book)
-    if (subjects.length === 0) return new Map()
-    const live = new Map(
-      (await this.approvals.listForBook(book.id)).map((record) => [record.segmentId, record]),
-    )
+    const catalog = await this.approvals.readCatalog(book.id)
+    if (subjects.length === 0) {
+      return { revision: catalog.revision, approvals: new Map() }
+    }
+    const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
     const resolved = new Map<string, PersistedFallbackApproval>()
     const missing: string[] = []
     for (const subject of subjects) {
@@ -214,7 +272,7 @@ export class RenderAudiobook {
       resolved.set(subject.segment.id, record)
     }
     if (missing.length > 0) throw new UnapprovedFallbackSegmentsError(missing)
-    return resolved
+    return { revision: catalog.revision, approvals: resolved }
   }
 
   private async planRendering(

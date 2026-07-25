@@ -1,7 +1,11 @@
 import {
+  approveAllFallbacksFn,
   getJobStateFn,
   listChapterAudioFn,
+  listFallbackReviewFn,
   listUploadsFn,
+  renderApprovedScriptFn,
+  revokeFallbackFn,
   startGenerationFn,
   uploadEpubFn,
 } from '../api/audiobook-server-fns.js'
@@ -19,4 +23,10 @@ export const serverFnAudiobookClient: AudiobookClient = {
   getJobState: ({ jobId }) => getJobStateFn({ data: { jobId } }),
   listChapterAudio: ({ jobId }) => listChapterAudioFn({ data: { jobId } }),
   listUploads: () => listUploadsFn(),
+  listFallbackReview: ({ jobId }) => listFallbackReviewFn({ data: { jobId } }),
+  approveAllFallbacks: ({ jobId, decidedBy }) =>
+    approveAllFallbacksFn({ data: { jobId, decidedBy } }),
+  revokeFallback: ({ jobId, segmentId, decidedBy }) =>
+    revokeFallbackFn({ data: { jobId, segmentId, decidedBy } }),
+  renderApprovedScript: ({ jobId }) => renderApprovedScriptFn({ data: { jobId } }),
 }

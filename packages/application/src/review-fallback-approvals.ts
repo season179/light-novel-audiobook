@@ -1,7 +1,9 @@
 import { type AudiobookJob, type Book, DomainError } from '@light-novel-audiobook/domain'
 import {
   approvalStillDescribes,
+  type BookFallbackGrant,
   collectFallbackSubjects,
+  createBookFallbackGrant,
   createFallbackApprovalRecord,
   type FallbackApprovalSubject,
   fallbackApprovalExcerpt,
@@ -10,31 +12,17 @@ import {
 } from './fallback-approval.js'
 import type { FallbackApprovalRepository, JobRepository } from './ports.js'
 
-/**
- * How unresolved speakers are decided for one book.
- *
- * There are exactly two values and neither one renders an unapproved fallback segment. In
- * particular `'pre-approve-book-fallback'` is **not** an auto-approve escape hatch: it is a single
- * human decision made before generation ("use the fallback voice for any unresolved speaker in this
- * book") that is then written out as one durable per-segment record each. That is what keeps
- * revoking one speaker's approval from touching another speaker's audio, while a 2,328-passage book
- * does not stop for a click per line.
- */
-export const FALLBACK_APPROVAL_POLICIES = [
-  'pre-approve-book-fallback',
-  'require-explicit-review',
-] as const
-export type FallbackApprovalPolicy = (typeof FALLBACK_APPROVAL_POLICIES)[number]
-
 export interface FallbackApprovalReconciliation {
   /** The live catalog after reconciliation, in book order. What the speech engine is built with. */
   readonly approved: readonly PersistedFallbackApproval[]
   readonly created: readonly PersistedFallbackApproval[]
   readonly unchanged: readonly PersistedFallbackApproval[]
   /** Decisions removed because their segment or its approved line no longer matches them. */
-  readonly revoked: readonly PersistedFallbackApproval[]
+  readonly invalidated: readonly PersistedFallbackApproval[]
   /** Unresolved speakers still needing a human decision. Rendering cannot start while non-empty. */
   readonly pending: readonly PendingFallbackApproval[]
+  /** The book-wide grant these approvals were derived from, if one has been issued. */
+  readonly grant: BookFallbackGrant | undefined
 }
 
 export interface ReviewFallbackApprovalsDependencies {
@@ -46,18 +34,41 @@ export interface ReviewFallbackApprovalsDependencies {
 
 export interface ReconcileFallbackApprovalsRequest {
   readonly book: Book
-  readonly policy: FallbackApprovalPolicy
 }
 
 export interface FallbackApprovalDecisionRequest {
   readonly jobId: string
   readonly segmentId: string
+  /** Who is deciding. Required — an approval with no actor is not evidence of a human decision. */
+  readonly decidedBy: string
+}
+
+export interface BookFallbackGrantRequest {
+  readonly jobId: string
+  readonly decidedBy: string
+}
+
+/** Raised when a review decision is attempted while a render owns the job. */
+export class RenderInProgressError extends DomainError {
+  override readonly name = 'RenderInProgressError'
+  readonly jobId: string
+
+  constructor(jobId: string) {
+    super(
+      `Audiobook job ${jobId} is rendering; a fallback decision cannot change under an active render`,
+    )
+    this.jobId = jobId
+  }
 }
 
 /**
- * The review context. Owns creating, listing, and revoking the per-segment fallback decisions that
- * `QwenApplicationSpeechEngine` requires, and the consequence of changing one: a completed job goes
- * back to awaiting review so its dependent audio is re-derived.
+ * The review context. Owns creating, listing, withdrawing and book-wide granting of the per-segment
+ * fallback decisions `QwenApplicationSpeechEngine` requires, and the consequence of changing one: a
+ * completed job goes back to awaiting review so its dependent audio is re-derived.
+ *
+ * **Every approval in the system originates here.** `reconcile` can only materialize records from a
+ * grant that a human already issued through `grantBookFallback`; it has no policy parameter and no
+ * default, so no generation run and no composition wiring can cause an approval to exist.
  */
 export class ReviewFallbackApprovals {
   private readonly jobs: JobRepository
@@ -71,28 +82,28 @@ export class ReviewFallbackApprovals {
   }
 
   /**
-   * Brings the persisted catalog in line with the approved script under the chosen policy, and
-   * reports what still needs a human. Idempotent: a decision that still describes its segment is
-   * left byte-for-byte alone, so re-running generation on an unchanged book restales nothing.
+   * Brings the persisted catalog in line with the approved script and reports what still needs a
+   * human. Idempotent: a decision that still describes its segment is left byte-for-byte alone, so
+   * re-running generation on an unchanged book restales nothing.
+   *
+   * Records are created **only** for segments a book-wide grant covers and that the human has not
+   * explicitly excluded. With no grant, every undecided fallback segment comes back pending.
    */
   async reconcile(
     request: ReconcileFallbackApprovalsRequest,
   ): Promise<FallbackApprovalReconciliation> {
-    if (!FALLBACK_APPROVAL_POLICIES.includes(request.policy)) {
-      throw new DomainError(`Unsupported fallback approval policy: ${request.policy}`)
-    }
     const subjects = collectFallbackSubjects(request.book)
-    const live = new Map(
-      (await this.approvals.listForBook(request.book.id)).map((record) => [
-        record.segmentId,
-        record,
-      ]),
+    const catalog = await this.approvals.readCatalog(request.book.id)
+    const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
+    const excluded = new Set(catalog.exclusions.map((exclusion) => exclusion.segmentId))
+    const excludedBy = new Map(
+      catalog.exclusions.map((exclusion) => [exclusion.segmentId, exclusion.decidedBy]),
     )
 
     const approved: PersistedFallbackApproval[] = []
     const created: PersistedFallbackApproval[] = []
     const unchanged: PersistedFallbackApproval[] = []
-    const revoked: PersistedFallbackApproval[] = []
+    const invalidated: PersistedFallbackApproval[] = []
     const pending: PendingFallbackApproval[] = []
     const subjectIds = new Set(subjects.map((subject) => subject.segment.id))
 
@@ -100,8 +111,13 @@ export class ReviewFallbackApprovals {
     // the cast gained a voice. Removed so the catalog can never authorize a segment nobody reviewed.
     for (const [segmentId, record] of live) {
       if (subjectIds.has(segmentId)) continue
-      await this.approvals.revoke(request.book.id, segmentId)
-      revoked.push(record)
+      await this.approvals.revoke(
+        request.book.id,
+        segmentId,
+        'no-longer-describes-segment',
+        this.actor('reconciliation'),
+      )
+      invalidated.push(record)
       live.delete(segmentId)
     }
 
@@ -115,21 +131,32 @@ export class ReviewFallbackApprovals {
       if (existing !== undefined) {
         // The decision was about a different speaker, reason, profile or line. PLAN.md:132 makes
         // that an invalidation, not something to silently carry forward.
-        await this.approvals.revoke(request.book.id, subject.segment.id)
-        revoked.push(existing)
+        await this.approvals.revoke(
+          request.book.id,
+          subject.segment.id,
+          'no-longer-describes-segment',
+          this.actor('reconciliation'),
+        )
+        invalidated.push(existing)
       }
-      if (request.policy === 'require-explicit-review') {
+      // An explicit human withdrawal outranks any book-wide grant. Without this the grant would
+      // silently re-create the approval on the next run and revocation would mean nothing.
+      if (excluded.has(subject.segment.id)) {
+        pending.push(
+          pendingFrom(subject, {
+            decision: 'excluded',
+            decidedBy: excludedBy.get(subject.segment.id) ?? null,
+          }),
+        )
+        continue
+      }
+      if (catalog.grant === undefined) {
         pending.push(pendingFrom(subject))
         continue
       }
       const record = createFallbackApprovalRecord({
-        bookId: request.book.id,
-        segmentId: subject.segment.id,
-        speakerId: subject.speakerId,
-        fallbackReason: subject.fallbackReason,
-        voiceProfileId: subject.voiceProfileId,
-        sourceTextSha256: subject.sourceTextSha256,
-        decidedAt: this.decidedAt(),
+        ...this.decisionFor(subject, request.book.id, catalog.grant.decidedBy),
+        grantId: catalog.grant.grantId,
       })
       await this.approvals.save(record)
       approved.push(record)
@@ -140,8 +167,9 @@ export class ReviewFallbackApprovals {
       approved: Object.freeze(approved),
       created: Object.freeze(created),
       unchanged: Object.freeze(unchanged),
-      revoked: Object.freeze(revoked),
+      invalidated: Object.freeze(invalidated),
       pending: Object.freeze(pending),
+      grant: catalog.grant,
     })
   }
 
@@ -151,51 +179,100 @@ export class ReviewFallbackApprovals {
    */
   async list(jobId: string): Promise<readonly PendingFallbackApproval[]> {
     const { book } = await this.load(jobId)
-    const live = new Map(
-      (await this.approvals.listForBook(book.id)).map((record) => [record.segmentId, record]),
+    const catalog = await this.approvals.readCatalog(book.id)
+    const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
+    const exclusions = new Map(
+      catalog.exclusions.map((exclusion) => [exclusion.segmentId, exclusion.decidedBy]),
     )
     return Object.freeze(
       collectFallbackSubjects(book).map((subject) => {
         const existing = live.get(subject.segment.id)
-        const decided = existing !== undefined && approvalStillDescribes(existing, subject)
-        return pendingFrom(subject, decided ? existing.approvalId : null)
+        if (existing !== undefined && approvalStillDescribes(existing, subject)) {
+          return pendingFrom(subject, {
+            decision: 'approved',
+            approvalId: existing.approvalId,
+            decidedBy: existing.decidedBy,
+          })
+        }
+        const withdrawnBy = exclusions.get(subject.segment.id)
+        if (withdrawnBy !== undefined) {
+          return pendingFrom(subject, { decision: 'excluded', decidedBy: withdrawnBy })
+        }
+        return pendingFrom(subject)
       }),
     )
   }
 
-  /** Records one human decision. A completed job returns to review so its audio is re-derived. */
+  /** The live book-wide grant for this job's book, if a human has issued one. */
+  async findGrant(jobId: string): Promise<BookFallbackGrant | undefined> {
+    const { book } = await this.load(jobId)
+    return (await this.approvals.readCatalog(book.id)).grant
+  }
+
+  /**
+   * The M1 book-wide decision: authorize the fallback voice for every unresolved speaker in this
+   * book. One explicit human act, recorded durably with its actor, that still produces one record
+   * per segment — so revoking one speaker's approval later invalidates only that speaker's audio.
+   *
+   * Segments the human has already excluded are **not** re-approved by a grant.
+   */
+  async grantBookFallback(
+    request: BookFallbackGrantRequest,
+  ): Promise<FallbackApprovalReconciliation> {
+    const { job, book } = await this.load(request.jobId)
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    await this.approvals.saveBookGrant(
+      createBookFallbackGrant({
+        bookId: book.id,
+        decidedBy: request.decidedBy,
+        decidedAt: this.decidedAt(),
+      }),
+    )
+    return this.reconcile({ book })
+  }
+
+  /** Withdraws the book-wide grant. Records already written stay; nothing new is derived from it. */
+  async revokeBookFallback(request: BookFallbackGrantRequest): Promise<boolean> {
+    const { job, book } = await this.load(request.jobId)
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    return this.approvals.revokeBookGrant(book.id)
+  }
+
+  /** Records one human decision, clearing any earlier withdrawal of the same segment. */
   async approve(request: FallbackApprovalDecisionRequest): Promise<PersistedFallbackApproval> {
     const { job, book } = await this.load(request.jobId)
     const subject = this.subjectFor(book, request.segmentId)
-    const record = createFallbackApprovalRecord({
-      bookId: book.id,
-      segmentId: subject.segment.id,
-      speakerId: subject.speakerId,
-      fallbackReason: subject.fallbackReason,
-      voiceProfileId: subject.voiceProfileId,
-      sourceTextSha256: subject.sourceTextSha256,
-      decidedAt: this.decidedAt(),
-    })
-    // Replaced rather than merged: a second decision about the same segment supersedes the first,
-    // and leaving the old row would keep its audio reachable.
-    await this.approvals.revoke(book.id, subject.segment.id)
-    await this.approvals.save(record)
+    this.assertNoRenderOwns(job)
+    // Reopened BEFORE the decision is written, so the unsafe failure direction is impossible: if the
+    // approval write then fails, the job is merely awaiting review with an unchanged decision. The
+    // reverse order could leave a completed, publishable output beside a decision that had moved.
     await this.reopenIfCompleted(job)
+    const record = createFallbackApprovalRecord({
+      ...this.decisionFor(subject, book.id, request.decidedBy),
+      grantId: null,
+    })
+    await this.approvals.save(record)
     return record
   }
 
   /**
    * Withdraws one decision. The segment's cached audio becomes unreachable, because its content
    * address includes the approval, and rendering it again is refused until it is decided afresh.
+   * Recorded as a durable exclusion, so a book-wide grant cannot re-create it.
    */
   async revoke(request: FallbackApprovalDecisionRequest): Promise<boolean> {
     const { job, book } = await this.load(request.jobId)
     // Proves the segment exists and does fall back, so a typo cannot look like a successful
     // revocation of a segment that was never gated.
     this.subjectFor(book, request.segmentId)
-    const removed = await this.approvals.revoke(book.id, request.segmentId)
-    if (removed) await this.reopenIfCompleted(job)
-    return removed
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    return this.approvals.revoke(book.id, request.segmentId, 'human-withdrawal', {
+      decidedBy: request.decidedBy,
+      decidedAt: this.decidedAt(),
+    })
   }
 
   private async load(jobId: string): Promise<{ job: AudiobookJob; book: Book }> {
@@ -209,6 +286,14 @@ export class ReviewFallbackApprovals {
     return { job, book }
   }
 
+  /**
+   * A running job is owned by a render that has already captured its catalog. Letting a decision
+   * land now would leave the render finishing segments under a withdrawn approval.
+   */
+  private assertNoRenderOwns(job: AudiobookJob): void {
+    if (job.state === 'running') throw new RenderInProgressError(job.id)
+  }
+
   private subjectFor(book: Book, segmentId: string): FallbackApprovalSubject {
     const subject = collectFallbackSubjects(book).find(
       (candidate) => candidate.segment.id === segmentId,
@@ -219,23 +304,43 @@ export class ReviewFallbackApprovals {
     return subject
   }
 
+  private decisionFor(subject: FallbackApprovalSubject, bookId: string, decidedBy: string) {
+    return {
+      bookId,
+      segmentId: subject.segment.id,
+      speakerId: subject.speakerId,
+      fallbackReason: subject.fallbackReason,
+      voiceProfileId: subject.voiceProfileId,
+      sourceTextSha256: subject.sourceTextSha256,
+      decidedAt: this.decidedAt(),
+      decidedBy,
+    }
+  }
+
   private async reopenIfCompleted(job: AudiobookJob): Promise<void> {
     if (job.state !== 'completed') return
     job.reopenForReview()
     await this.jobs.saveJob(job)
   }
 
+  private actor(decidedBy: string): { decidedBy: string; decidedAt: string } {
+    return { decidedBy, decidedAt: this.decidedAt() }
+  }
+
   private decidedAt(): string {
     const instant = this.now()
-    const iso = instant.toISOString()
     if (Number.isNaN(instant.getTime())) throw new DomainError('Decision clock returned no time')
-    return iso
+    return instant.toISOString()
   }
 }
 
 function pendingFrom(
   subject: FallbackApprovalSubject,
-  approvalId: string | null = null,
+  decided: {
+    readonly decision?: 'approved' | 'pending' | 'excluded'
+    readonly approvalId?: string | null
+    readonly decidedBy?: string | null
+  } = {},
 ): PendingFallbackApproval {
   return Object.freeze({
     segmentId: subject.segment.id,
@@ -245,7 +350,8 @@ function pendingFrom(
     fallbackReason: subject.fallbackReason,
     proposedVoiceProfileId: subject.voiceProfileId,
     sourceTextExcerpt: fallbackApprovalExcerpt(subject.segment.sourceText),
-    decision: approvalId === null ? ('pending' as const) : ('approved' as const),
-    approvalId,
+    decision: decided.decision ?? 'pending',
+    approvalId: decided.approvalId ?? null,
+    decidedBy: decided.decidedBy ?? null,
   })
 }

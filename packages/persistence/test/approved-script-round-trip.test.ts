@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import {
+  createBookFallbackGrant,
   createFallbackApprovalRecord,
   createRenderInputIdentity,
   hashSourceText,
@@ -281,7 +282,7 @@ describe('approved script read path (issue #45, prerequisite 2)', () => {
 })
 
 describe('fallback approval ledger (issue #45)', () => {
-  const decision = (segmentId: string, decidedAt = DECIDED_AT) =>
+  const decision = (segmentId: string, decidedAt = DECIDED_AT, grantId: string | null = null) =>
     createFallbackApprovalRecord({
       bookId: BOOK_ID,
       segmentId,
@@ -290,7 +291,13 @@ describe('fallback approval ledger (issue #45)', () => {
       voiceProfileId: 'cast-fallback',
       sourceTextSha256: hashSourceText('“Then bring the keeper.”'),
       decidedAt,
+      decidedBy: 'local-reviewer',
+      grantId,
     })
+
+  const ACTOR = { decidedBy: 'local-reviewer', decidedAt: DECIDED_AT }
+  const liveApprovals = async (approvals: SqliteFallbackApprovalRepository, bookId = BOOK_ID) =>
+    (await approvals.readCatalog(bookId)).approvals
 
   it('stores, lists, supersedes and revokes one decision per segment', async () => {
     const { approvals } = await workspace()
@@ -300,25 +307,93 @@ describe('fallback approval ledger (issue #45)', () => {
 
     await approvals.save(decision(first))
     await approvals.save(decision(second))
-    expect((await approvals.listForBook(BOOK_ID)).map((record) => record.segmentId)).toEqual([
+    expect((await liveApprovals(approvals)).map((record) => record.segmentId)).toEqual([
       first,
       second,
     ])
-    expect(await approvals.listForBook(StableIds.book('e'.repeat(64)))).toEqual([])
+    expect(await liveApprovals(approvals, StableIds.book('e'.repeat(64)))).toEqual([])
 
     // A newer decision about the same segment supersedes the older one rather than adding a row a
     // later query could read as a second live approval.
     const revised = decision(first, '2026-07-25T12:00:00.000Z')
     await approvals.save(revised)
-    const live = await approvals.listForBook(BOOK_ID)
+    const live = await liveApprovals(approvals)
     expect(live).toHaveLength(2)
     expect(live.find((record) => record.segmentId === first)?.approvalId).toBe(revised.approvalId)
 
-    expect(await approvals.revoke(BOOK_ID, first)).toBe(true)
-    expect(await approvals.revoke(BOOK_ID, first)).toBe(false)
-    expect((await approvals.listForBook(BOOK_ID)).map((record) => record.segmentId)).toEqual([
-      second,
-    ])
+    expect(await approvals.revoke(BOOK_ID, first, 'human-withdrawal', ACTOR)).toBe(true)
+    expect(await approvals.revoke(BOOK_ID, first, 'human-withdrawal', ACTOR)).toBe(false)
+    expect((await liveApprovals(approvals)).map((record) => record.segmentId)).toEqual([second])
+    // A human withdrawal is recorded, so a later book-wide grant cannot silently re-create it.
+    expect((await approvals.readCatalog(BOOK_ID)).exclusions.map((item) => item.segmentId)).toEqual(
+      [first],
+    )
+  })
+
+  it('bumps the catalog revision on every mutation and never on a read', async () => {
+    // This counter is what lets a render claim a catalog and prove nothing moved under it, so a
+    // mutation that failed to bump it would silently reopen the race it exists to close.
+    const { approvals } = await workspace()
+    const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
+    expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(0)
+
+    await approvals.save(decision(segmentId))
+    const afterSave = (await approvals.readCatalog(BOOK_ID)).revision
+    expect(afterSave).toBe(1)
+    // Reads never move it.
+    expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(afterSave)
+
+    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+    expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(2)
+    // Even a revocation that removed nothing is a mutation: it recorded the exclusion.
+    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+    expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(3)
+
+    await approvals.saveBookGrant(
+      createBookFallbackGrant({
+        bookId: BOOK_ID,
+        decidedBy: 'local-reviewer',
+        decidedAt: DECIDED_AT,
+      }),
+    )
+    expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(4)
+    expect((await approvals.readCatalog(BOOK_ID)).grant?.decidedBy).toBe('local-reviewer')
+
+    expect(await approvals.revokeBookGrant(BOOK_ID)).toBe(true)
+    const final = await approvals.readCatalog(BOOK_ID)
+    expect(final.revision).toBe(5)
+    expect(final.grant).toBeUndefined()
+  })
+
+  it('keeps an approval and its exclusion mutually exclusive', async () => {
+    const { approvals } = await workspace()
+    const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
+    await approvals.save(decision(segmentId))
+    await approvals.revoke(BOOK_ID, segmentId, 'human-withdrawal', ACTOR)
+
+    let catalog = await approvals.readCatalog(BOOK_ID)
+    expect(catalog.approvals).toEqual([])
+    expect(catalog.exclusions).toHaveLength(1)
+
+    // Approving again clears the withdrawal, or a book-wide grant would stay blocked forever.
+    await approvals.save(decision(segmentId, '2026-07-26T09:00:00.000Z'))
+    catalog = await approvals.readCatalog(BOOK_ID)
+    expect(catalog.approvals).toHaveLength(1)
+    expect(catalog.exclusions).toEqual([])
+  })
+
+  it('does not record an exclusion for a system invalidation', async () => {
+    // A decision that no longer describes its segment must be re-derivable. Recording it as an
+    // exclusion would block that segment permanently instead of letting it be decided again.
+    const { approvals } = await workspace()
+    const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
+    await approvals.save(decision(segmentId))
+    expect(await approvals.revoke(BOOK_ID, segmentId, 'no-longer-describes-segment', ACTOR)).toBe(
+      true,
+    )
+    const catalog = await approvals.readCatalog(BOOK_ID)
+    expect(catalog.approvals).toEqual([])
+    expect(catalog.exclusions).toEqual([])
   })
 
   it('refuses a record whose identity does not follow from its own decision', async () => {
@@ -327,7 +402,7 @@ describe('fallback approval ledger (issue #45)', () => {
     const segmentId = StableIds.segment(StableIds.passage(chapterId, 1), 4)
     const forged = { ...decision(segmentId), approvalSha256: 'a'.repeat(64) }
     await expect(approvals.save(forged)).rejects.toThrow('does not match its own decision identity')
-    expect(await approvals.listForBook(BOOK_ID)).toEqual([])
+    expect(await liveApprovals(approvals)).toEqual([])
   })
 
   it('survives a saveBook that replaces the chapter its decisions point at', async () => {
@@ -340,8 +415,6 @@ describe('fallback approval ledger (issue #45)', () => {
     await approvals.save(decision(segmentId))
 
     await jobs.saveBook(directedBook())
-    expect((await approvals.listForBook(BOOK_ID)).map((record) => record.segmentId)).toEqual([
-      segmentId,
-    ])
+    expect((await liveApprovals(approvals)).map((record) => record.segmentId)).toEqual([segmentId])
   })
 })

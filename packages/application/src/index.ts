@@ -7,11 +7,16 @@ export {
 } from './direct-audiobook.js'
 export {
   approvalStillDescribes,
+  type BookFallbackGrant,
   collectFallbackSubjects,
+  createBookFallbackGrant,
   createFallbackApprovalRecord,
   FALLBACK_EXCERPT_MAX_LENGTH,
+  type FallbackApprovalCatalog,
   type FallbackApprovalDecision,
+  type FallbackApprovalExclusion,
   type FallbackApprovalSubject,
+  type FallbackRevocationReason,
   fallbackApprovalExcerpt,
   hashSourceText,
   type PendingFallbackApproval,
@@ -36,6 +41,7 @@ export type {
   CompletedSegmentAudio,
   DirectedChapter,
   DirectorModel,
+  DirectorModelFactory,
   EpubExtractionRequest,
   EpubExtractor,
   FallbackApprovalRepository,
@@ -52,15 +58,18 @@ export {
   type RenderAudiobookCommand,
   type RenderAudiobookDependencies,
   type RenderAudiobookResult,
+  RenderContractMismatchError,
+  StaleFallbackCatalogError,
   UnapprovedFallbackSegmentsError,
 } from './render-audiobook.js'
+export { createRenderContract, type RenderContractInput } from './render-contract.js'
 export { createRenderInputIdentity, type RenderInputApproval } from './render-input-identity.js'
 export {
-  FALLBACK_APPROVAL_POLICIES,
+  type BookFallbackGrantRequest,
   type FallbackApprovalDecisionRequest,
-  type FallbackApprovalPolicy,
   type FallbackApprovalReconciliation,
   type ReconcileFallbackApprovalsRequest,
+  RenderInProgressError,
   ReviewFallbackApprovals,
   type ReviewFallbackApprovalsDependencies,
 } from './review-fallback-approvals.js'

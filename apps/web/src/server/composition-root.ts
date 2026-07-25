@@ -2,9 +2,11 @@ import {
   type AudioAssembler,
   type DirectorModel,
   type EpubExtractor,
+  type FallbackApprovalRepository,
   GenerateAudiobook,
   type JobRepository,
-  type SpeechEngine,
+  ReviewFallbackApprovals,
+  type SpeechEngineFactory,
 } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
 import { withSanitizedFailures } from './adapter-failure-boundary.js'
@@ -12,9 +14,10 @@ import { AudiobookWebApi } from './audiobook-web-api.js'
 import { BookReadModelStore, ProjectingJobRepository } from './book-read-model.js'
 import { EpubUploadStore } from './epub-upload-store.js'
 import { FakeAudioAssembler } from './fakes/fake-audio-assembler.js'
-import { FakeDirectorModel } from './fakes/fake-director-model.js'
+import { FAKE_DIRECTOR_IDENTITY, FakeDirectorModel } from './fakes/fake-director-model.js'
 import { FakeEpubExtractor } from './fakes/fake-epub-extractor.js'
-import { FakeSpeechEngine } from './fakes/fake-speech-engine.js'
+import { createFakeSpeechEngineFactory } from './fakes/fake-speech-engine.js'
+import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-approvals.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
@@ -39,14 +42,30 @@ export interface AudiobookAdapterFactories {
    * shutdown and every later `directChapter()` throws, so this has to construct per run.
    */
   readonly createDirectorModel?: (() => DirectorModel | Promise<DirectorModel>) | undefined
+  /**
+   * The director's identity, derived from configuration rather than from a live model.
+   *
+   * Required alongside a custom `createDirectorModel`, because the generation command identity binds
+   * it before direction runs while the model must not be constructed until direction actually
+   * happens. `#21` passes `createGemmaDirectorIdentity(settings)`.
+   */
+  readonly directorIdentity?: string | undefined
   /** Stateless in practice; a shared instance is fine. */
   readonly createEpubExtractor?: (() => EpubExtractor | Promise<EpubExtractor>) | undefined
   /**
-   * MAY return a shared instance: `endBatch()` is not terminal for the real Qwen adapter, which
-   * clears its batch and accepts a later `beginBatch()`, and docs/PLAN.md wants the TTS model to
-   * stay loaded across requests. Exactly one begin/end pair happens per run either way.
+   * Builds the speech engine per book, **after** that book's persisted fallback approvals are read
+   * back: the engine refuses a fallback segment absent from its catalog, so it cannot be constructed
+   * alongside the extractor and director. MAY close over a shared engine instance — `endBatch()` is
+   * not terminal for the real Qwen adapter, and docs/PLAN.md wants the TTS model to stay loaded.
+   *
+   * `#21` supplies `createQwenSpeechEngineFactory(await QwenTtsSpeechEngine.create({ … }))`.
    */
-  readonly createSpeechEngine?: (() => SpeechEngine | Promise<SpeechEngine>) | undefined
+  readonly speechEngineFactory?: SpeechEngineFactory | undefined
+  /**
+   * The review ledger: the persisted human decisions authorizing the fallback voice. Shared for the
+   * whole process, like `jobs`. `#21` supplies `new SqliteFallbackApprovalRepository(db)`.
+   */
+  readonly approvals?: FallbackApprovalRepository | undefined
   /** Stateless in practice; a shared instance is fine. */
   readonly createAudioAssembler?: (() => AudioAssembler | Promise<AudioAssembler>) | undefined
   /** Shared for the whole process: this is the persistence boundary, not a per-run resource. */
@@ -80,34 +99,46 @@ export const createAudiobookWebApi = async (
   const createEpubExtractor = options.createEpubExtractor ?? (() => new FakeEpubExtractor())
   const createDirectorModel = options.createDirectorModel ?? (() => new FakeDirectorModel())
   const createAudioAssembler = options.createAudioAssembler ?? (() => new FakeAudioAssembler())
-  const createSpeechEngine =
-    options.createSpeechEngine ??
-    (() =>
-      new FakeSpeechEngine(workspace, {
-        fallbackVoiceProfileId: voices.fallback.id,
-        pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
-        // M1 STAND-IN, and the one place to change when the approval workflow lands. The fake — like
-        // the real Qwen adapter — refuses fallback speech without a per-segment human approval, and
-        // this app has no approval action yet, so it mints an identity-bound record per segment and
-        // reports them on `autoApprovedFallbacks`. Real Qwen accepts no such policy: #21 must supply
-        // persisted `fallbackApprovals` or every book with an unresolved speaker will fail.
-        unreviewedFallbackPolicy: 'auto-approve',
-      }))
+  // Never constructs a director. The command identity has to bind the director's identity before any
+  // direction happens, but building the model here would defeat the point of the factory twice over:
+  // a render-only review resume must construct nothing, and a failing factory must surface as a run
+  // failure the browser can read rather than as a composition failure. Director identity is a pure
+  // function of configuration — `FAKE_DIRECTOR_IDENTITY` here, `createGemmaDirectorIdentity(settings)`
+  // at #21.
+  const directorIdentity = options.directorIdentity ?? FAKE_DIRECTOR_IDENTITY
+  const speechEngineFactory =
+    options.speechEngineFactory ??
+    createFakeSpeechEngineFactory(workspace, {
+      fallbackVoiceProfileId: voices.fallback.id,
+      pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
+    })
+  const approvals = withSanitizedFailures.approvals(
+    options.approvals ?? new InMemoryFallbackApprovalRepository(),
+  )
 
   // One use case per run, with adapters that have not been released or batched yet.
+  //
+  // The director is passed as a factory, not an instance, and that is load-bearing rather than
+  // stylistic: `GenerateAudiobook` skips direction entirely for a job already awaiting review, so a
+  // director constructed here would never be used and never released. With Gemma that leaks a
+  // GPU-resident model — `release()` is terminal — while Qwen then starts rendering beside it.
   const runner = new GenerationRunner(async () => {
-    const [epubExtractor, directorModel, speechEngine, audioAssembler] = await Promise.all([
+    const [epubExtractor, audioAssembler] = await Promise.all([
       createEpubExtractor(),
-      createDirectorModel(),
-      createSpeechEngine(),
       createAudioAssembler(),
     ])
     return new GenerateAudiobook({
       epubExtractor: withSanitizedFailures.epubExtractor(epubExtractor),
-      directorModel: withSanitizedFailures.directorModel(directorModel),
-      speechEngine: withSanitizedFailures.speechEngine(speechEngine),
+      // Sanitized around `create()` as well as around the adapter: construction now happens inside
+      // the run, so a factory that throws must fail the job with a message the browser may read.
+      directorModelFactory: withSanitizedFailures.directorModelFactory({
+        identity: directorIdentity,
+        create: createDirectorModel,
+      }),
+      speechEngineFactory: withSanitizedFailures.speechEngineFactory(speechEngineFactory),
       audioAssembler: withSanitizedFailures.audioAssembler(audioAssembler),
       jobs,
+      approvals,
     })
   })
 
@@ -118,6 +149,7 @@ export const createAudiobookWebApi = async (
     books,
     runner,
     voices,
+    review: new ReviewFallbackApprovals({ jobs, approvals }),
   })
 }
 

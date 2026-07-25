@@ -8,11 +8,12 @@ import {
 import { createGenerationCommandIdentity } from './generation-command-identity.js'
 import type {
   AudioAssembler,
-  DirectorModel,
+  DirectorModelFactory,
   EpubExtractor,
   JobRepository,
   SpeechEngineFactory,
 } from './ports.js'
+import { createRenderContract } from './render-contract.js'
 
 export interface DirectAudiobookCommand {
   readonly jobId: string
@@ -32,7 +33,11 @@ export interface DirectAudiobookResult {
 
 export interface DirectAudiobookDependencies {
   readonly epubExtractor: EpubExtractor
-  readonly directorModel: DirectorModel
+  /**
+   * Built only if direction actually runs. A director is a terminal, GPU-owning adapter, so one
+   * constructed for a run that turns out to be a render-only resume would leak.
+   */
+  readonly directorModelFactory: DirectorModelFactory
   /**
    * Present only for its `identity`, which the command identity must bind. The engine itself is
    * built by `RenderAudiobook`, after review: at this point the approval catalog does not exist yet.
@@ -53,14 +58,14 @@ export interface DirectAudiobookDependencies {
  */
 export class DirectAudiobook {
   private readonly epubExtractor: EpubExtractor
-  private readonly directorModel: DirectorModel
+  private readonly directorModelFactory: DirectorModelFactory
   private readonly speechEngineFactory: SpeechEngineFactory
   private readonly audioAssembler: AudioAssembler
   private readonly jobs: JobRepository
 
   constructor(dependencies: DirectAudiobookDependencies) {
     this.epubExtractor = dependencies.epubExtractor
-    this.directorModel = dependencies.directorModel
+    this.directorModelFactory = dependencies.directorModelFactory
     this.speechEngineFactory = dependencies.speechEngineFactory
     this.audioAssembler = dependencies.audioAssembler
     this.jobs = dependencies.jobs
@@ -72,7 +77,7 @@ export class DirectAudiobook {
       epubSha256: command.epubSha256,
       voices: command.voices,
       epubExtractorIdentity: this.epubExtractor.identity,
-      directorIdentity: this.directorModel.identity,
+      directorIdentity: this.directorModelFactory.identity,
       speechEngineIdentity: this.speechEngineFactory.identity,
       audioAssemblerIdentity: this.audioAssembler.identity,
     })
@@ -119,6 +124,15 @@ export class DirectAudiobook {
       }
       job.recoverAbandoned()
     }
+    // Bound before anything is produced, so a later standalone render can prove it was handed the
+    // same cast, speech engine and assembler that direction ran under.
+    job.bindRenderContract(
+      createRenderContract({
+        voices: command.voices,
+        speechEngineIdentity: this.speechEngineFactory.identity,
+        audioAssemblerIdentity: this.audioAssembler.identity,
+      }),
+    )
     await this.jobs.saveJob(job)
 
     try {
@@ -152,12 +166,21 @@ export class DirectAudiobook {
   }
 
   private async directBook(book: Book, voices: VoiceCast, job: AudiobookJob): Promise<void> {
+    // Constructed here and not in the constructor: this is the only place a director is used, and a
+    // render-only resume never reaches it.
+    const directorModel = await this.directorModelFactory.create()
+    if (directorModel.identity !== this.directorModelFactory.identity) {
+      // The command identity was already bound to the factory's value. A director that disagrees
+      // would direct under inputs the job does not describe.
+      await directorModel.release()
+      throw new DomainError('Director identity does not match the identity its factory advertised')
+    }
     let failure: unknown
     try {
       for (const chapter of book.chapters) {
         job.report(chapter.id, `Directing ${chapter.title}`)
         await this.jobs.saveJob(job)
-        const directed = await this.directorModel.directChapter(book, chapter)
+        const directed = await directorModel.directChapter(book, chapter)
         if (directed.chapterId !== chapter.id) {
           throw new DomainError(
             `Director returned chapter ${directed.chapterId} while directing ${chapter.id}`,
@@ -188,7 +211,7 @@ export class DirectAudiobook {
     }
     // The director is always released, but a failing release must not mask why direction failed.
     try {
-      await this.directorModel.release()
+      await directorModel.release()
     } catch (error: unknown) {
       failure ??= error
     }

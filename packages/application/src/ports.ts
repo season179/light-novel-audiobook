@@ -8,7 +8,12 @@ import type {
   Segment,
   VoiceProfile,
 } from '@light-novel-audiobook/domain'
-import type { PersistedFallbackApproval } from './fallback-approval.js'
+import type {
+  BookFallbackGrant,
+  FallbackApprovalCatalog,
+  FallbackRevocationReason,
+  PersistedFallbackApproval,
+} from './fallback-approval.js'
 
 export interface EpubExtractionRequest {
   readonly epubPath: string
@@ -30,6 +35,24 @@ export interface DirectorModel {
   readonly identity: string
   directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter>
   release(): Promise<void>
+}
+
+/**
+ * Builds the director **only when direction is actually going to run**.
+ *
+ * `GemmaDirectorModel.release()` is terminal and the model owns a GPU allocation, so a director
+ * constructed for a run that turns out to be a render-only resume — an already-directed job
+ * continuing after review — is never used and never released. It leaks, and Qwen then starts
+ * rendering while that unnecessary model is still resident on a 16 GB card.
+ *
+ * `identity` is required separately because `createGenerationCommandIdentity` needs it before any
+ * direction happens. That is sound because director identity is a pure function of configuration
+ * (`gemmaDirectorIdentityMaterial`), so a composition root can compute it without a live model.
+ * `DirectAudiobook` asserts the created director agrees.
+ */
+export interface DirectorModelFactory {
+  readonly identity: string
+  create(): DirectorModel | Promise<DirectorModel>
 }
 
 export interface SpeechRenderRequest {
@@ -91,15 +114,32 @@ export interface SpeechEngineFactory {
  * and revoked by a human between direction and rendering, on their own lifecycle, and folding them
  * into the job repository would let a job save overwrite a decision.
  *
- * `listForBook` returns only live decisions. Revocation removes the row: a revoked approval must be
- * indistinguishable from one that was never granted, because that is what makes the segment
- * unrenderable and its cached audio unreachable.
+ * Every mutating method must **increment the book's catalog revision in the same transaction as the
+ * row it writes**. `readCatalog` must return the records and that revision from one consistent read.
+ * Together those two rules are what let a render claim a catalog and refuse to commit if a human
+ * decision moved underneath it — reading records and revision separately would leave exactly the
+ * race this exists to close.
  */
 export interface FallbackApprovalRepository {
-  listForBook(bookId: string): Promise<readonly PersistedFallbackApproval[]>
+  /** One atomically consistent read: live approvals, exclusions, the book-wide grant, revision. */
+  readCatalog(bookId: string): Promise<FallbackApprovalCatalog>
   save(record: PersistedFallbackApproval): Promise<void>
-  /** True when a live decision existed and was removed. */
-  revoke(bookId: string, segmentId: string): Promise<boolean>
+  /**
+   * Removes a live approval. `'human-withdrawal'` must also record a durable exclusion, so a
+   * book-wide grant cannot silently re-create the approval on the next reconciliation;
+   * `'no-longer-describes-segment'` is a system invalidation and must not.
+   *
+   * Returns true when a live approval existed and was removed.
+   */
+  revoke(
+    bookId: string,
+    segmentId: string,
+    reason: FallbackRevocationReason,
+    actor: { readonly decidedBy: string; readonly decidedAt: string },
+  ): Promise<boolean>
+  saveBookGrant(grant: BookFallbackGrant): Promise<void>
+  /** True when a grant existed and was withdrawn. Recorded exclusions and approvals are untouched. */
+  revokeBookGrant(bookId: string): Promise<boolean>
 }
 
 export interface OutputReservation {

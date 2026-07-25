@@ -19,7 +19,7 @@ import {
   Segment,
   SourcePassage,
 } from '@light-novel-audiobook/domain'
-import { classifySqliteFailure, withTransaction } from './transaction.js'
+import { classifySqliteFailure, withBusyRetryingTransaction } from './transaction.js'
 import type { WorkspaceLayout } from './workspace.js'
 import { outputBaseName, sha256OfFile, toSafeAbsolute } from './workspace.js'
 
@@ -492,52 +492,11 @@ export class SqliteJobRepository implements JobRepository {
 // Private helpers
 // ============================================================
 
-/** Total time a repository transaction may spend losing lock races before the run gives up. */
-const TRANSACTION_BUSY_DEADLINE_MS = 30_000
-
-/**
- * Retry the whole transaction after a busy failure, so a failed BEGIN IMMEDIATE or COMMIT is
- * included and every attempt starts with a fresh transaction. SQLite's busy_timeout performs the
- * primary wait; this deadline bounds repeated losses, while backoff prevents a retry spin.
- */
-async function withBusyRetryingTransaction<T>(
-  db: DatabaseSync,
-  work: () => T,
-  lockedMessage: string,
-): Promise<T> {
-  const deadline = Date.now() + TRANSACTION_BUSY_DEADLINE_MS
-  let busyAttempts = 0
-
-  while (true) {
-    try {
-      return withTransaction(db, work)
-    } catch (error) {
-      if (classifySqliteFailure(error) !== 'busy') throw error
-
-      const remainingMs = deadline - Date.now()
-      if (remainingMs <= 0) throw new DomainError(lockedMessage)
-
-      await delay(Math.min(backoffMs(busyAttempts), remainingMs))
-      busyAttempts += 1
-    }
-  }
-}
-
 /** NUL and the C0 controls, DEL and the C1 controls, and both path separators. */
 function isUnsafePathCharacter(character: string): boolean {
   if (character === '/' || character === '\\') return true
   const code = character.codePointAt(0) ?? 0
   return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
-}
-
-const delay = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-
-/** Escalating waits between lock retries. A tight retry loop with no delay is not a retry. */
-function backoffMs(attempt: number): number {
-  return Math.min(25 * 2 ** attempt, 500)
 }
 
 /**

@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import type {
   ChapterAudioListing,
   EpubUploadView,
+  FallbackReviewView,
   StartedGeneration,
 } from '../server/audiobook-web-api.js'
 import { requireIdInput, toWebApiResult, WebApiError, type WebApiResult } from '../server/errors.js'
@@ -67,3 +68,58 @@ export const listUploadsFn = createServerFn({ method: 'GET' }).handler(
   async (): Promise<WebApiResult<readonly EpubUploadView[]>> =>
     toWebApiResult('listUploads', async () => (await api()).listUploads()),
 )
+
+/**
+ * The review queue for a job. Each entry carries a short excerpt of the approved line, because
+ * nobody can approve a voice for a line they cannot read. That excerpt is story text: it is returned
+ * to the browser for the human to read and must never be logged or written into job state.
+ */
+export const listFallbackReviewFn = createServerFn({ method: 'GET' })
+  .validator((data: { jobId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
+      toWebApiResult('listFallbackReview', async () =>
+        (await api()).listFallbackReview({ jobId: requireIdInput(data.jobId, 'Job ID') }),
+      ),
+  )
+
+/**
+ * The M1 book-wide decision. One explicit user action authorizing the fallback voice for every
+ * unresolved speaker in this book — a 2,328-passage book must not stop for a click per line — which
+ * is then recorded as one durable per-segment approval each, so withdrawing one speaker later
+ * invalidates only that speaker's audio.
+ */
+export const approveAllFallbacksFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string; decidedBy: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
+      toWebApiResult('approveAllFallbacks', async () =>
+        (await api()).approveAllFallbacks({
+          jobId: requireIdInput(data.jobId, 'Job ID'),
+          decidedBy: requireIdInput(data.decidedBy, 'Reviewer'),
+        }),
+      ),
+  )
+
+export const revokeFallbackFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string; segmentId: string; decidedBy: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
+      toWebApiResult('revokeFallback', async () =>
+        (await api()).revokeFallback({
+          jobId: requireIdInput(data.jobId, 'Job ID'),
+          segmentId: requireIdInput(data.segmentId, 'Segment ID'),
+          decidedBy: requireIdInput(data.decidedBy, 'Reviewer'),
+        }),
+      ),
+  )
+
+/** Continues a reviewed job from its persisted script, without re-extracting or re-directing. */
+export const renderApprovedScriptFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<StartedGeneration>> =>
+      toWebApiResult('renderApprovedScript', async () =>
+        (await api()).renderApprovedScript({ jobId: requireIdInput(data.jobId, 'Job ID') }),
+      ),
+  )

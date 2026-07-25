@@ -1,11 +1,18 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type {
+  BookFallbackGrant,
+  FallbackApprovalCatalog,
+  FallbackApprovalExclusion,
   FallbackApprovalRepository,
+  FallbackRevocationReason,
   PersistedFallbackApproval,
 } from '@light-novel-audiobook/application'
-import { createFallbackApprovalRecord } from '@light-novel-audiobook/application'
+import {
+  createBookFallbackGrant,
+  createFallbackApprovalRecord,
+} from '@light-novel-audiobook/application'
 import { DomainError } from '@light-novel-audiobook/domain'
-import { withTransaction } from './transaction.js'
+import { withBusyRetryingTransaction } from './transaction.js'
 
 interface ApprovalRow {
   readonly book_id: string
@@ -15,31 +22,87 @@ interface ApprovalRow {
   readonly voice_profile_id: string
   readonly source_text_sha256: string
   readonly decided_at: string
+  readonly decided_by: string
+  readonly grant_id: string | null
   readonly approval_id: string
   readonly approval_sha256: string
 }
 
+interface ExclusionRow {
+  readonly book_id: string
+  readonly segment_id: string
+  readonly decided_by: string
+  readonly decided_at: string
+}
+
+interface GrantRow {
+  readonly book_id: string
+  readonly decided_by: string
+  readonly decided_at: string
+  readonly grant_id: string
+  readonly grant_sha256: string
+}
+
 /**
- * The review context's ledger of persisted human fallback decisions, one live row per approved
- * unresolved-speaker segment.
+ * The review context's ledger: live per-segment approvals, durable human exclusions, and the
+ * book-wide grant, plus a per-book **catalog revision**.
  *
- * `save` is an upsert on `(book_id, segment_id)`: one segment has at most one live decision, and a
- * newer decision supersedes the older one rather than accumulating rows that a later query could
- * mistake for two live approvals.
+ * The revision is what makes a render safe against a concurrent decision. Every mutation here bumps
+ * it inside the same transaction as the row it writes, and `readCatalog` reads records and revision
+ * in one transaction, so `RenderAudiobook` can claim a catalog and later prove nothing moved. Reading
+ * them separately would leave exactly the race the revision exists to close.
  */
 export class SqliteFallbackApprovalRepository implements FallbackApprovalRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  async listForBook(bookId: string): Promise<readonly PersistedFallbackApproval[]> {
-    if (!bookId || bookId.length === 0) throw new DomainError('Book ID is required')
-    const rows = this.db
-      .prepare(
-        `SELECT book_id, segment_id, speaker_id, fallback_reason, voice_profile_id,
-                source_text_sha256, decided_at, approval_id, approval_sha256
-           FROM fallback_approvals WHERE book_id = ? ORDER BY segment_id`,
-      )
-      .all(bookId) as unknown as ApprovalRow[]
-    return Object.freeze(rows.map((row) => reconstructApproval(row)))
+  async readCatalog(bookId: string): Promise<FallbackApprovalCatalog> {
+    requireBookId(bookId)
+    // One transaction: a mutation cannot interleave between the revision read and the row reads, so
+    // the returned revision always describes exactly the returned records.
+    return withBusyRetryingTransaction(
+      this.db,
+      (): FallbackApprovalCatalog => {
+        const revisionRow = this.db
+          .prepare('SELECT revision FROM fallback_catalog_revisions WHERE book_id = ?')
+          .get(bookId) as { revision: number } | undefined
+        const approvals = this.db
+          .prepare(
+            `SELECT book_id, segment_id, speaker_id, fallback_reason, voice_profile_id,
+                    source_text_sha256, decided_at, decided_by, grant_id, approval_id, approval_sha256
+               FROM fallback_approvals WHERE book_id = ? ORDER BY segment_id`,
+          )
+          .all(bookId) as unknown as ApprovalRow[]
+        const exclusions = this.db
+          .prepare(
+            `SELECT book_id, segment_id, decided_by, decided_at
+               FROM fallback_approval_exclusions WHERE book_id = ? ORDER BY segment_id`,
+          )
+          .all(bookId) as unknown as ExclusionRow[]
+        const grantRow = this.db
+          .prepare(
+            `SELECT book_id, decided_by, decided_at, grant_id, grant_sha256
+               FROM fallback_book_grants WHERE book_id = ?`,
+          )
+          .get(bookId) as GrantRow | undefined
+        return Object.freeze({
+          revision: revisionRow?.revision ?? 0,
+          approvals: Object.freeze(approvals.map((row) => reconstructApproval(row))),
+          exclusions: Object.freeze(
+            exclusions.map(
+              (row): FallbackApprovalExclusion =>
+                Object.freeze({
+                  bookId: row.book_id,
+                  segmentId: row.segment_id,
+                  decidedBy: row.decided_by,
+                  decidedAt: row.decided_at,
+                }),
+            ),
+          ),
+          grant: grantRow === undefined ? undefined : reconstructGrant(grantRow),
+        })
+      },
+      `Could not read fallback approvals for book ${bookId}; the workspace database stayed locked`,
+    )
   }
 
   async save(record: PersistedFallbackApproval): Promise<void> {
@@ -54,46 +117,150 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
         `Fallback approval for ${record.segmentId} does not match its own decision identity`,
       )
     }
-    withTransaction(this.db, () => {
-      this.db
-        .prepare(
-          `INSERT INTO fallback_approvals
-             (book_id, segment_id, speaker_id, fallback_reason, voice_profile_id,
-              source_text_sha256, decided_at, approval_id, approval_sha256)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(book_id, segment_id) DO UPDATE SET
-             speaker_id = excluded.speaker_id,
-             fallback_reason = excluded.fallback_reason,
-             voice_profile_id = excluded.voice_profile_id,
-             source_text_sha256 = excluded.source_text_sha256,
-             decided_at = excluded.decided_at,
-             approval_id = excluded.approval_id,
-             approval_sha256 = excluded.approval_sha256`,
-        )
-        .run(
-          canonical.bookId,
-          canonical.segmentId,
-          canonical.speakerId,
-          canonical.fallbackReason,
-          canonical.voiceProfileId,
-          canonical.sourceTextSha256,
-          canonical.decidedAt,
-          canonical.approvalId,
-          canonical.approvalSha256,
-        )
-    })
+    await withBusyRetryingTransaction(
+      this.db,
+      () => {
+        this.db
+          .prepare(
+            `INSERT INTO fallback_approvals
+               (book_id, segment_id, speaker_id, fallback_reason, voice_profile_id,
+                source_text_sha256, decided_at, decided_by, grant_id, approval_id, approval_sha256)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(book_id, segment_id) DO UPDATE SET
+               speaker_id = excluded.speaker_id,
+               fallback_reason = excluded.fallback_reason,
+               voice_profile_id = excluded.voice_profile_id,
+               source_text_sha256 = excluded.source_text_sha256,
+               decided_at = excluded.decided_at,
+               decided_by = excluded.decided_by,
+               grant_id = excluded.grant_id,
+               approval_id = excluded.approval_id,
+               approval_sha256 = excluded.approval_sha256`,
+          )
+          .run(
+            canonical.bookId,
+            canonical.segmentId,
+            canonical.speakerId,
+            canonical.fallbackReason,
+            canonical.voiceProfileId,
+            canonical.sourceTextSha256,
+            canonical.decidedAt,
+            canonical.decidedBy,
+            canonical.grantId,
+            canonical.approvalId,
+            canonical.approvalSha256,
+          )
+        // Approving clears any earlier withdrawal: the human has decided again, and leaving the
+        // exclusion would keep a book-wide grant permanently blocked for this segment.
+        this.db
+          .prepare('DELETE FROM fallback_approval_exclusions WHERE book_id = ? AND segment_id = ?')
+          .run(canonical.bookId, canonical.segmentId)
+        this.bumpRevision(canonical.bookId)
+      },
+      `Could not save the fallback approval for ${record.segmentId}; the workspace database stayed locked`,
+    )
   }
 
-  async revoke(bookId: string, segmentId: string): Promise<boolean> {
-    if (!bookId || bookId.length === 0) throw new DomainError('Book ID is required')
+  async revoke(
+    bookId: string,
+    segmentId: string,
+    reason: FallbackRevocationReason,
+    actor: { readonly decidedBy: string; readonly decidedAt: string },
+  ): Promise<boolean> {
+    requireBookId(bookId)
     if (!segmentId || segmentId.length === 0) throw new DomainError('Segment ID is required')
-    return withTransaction(this.db, (): boolean => {
-      const result = this.db
-        .prepare('DELETE FROM fallback_approvals WHERE book_id = ? AND segment_id = ?')
-        .run(bookId, segmentId)
-      return Number(result.changes) > 0
-    })
+    if (reason !== 'human-withdrawal' && reason !== 'no-longer-describes-segment') {
+      throw new DomainError(`Unsupported fallback revocation reason: ${reason}`)
+    }
+    return withBusyRetryingTransaction(
+      this.db,
+      (): boolean => {
+        const result = this.db
+          .prepare('DELETE FROM fallback_approvals WHERE book_id = ? AND segment_id = ?')
+          .run(bookId, segmentId)
+        // A human withdrawal is recorded, a system invalidation is not. Without the record a
+        // book-wide grant would re-create the approval on the next reconciliation and the
+        // revocation would mean nothing; recording a *system* invalidation would instead
+        // permanently block a segment whose decision merely needs re-deriving.
+        if (reason === 'human-withdrawal') {
+          this.db
+            .prepare(
+              `INSERT INTO fallback_approval_exclusions (book_id, segment_id, decided_by, decided_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(book_id, segment_id) DO UPDATE SET
+                 decided_by = excluded.decided_by,
+                 decided_at = excluded.decided_at`,
+            )
+            .run(bookId, segmentId, actor.decidedBy, actor.decidedAt)
+        }
+        this.bumpRevision(bookId)
+        return Number(result.changes) > 0
+      },
+      `Could not revoke the fallback approval for ${segmentId}; the workspace database stayed locked`,
+    )
   }
+
+  async saveBookGrant(grant: BookFallbackGrant): Promise<void> {
+    const canonical = createBookFallbackGrant(grant)
+    if (canonical.grantId !== grant.grantId || canonical.grantSha256 !== grant.grantSha256) {
+      throw new DomainError(
+        `Book fallback grant for ${grant.bookId} does not match its own decision identity`,
+      )
+    }
+    await withBusyRetryingTransaction(
+      this.db,
+      () => {
+        this.db
+          .prepare(
+            `INSERT INTO fallback_book_grants (book_id, decided_by, decided_at, grant_id, grant_sha256)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(book_id) DO UPDATE SET
+               decided_by = excluded.decided_by,
+               decided_at = excluded.decided_at,
+               grant_id = excluded.grant_id,
+               grant_sha256 = excluded.grant_sha256`,
+          )
+          .run(
+            canonical.bookId,
+            canonical.decidedBy,
+            canonical.decidedAt,
+            canonical.grantId,
+            canonical.grantSha256,
+          )
+        this.bumpRevision(canonical.bookId)
+      },
+      `Could not save the book fallback grant for ${grant.bookId}; the workspace database stayed locked`,
+    )
+  }
+
+  async revokeBookGrant(bookId: string): Promise<boolean> {
+    requireBookId(bookId)
+    return withBusyRetryingTransaction(
+      this.db,
+      (): boolean => {
+        const result = this.db
+          .prepare('DELETE FROM fallback_book_grants WHERE book_id = ?')
+          .run(bookId)
+        this.bumpRevision(bookId)
+        return Number(result.changes) > 0
+      },
+      `Could not withdraw the book fallback grant for ${bookId}; the workspace database stayed locked`,
+    )
+  }
+
+  /** Must only be called inside a transaction that also wrote the change it accounts for. */
+  private bumpRevision(bookId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO fallback_catalog_revisions (book_id, revision) VALUES (?, 1)
+         ON CONFLICT(book_id) DO UPDATE SET revision = revision + 1`,
+      )
+      .run(bookId)
+  }
+}
+
+function requireBookId(bookId: string): void {
+  if (!bookId || bookId.length === 0) throw new DomainError('Book ID is required')
 }
 
 function reconstructApproval(row: ApprovalRow): PersistedFallbackApproval {
@@ -113,6 +280,8 @@ function reconstructApproval(row: ApprovalRow): PersistedFallbackApproval {
     voiceProfileId: row.voice_profile_id,
     sourceTextSha256: row.source_text_sha256,
     decidedAt: row.decided_at,
+    decidedBy: row.decided_by,
+    grantId: row.grant_id,
   })
   if (record.approvalId !== row.approval_id || record.approvalSha256 !== row.approval_sha256) {
     throw new DomainError(
@@ -120,4 +289,18 @@ function reconstructApproval(row: ApprovalRow): PersistedFallbackApproval {
     )
   }
   return record
+}
+
+function reconstructGrant(row: GrantRow): BookFallbackGrant {
+  const grant = createBookFallbackGrant({
+    bookId: row.book_id,
+    decidedBy: row.decided_by,
+    decidedAt: row.decided_at,
+  })
+  if (grant.grantId !== row.grant_id || grant.grantSha256 !== row.grant_sha256) {
+    throw new DomainError(
+      `Stored book fallback grant for ${row.book_id} does not match its own decision identity`,
+    )
+  }
+  return grant
 }

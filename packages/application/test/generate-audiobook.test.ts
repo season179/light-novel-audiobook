@@ -20,19 +20,23 @@ import {
   createGenerationCommandIdentity,
   type DirectedChapter,
   type DirectorModel,
+  type DirectorModelFactory,
   type EpubExtractionRequest,
   type EpubExtractor,
-  type FallbackApprovalRepository,
   GenerateAudiobook,
+  type GenerateAudiobookCommand,
   type JobRepository,
   type OutputReservation,
+  PendingFallbackReviewError,
   type PersistedFallbackApproval,
   type ReusableSegmentQuery,
+  ReviewFallbackApprovals,
   type SpeechEngine,
   type SpeechEngineContext,
   type SpeechEngineFactory,
   type SpeechRenderRequest,
 } from '../src/index.js'
+import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
 
 const sourceHash = 'b'.repeat(64)
 const bookId = StableIds.book(sourceHash)
@@ -222,7 +226,7 @@ class FakeSpeechEngine implements SpeechEngine {
   }
 
   /** Called by the factory, once per render stage, with the complete catalog for that book. */
-  useApprovals(records: readonly PersistedFallbackApproval[]): void {
+  replaceApprovals(records: readonly PersistedFallbackApproval[]): void {
     this.approvals = new Map(records.map((record) => [record.segmentId, record]))
   }
 
@@ -288,7 +292,7 @@ class FakeSpeechEngineFactory implements SpeechEngineFactory {
 
   create(context: SpeechEngineContext): SpeechEngine {
     this.contexts.push(context)
-    this.engine.useApprovals(context.fallbackApprovals)
+    this.engine.replaceApprovals(context.fallbackApprovals)
     if (!this.identityMovesWithCatalog) return this.engine
     return new Proxy(this.engine, {
       get: (target, property, receiver) =>
@@ -296,30 +300,6 @@ class FakeSpeechEngineFactory implements SpeechEngineFactory {
           ? `${target.identity}:${context.fallbackApprovals.length}`
           : Reflect.get(target, property, receiver),
     })
-  }
-}
-
-class InMemoryFallbackApprovalRepository implements FallbackApprovalRepository {
-  readonly records = new Map<string, PersistedFallbackApproval>()
-  revokeCalls: string[] = []
-
-  async listForBook(bookId: string): Promise<readonly PersistedFallbackApproval[]> {
-    return [...this.records.values()]
-      .filter((record) => record.bookId === bookId)
-      .sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1))
-  }
-
-  async save(record: PersistedFallbackApproval): Promise<void> {
-    this.records.set(this.key(record.bookId, record.segmentId), record)
-  }
-
-  async revoke(bookId: string, segmentId: string): Promise<boolean> {
-    this.revokeCalls.push(segmentId)
-    return this.records.delete(this.key(bookId, segmentId))
-  }
-
-  private key(bookId: string, segmentId: string): string {
-    return `${bookId}:${segmentId}`
   }
 }
 
@@ -374,6 +354,27 @@ const rebuildApprovedBook = (book: Book): Book =>
       return rebuilt
     }),
   })
+
+/**
+ * Records how many directors were constructed. That count is the instrument for round 2's HIGH: a
+ * director built for a run that turns out to be a render-only review resume is never used and never
+ * released, and with Gemma that leaks a GPU-resident model.
+ */
+class FakeDirectorFactory implements DirectorModelFactory {
+  readonly identity: string
+  readonly created: DirectorModel[] = []
+  private readonly inner: DirectorModel
+
+  constructor(inner: DirectorModel) {
+    this.inner = inner
+    this.identity = inner.identity
+  }
+
+  create(): DirectorModel {
+    this.created.push(this.inner)
+    return this.inner
+  }
+}
 
 class FakeAssembler implements AudioAssembler {
   readonly identity: string
@@ -476,12 +477,32 @@ interface Harness {
   readonly events: string[]
   readonly extractor: FakeExtractor
   readonly director: FakeDirector
+  readonly directorFactory: FakeDirectorFactory
   readonly speech: FakeSpeechEngine
   readonly speechFactory: FakeSpeechEngineFactory
   readonly assembler: FakeAssembler
   readonly repository: InMemoryJobRepository
   readonly approvals: InMemoryFallbackApprovalRepository
+  readonly review: ReviewFallbackApprovals
   readonly useCase: GenerateAudiobook
+}
+
+const REVIEWER = 'local-reviewer'
+
+/**
+ * Runs generation the way a user does for a book with unresolved speakers: the first attempt stops
+ * for review, the human issues the book-wide fallback decision, and the run continues from the
+ * persisted script. Tests whose subject is not the approval gate use this; the gate has its own
+ * tests, including that omitting the grant approves nothing.
+ */
+const generate = async (app: Harness, command: GenerateAudiobookCommand) => {
+  try {
+    return await app.useCase.execute(command)
+  } catch (error) {
+    if (!(error instanceof PendingFallbackReviewError)) throw error
+    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
+    return await app.useCase.execute(command)
+  }
 }
 
 /** Fixed so a recorded decision time is reproducible and identities are stable across runs. */
@@ -500,6 +521,7 @@ const harness = (
   const events: string[] = []
   const extractor = new FakeExtractor(options.extractorIdentity)
   const director = new FakeDirector(events, options.corruptDirection, options.directorIdentity)
+  const directorFactory = new FakeDirectorFactory(director)
   const speech = new FakeSpeechEngine(events, options.speechIdentity)
   const speechFactory = new FakeSpeechEngineFactory(speech)
   const assembler = new FakeAssembler(events, options.assemblerIdentity)
@@ -509,14 +531,20 @@ const harness = (
     events,
     extractor,
     director,
+    directorFactory,
     speech,
     speechFactory,
     assembler,
     repository,
     approvals,
+    review: new ReviewFallbackApprovals({
+      jobs: repository,
+      approvals,
+      now: options.now ?? ((): Date => DECIDED_AT),
+    }),
     useCase: new GenerateAudiobook({
       epubExtractor: extractor,
-      directorModel: director,
+      directorModelFactory: directorFactory,
       speechEngineFactory: speechFactory,
       audioAssembler: assembler,
       jobs: repository,
@@ -534,7 +562,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('orchestrates the complete exact-text happy path and exposes useful progress', async () => {
-    const result = await app.useCase.execute({
+    const result = await generate(app, {
       jobId: 'job-001',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -583,14 +611,14 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('reuses every unchanged completed segment and reserves successive outputs without overwrite', async () => {
-    const first = await app.useCase.execute({
+    const first = await generate(app, {
       jobId: 'job-first',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices: makeCast(),
     })
     const renderCallsAfterFirst = app.speech.renderCalls.length
-    const second = await app.useCase.execute({
+    const second = await generate(app, {
       jobId: 'job-second',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -611,7 +639,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('does not rerun or reserve another output when the same completed job is requested again', async () => {
-    const first = await app.useCase.execute({
+    const first = await generate(app, {
       jobId: 'job-idempotent',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -623,7 +651,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       render: app.speech.renderCalls.length,
       assemble: app.assembler.calls.length,
     }
-    const repeated = await app.useCase.execute({
+    const repeated = await generate(app, {
       jobId: 'job-idempotent',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -639,7 +667,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
-    await app.useCase.execute({
+    await generate(app, {
       jobId: 'job-bound-inputs',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -648,7 +676,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const extractionCount = app.extractor.calls.length
 
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-bound-inputs',
         epubPath: '/uploads/renamed-story.epub',
         epubSha256: sourceHash,
@@ -656,7 +684,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       }),
     ).rejects.toThrow('stale for the requested generation inputs')
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-bound-inputs',
         epubPath: '/uploads/story.epub',
         epubSha256: 'e'.repeat(64),
@@ -664,7 +692,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       }),
     ).rejects.toThrow('stale for the requested generation inputs')
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-bound-inputs',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -675,7 +703,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const changedExtractor = new FakeExtractor('fake-epub-extractor:version-2:policy-1')
     const changedExtractorUseCase = new GenerateAudiobook({
       epubExtractor: changedExtractor,
-      directorModel: app.director,
+      directorModelFactory: app.directorFactory,
       speechEngineFactory: app.speechFactory,
       audioAssembler: app.assembler,
       jobs: app.repository,
@@ -694,7 +722,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const changedSpeech = new FakeSpeechEngine(app.events, 'fake-qwen:model-revision-2:settings-1')
     const changedUseCase = new GenerateAudiobook({
       epubExtractor: app.extractor,
-      directorModel: app.director,
+      directorModelFactory: app.directorFactory,
       speechEngineFactory: new FakeSpeechEngineFactory(changedSpeech),
       audioAssembler: app.assembler,
       jobs: app.repository,
@@ -757,7 +785,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await app.repository.saveJob(active)
 
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-active',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -766,7 +794,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     ).rejects.toThrow('already running; duplicate request rejected')
     expect(app.extractor.calls).toHaveLength(0)
 
-    const recovered = await app.useCase.execute({
+    const recovered = await generate(app, {
       jobId: 'job-active',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -778,13 +806,13 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('invalidates only audio whose approved voice inputs changed', async () => {
-    await app.useCase.execute({
+    await generate(app, {
       jobId: 'job-original-cast',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices: makeCast(1),
     })
-    const changed = await app.useCase.execute({
+    const changed = await generate(app, {
       jobId: 'job-changed-fallback',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -800,7 +828,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   it('resumes after a render failure and reuses segments completed before the failure', async () => {
     app.speech.failOnceAtRenderCall = 3
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-resume',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -814,7 +842,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.repository.audio.size).toBe(2)
     expect(app.speech.endCalls).toBe(1)
 
-    const resumed = await app.useCase.execute({
+    const resumed = await generate(app, {
       jobId: 'job-resume',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -828,7 +856,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
 
   it('rejects an extractor result whose content hash differs from the bound EPUB', async () => {
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-epub-mismatch',
         epubPath: '/uploads/story.epub',
         epubSha256: 'f'.repeat(64),
@@ -840,7 +868,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('rejects malformed reusable artifact metadata before speech', async () => {
-    await app.useCase.execute({
+    await generate(app, {
       jobId: 'job-valid-artifacts',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -850,7 +878,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     app.repository.returnInvalidReusableMetadata = true
 
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-invalid-artifact-metadata',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -862,7 +890,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   })
 
   it('regenerates artifacts the repository reports physically missing or corrupt', async () => {
-    await app.useCase.execute({
+    await generate(app, {
       jobId: 'job-physical-artifacts',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -875,7 +903,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     app.repository.missingArtifactPaths.add(missing.wavPath)
     app.repository.corruptArtifactPaths.add(corrupt.wavPath)
 
-    const recovered = await app.useCase.execute({
+    const recovered = await generate(app, {
       jobId: 'job-physical-artifacts-recovered',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
@@ -888,7 +916,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   it('rejects output reservations with colliding M4B and chapter paths', async () => {
     app.repository.reserveDuplicatePaths = true
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-duplicate-paths',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -902,7 +930,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   it('rejects source fidelity failures before speech and persists a failed job', async () => {
     app = harness({ corruptDirection: true })
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-bad-source',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -924,7 +952,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     app = harness({ corruptDirection: true })
     app.director.failRelease = true
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-release-failure',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
@@ -941,7 +969,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
   it('rejects mismatched speech artifacts, ends the batch, and never assembles them', async () => {
     app.speech.returnWrongIdentity = true
     await expect(
-      app.useCase.execute({
+      generate(app, {
         jobId: 'job-bad-audio',
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,

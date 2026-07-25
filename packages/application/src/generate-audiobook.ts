@@ -4,17 +4,14 @@ import { DirectAudiobook } from './direct-audiobook.js'
 import type { PendingFallbackApproval } from './fallback-approval.js'
 import type {
   AudioAssembler,
-  DirectorModel,
+  DirectorModelFactory,
   EpubExtractor,
   FallbackApprovalRepository,
   JobRepository,
   SpeechEngineFactory,
 } from './ports.js'
 import { RenderAudiobook } from './render-audiobook.js'
-import {
-  type FallbackApprovalPolicy,
-  ReviewFallbackApprovals,
-} from './review-fallback-approvals.js'
+import { ReviewFallbackApprovals } from './review-fallback-approvals.js'
 
 export interface GenerateAudiobookCommand {
   readonly jobId: string
@@ -23,13 +20,19 @@ export interface GenerateAudiobookCommand {
   readonly voices: VoiceCast
   /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
   readonly recoverAbandoned?: boolean
-  /**
-   * How this book's unresolved speakers are decided. Defaults to `'pre-approve-book-fallback'`: the
-   * M1 answer, one decision up front recorded as per-segment records, so a 2,328-passage book does
-   * not stop for a click per line while revoking one speaker still invalidates only that speaker.
-   */
-  readonly fallbackApprovalPolicy?: FallbackApprovalPolicy
 }
+
+/**
+ * There is deliberately **no** approval policy field on this command.
+ *
+ * Issue #45's round-2 review found that an optional policy whose omission pre-approved every
+ * fallback segment was the old `'auto-approve'` stand-in renamed: the records it wrote carried a
+ * timestamp but no actor and no review operation, so any consumer that merely updated its
+ * constructor got silent approval by default. There is now no field through which a default could be
+ * inserted by this use case or by composition wiring. Approvals exist only because
+ * `ReviewFallbackApprovals` recorded a human decision — per segment, or once for the whole book via
+ * `grantBookFallback`. A run that finds undecided unresolved speakers stops at `awaiting_review`.
+ */
 
 export interface GenerateAudiobookResult {
   readonly job: AudiobookJob
@@ -42,7 +45,8 @@ export interface GenerateAudiobookResult {
 
 export interface GenerateAudiobookDependencies {
   readonly epubExtractor: EpubExtractor
-  readonly directorModel: DirectorModel
+  /** Built only when direction runs; never on a render-only review resume. See `DirectorModelFactory`. */
+  readonly directorModelFactory: DirectorModelFactory
   /**
    * Replaces the former `speechEngine` instance. The engine cannot be built until the approval
    * catalog exists, which is only after direction; see `SpeechEngineFactory`.
@@ -72,7 +76,7 @@ export class GenerateAudiobook {
   constructor(dependencies: GenerateAudiobookDependencies) {
     this.direction = new DirectAudiobook({
       epubExtractor: dependencies.epubExtractor,
-      directorModel: dependencies.directorModel,
+      directorModelFactory: dependencies.directorModelFactory,
       speechEngineFactory: dependencies.speechEngineFactory,
       audioAssembler: dependencies.audioAssembler,
       jobs: dependencies.jobs,
@@ -92,7 +96,6 @@ export class GenerateAudiobook {
   }
 
   async execute(command: GenerateAudiobookCommand): Promise<GenerateAudiobookResult> {
-    const policy = command.fallbackApprovalPolicy ?? 'pre-approve-book-fallback'
     const existing = await this.jobs.findJob(command.jobId)
     if (
       existing !== undefined &&
@@ -120,7 +123,7 @@ export class GenerateAudiobook {
         ? await this.loadDirected(existing)
         : (await this.direction.execute(command)).book
 
-    const reconciliation = await this.review.reconcile({ book: directed, policy })
+    const reconciliation = await this.review.reconcile({ book: directed })
     if (reconciliation.pending.length > 0) {
       throw new PendingFallbackReviewError(command.jobId, reconciliation.pending)
     }

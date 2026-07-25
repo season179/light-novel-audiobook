@@ -46,6 +46,10 @@ class FlacReservingRepository implements JobRepository {
     this.outputsDir = workspace.outputsDir
   }
 
+  findBook(bookId: string): Promise<Book | undefined> {
+    return this.inner.findBook(bookId)
+  }
+
   findJob(jobId: string): Promise<AudiobookJob | undefined> {
     return this.inner.findJob(jobId)
   }

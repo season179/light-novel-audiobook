@@ -7,7 +7,10 @@ import {
 } from '@light-novel-audiobook/domain'
 
 /** Bumped only when the hashed decision fields change; every existing approval then restales. */
-const APPROVAL_SCHEMA_VERSION = 1
+const APPROVAL_SCHEMA_VERSION = 2
+
+/** An actor string is required on every decision. Nothing may record an anonymous approval. */
+const MAX_ACTOR_LENGTH = 128
 
 /** The identity shape `QwenTtsSpeechEngine` validates before it will render a fallback segment. */
 const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
@@ -41,12 +44,102 @@ export interface FallbackApprovalDecision {
    * revocation followed by a fresh approval is a genuinely different decision and re-renders.
    */
   readonly decidedAt: string
+  /**
+   * Who decided. Required, and part of the identity: a record with no actor is not evidence of a
+   * human decision, and issue #45's round-2 review found that renaming an auto-approval policy and
+   * persisting its products does not make the choice human. Nothing in this package can mint an
+   * approval without naming an actor.
+   */
+  readonly decidedBy: string
+  /**
+   * The book-wide grant this segment's approval was derived from, or `null` when the human decided
+   * this one segment individually. Provenance only — it is deliberately not compared by
+   * `approvalStillDescribes`, so re-granting a book does not restale decisions already recorded.
+   */
+  readonly grantId: string | null
 }
 
 /** A decision with its derived, content-addressed identity. Persisted exactly as-is. */
 export interface PersistedFallbackApproval extends FallbackApprovalDecision {
   readonly approvalId: string
   readonly approvalSha256: string
+}
+
+/**
+ * One human decision authorizing the fallback voice for **every** unresolved speaker in one book.
+ *
+ * This is the M1 answer to a 2,328-passage book that must not stop for a click per line, and it is
+ * a durable, actor-attributed act of its own — created only by `ReviewFallbackApprovals`, never by
+ * a generation run and never by composition wiring. `GenerateAudiobook` can apply a grant that
+ * already exists; it cannot create one, and there is no command field through which one could be
+ * defaulted in. It still produces one record per segment, so revoking one speaker's approval
+ * invalidates only that speaker's audio.
+ */
+export interface BookFallbackGrant {
+  readonly bookId: string
+  readonly decidedBy: string
+  readonly decidedAt: string
+  readonly grantId: string
+  readonly grantSha256: string
+}
+
+/**
+ * One segment the human explicitly refused to authorize.
+ *
+ * Recorded rather than merely deleted, because a book-wide grant would otherwise re-create the
+ * approval on the next reconciliation and silently undo the revocation. An exclusion outranks any
+ * grant and survives until the segment is approved again.
+ */
+export interface FallbackApprovalExclusion {
+  readonly bookId: string
+  readonly segmentId: string
+  readonly decidedBy: string
+  readonly decidedAt: string
+}
+
+/** Why a recorded decision was removed. Only the first is a human act. */
+export type FallbackRevocationReason = 'human-withdrawal' | 'no-longer-describes-segment'
+
+/**
+ * One atomically consistent read of everything the review context knows about a book.
+ *
+ * `revision` increments on every mutation and is read in the **same** transaction as the records,
+ * so a render can claim a catalog and later prove nothing moved under it. Reading the records and
+ * the revision separately would leave exactly the race this exists to close.
+ */
+export interface FallbackApprovalCatalog {
+  readonly revision: number
+  readonly approvals: readonly PersistedFallbackApproval[]
+  readonly exclusions: readonly FallbackApprovalExclusion[]
+  readonly grant: BookFallbackGrant | undefined
+}
+
+export const createBookFallbackGrant = (input: {
+  readonly bookId: string
+  readonly decidedBy: string
+  readonly decidedAt: string
+}): BookFallbackGrant => {
+  if (input.bookId.length === 0) throw new DomainError('A fallback grant requires a book')
+  validateActor(input.decidedBy)
+  validateDecidedAt(input.decidedAt)
+  const grantSha256 = createHash('sha256')
+    .update(
+      JSON.stringify({
+        schema: `book-fallback-grant@${APPROVAL_SCHEMA_VERSION}`,
+        bookId: input.bookId,
+        decidedBy: input.decidedBy,
+        decidedAt: input.decidedAt,
+      }),
+      'utf8',
+    )
+    .digest('hex')
+  return Object.freeze({
+    bookId: input.bookId,
+    decidedBy: input.decidedBy,
+    decidedAt: input.decidedAt,
+    grantId: `grant-${grantSha256.slice(0, 16)}`,
+    grantSha256,
+  })
 }
 
 /** One unresolved speaker awaiting a human decision, as the review UI needs to show it. */
@@ -62,8 +155,13 @@ export interface PendingFallbackApproval {
    * exposes it deliberately — see the #45 report. Never log it and never commit it.
    */
   readonly sourceTextExcerpt: string
-  readonly decision: 'approved' | 'pending'
+  /**
+   * `pending` — nobody has decided. `approved` — a live decision authorizes the fallback voice.
+   * `excluded` — the human explicitly withdrew it, which no book-wide grant may override.
+   */
+  readonly decision: 'approved' | 'pending' | 'excluded'
   readonly approvalId: string | null
+  readonly decidedBy: string | null
 }
 
 /** One segment of an approved script whose voice assignment fell back to the fallback profile. */
@@ -99,6 +197,8 @@ export const createFallbackApprovalRecord = (
         voiceProfileId: decision.voiceProfileId,
         sourceTextSha256: decision.sourceTextSha256.toLowerCase(),
         decidedAt: decision.decidedAt,
+        decidedBy: decision.decidedBy,
+        grantId: decision.grantId,
       }),
       'utf8',
     )
@@ -198,11 +298,25 @@ function validateDecision(decision: FallbackApprovalDecision): void {
   if (!SHA256.test(decision.sourceTextSha256)) {
     throw new DomainError('A fallback approval requires the approved line digest')
   }
+  validateDecidedAt(decision.decidedAt)
+  validateActor(decision.decidedBy)
+  if (decision.grantId !== null && decision.grantId.length === 0) {
+    throw new DomainError('A fallback approval grant reference cannot be empty')
+  }
+}
+
+function validateActor(decidedBy: string): void {
+  if (decidedBy.trim().length === 0 || decidedBy.length > MAX_ACTOR_LENGTH) {
+    throw new DomainError('A fallback decision requires the actor who made it')
+  }
+}
+
+function validateDecidedAt(decidedAt: string): void {
   if (
-    decision.decidedAt.length === 0 ||
-    Number.isNaN(Date.parse(decision.decidedAt)) ||
-    new Date(decision.decidedAt).toISOString() !== decision.decidedAt
+    decidedAt.length === 0 ||
+    Number.isNaN(Date.parse(decidedAt)) ||
+    new Date(decidedAt).toISOString() !== decidedAt
   ) {
-    throw new DomainError('A fallback approval requires a canonical ISO 8601 decision time')
+    throw new DomainError('A fallback decision requires a canonical ISO 8601 decision time')
   }
 }

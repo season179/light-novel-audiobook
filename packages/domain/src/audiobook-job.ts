@@ -76,11 +76,19 @@ export interface AudiobookOutputSnapshot {
 
 /** JSON-safe persistence shape for issue #27's repository adapter. */
 export interface AudiobookJobSnapshot {
-  readonly schemaVersion: 2
+  readonly schemaVersion: 3
   readonly id: string
   readonly state: AudiobookJobState
   readonly stage: AudiobookJobStage
   readonly commandIdentity: string | null
+  /**
+   * Digest of the render-stage inputs direction bound: the approved cast, the speech engine and the
+   * assembler. A standalone `RenderAudiobook` continuation cannot recompute `commandIdentity` — it
+   * holds no extractor and no director — so without this it could complete a job under a different
+   * cast or assembler while `commandIdentity` still described the old inputs, and the stored
+   * identity would no longer identify what produced the output.
+   */
+  readonly renderContract: string | null
   readonly bookId: string | null
   readonly progress: AudiobookJobProgress
   readonly warnings: readonly FallbackVoiceWarning[]
@@ -93,6 +101,7 @@ export class AudiobookJob {
   private currentState: AudiobookJobState = 'pending'
   private currentStage: AudiobookJobStage = 'extracting'
   private boundCommandIdentity: string | null = null
+  private boundRenderContract: string | null = null
   private attachedBookId: string | null = null
   private currentProgress: AudiobookJobProgress = Object.freeze({
     currentChapterId: null,
@@ -119,6 +128,10 @@ export class AudiobookJob {
 
   get commandIdentity(): string | null {
     return this.boundCommandIdentity
+  }
+
+  get renderContract(): string | null {
+    return this.boundRenderContract
   }
 
   get bookId(): string | null {
@@ -153,6 +166,22 @@ export class AudiobookJob {
       throw new DomainError('A started job cannot be bound retroactively')
     }
     this.boundCommandIdentity = normalized
+  }
+
+  /**
+   * Binds the render-stage inputs direction used. A later standalone render must present the same
+   * contract, so a continuation cannot quietly complete the job under a different cast, speech
+   * engine or assembler than the one the stored command identity describes.
+   */
+  bindRenderContract(renderContract: string): void {
+    if (!/^[a-f\d]{64}$/i.test(renderContract)) {
+      throw new DomainError('Render contract must be a SHA-256 value')
+    }
+    const normalized = renderContract.toLowerCase()
+    if (this.boundRenderContract !== null && this.boundRenderContract !== normalized) {
+      throw new DomainError('Audiobook job is bound to different render inputs')
+    }
+    this.boundRenderContract = normalized
   }
 
   start(): void {
@@ -354,11 +383,12 @@ export class AudiobookJob {
 
   snapshot(): AudiobookJobSnapshot {
     return Object.freeze({
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: this.id,
       state: this.currentState,
       stage: this.currentStage,
       commandIdentity: this.boundCommandIdentity,
+      renderContract: this.boundRenderContract,
       bookId: this.attachedBookId,
       progress: Object.freeze({ ...this.currentProgress }),
       warnings: Object.freeze(
@@ -384,6 +414,7 @@ export class AudiobookJob {
     job.currentState = snapshot.state
     job.currentStage = snapshot.stage
     job.boundCommandIdentity = snapshot.commandIdentity?.toLowerCase() ?? null
+    job.boundRenderContract = snapshot.renderContract?.toLowerCase() ?? null
     job.attachedBookId = snapshot.bookId
     job.currentProgress = Object.freeze({ ...snapshot.progress })
     job.fallbackWarnings = Object.freeze(
@@ -412,7 +443,7 @@ export class AudiobookJob {
   }
 
   private static validateSnapshot(snapshot: AudiobookJobSnapshot): void {
-    if (snapshot.schemaVersion !== 2 || snapshot.id.trim().length === 0) {
+    if (snapshot.schemaVersion !== 3 || snapshot.id.trim().length === 0) {
       throw new DomainError('Unsupported or invalid audiobook job snapshot')
     }
     if (
@@ -423,6 +454,9 @@ export class AudiobookJob {
     }
     if (snapshot.commandIdentity !== null && !/^[a-f\d]{64}$/i.test(snapshot.commandIdentity)) {
       throw new DomainError('Audiobook job snapshot has an invalid command identity')
+    }
+    if (snapshot.renderContract !== null && !/^[a-f\d]{64}$/i.test(snapshot.renderContract)) {
+      throw new DomainError('Audiobook job snapshot has an invalid render contract')
     }
     if (snapshot.state !== 'pending' && snapshot.commandIdentity === null) {
       throw new DomainError('Started audiobook job snapshots require a command identity')

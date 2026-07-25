@@ -1,6 +1,7 @@
 /** The single SQLite transaction helper, shared by the repository and the migrator. */
 
 import type { DatabaseSync } from 'node:sqlite'
+import { DomainError } from '@light-novel-audiobook/domain'
 
 /** Primary SQLite result codes. node:sqlite reports the *extended* code on `errcode`. */
 const SQLITE_BUSY = 5
@@ -67,5 +68,49 @@ export function classifySqliteFailure(error: unknown): 'busy' | 'constraint' | n
       return 'constraint'
     default:
       return null
+  }
+}
+
+/** Total time a repository transaction may spend losing lock races before the run gives up. */
+const TRANSACTION_BUSY_DEADLINE_MS = 30_000
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+
+/** Escalating waits between lock retries. A tight retry loop with no delay is not a retry. */
+function backoffMs(attempt: number): number {
+  return Math.min(25 * 2 ** attempt, 500)
+}
+
+/**
+ * Retry the whole transaction after a busy failure, so a failed BEGIN IMMEDIATE or COMMIT is
+ * included and every attempt starts with a fresh transaction. SQLite's busy_timeout performs the
+ * primary wait; this deadline bounds repeated losses, while backoff prevents a retry spin.
+ *
+ * Lives here rather than in `repo.ts` because issue #45's fallback-approval ledger needs the same
+ * guarantee for the same reason, and two copies of a retry loop is how the two diverge.
+ */
+export async function withBusyRetryingTransaction<T>(
+  db: DatabaseSync,
+  work: () => T,
+  lockedMessage: string,
+): Promise<T> {
+  const deadline = Date.now() + TRANSACTION_BUSY_DEADLINE_MS
+  let busyAttempts = 0
+
+  while (true) {
+    try {
+      return withTransaction(db, work)
+    } catch (error) {
+      if (classifySqliteFailure(error) !== 'busy') throw error
+
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) throw new DomainError(lockedMessage)
+
+      await delay(Math.min(backoffMs(busyAttempts), remainingMs))
+      busyAttempts += 1
+    }
   }
 }

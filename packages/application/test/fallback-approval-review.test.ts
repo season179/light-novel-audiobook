@@ -19,15 +19,17 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   collectFallbackSubjects,
-  FALLBACK_APPROVAL_POLICIES,
+  createRenderContract,
   FALLBACK_EXCERPT_MAX_LENGTH,
-  type FallbackApprovalRepository,
   fallbackApprovalExcerpt,
   hashSourceText,
   type JobRepository,
-  type PersistedFallbackApproval,
+  RenderAudiobook,
+  RenderContractMismatchError,
+  RenderInProgressError,
   ReviewFallbackApprovals,
 } from '../src/index.js'
+import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
 
 const SOURCE_HASH = '9a'.repeat(32)
 const BOOK_ID = StableIds.book(SOURCE_HASH)
@@ -148,37 +150,23 @@ class StubJobRepository implements JobRepository {
   }
 }
 
-class StubApprovalRepository implements FallbackApprovalRepository {
-  readonly records = new Map<string, PersistedFallbackApproval>()
-  revoked: string[] = []
-  saved: string[] = []
-
-  async listForBook(bookId: string): Promise<readonly PersistedFallbackApproval[]> {
-    return [...this.records.values()]
-      .filter((record) => record.bookId === bookId)
-      .sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1))
-  }
-
-  async save(record: PersistedFallbackApproval): Promise<void> {
-    this.saved.push(record.segmentId)
-    this.records.set(record.segmentId, record)
-  }
-
-  async revoke(_bookId: string, segmentId: string): Promise<boolean> {
-    this.revoked.push(segmentId)
-    return this.records.delete(segmentId)
-  }
-}
-
 interface Harness {
   readonly jobs: StubJobRepository
-  readonly approvals: StubApprovalRepository
+  readonly approvals: InMemoryFallbackApprovalRepository
   readonly review: ReviewFallbackApprovals
+}
+
+const REVIEWER = 'local-reviewer'
+
+/** Issues the book-wide grant as a human would, which is the only way reconcile creates records. */
+const grantBookFallback = async (app: Harness, book: Book, jobId = 'job-review'): Promise<void> => {
+  directedJob(app.jobs, book, jobId)
+  await app.review.grantBookFallback({ jobId, decidedBy: REVIEWER })
 }
 
 const harness = (now: () => Date = () => DECIDED_AT): Harness => {
   const jobs = new StubJobRepository()
-  const approvals = new StubApprovalRepository()
+  const approvals = new InMemoryFallbackApprovalRepository()
   return { jobs, approvals, review: new ReviewFallbackApprovals({ jobs, approvals, now }) }
 }
 
@@ -201,9 +189,10 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     app = harness()
   })
 
-  it('turns one book-level pre-approval into a record per unresolved-speaker segment', async () => {
+  it('turns one book-wide human grant into a record per unresolved-speaker segment', async () => {
     const book = bookOf()
-    const result = await app.review.reconcile({ book, policy: 'pre-approve-book-fallback' })
+    directedJob(app.jobs, book)
+    const result = await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
 
     // Two fallback segments, two records, two distinct identities — never one blanket approval.
     expect(result.created.map((record) => record.segmentId)).toEqual([
@@ -221,11 +210,90 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     expect(result.created.every((record) => record.decidedAt === DECIDED_AT.toISOString())).toBe(
       true,
     )
+    // Every record names the human who decided and the grant it came from. A timestamp alone is
+    // what made the first round's records indistinguishable from auto-approval.
+    expect(result.created.every((record) => record.decidedBy === REVIEWER)).toBe(true)
+    expect(result.created.every((record) => record.grantId === result.grant?.grantId)).toBe(true)
+    expect(result.grant?.decidedBy).toBe(REVIEWER)
+  })
+
+  it('creates nothing at all without a human grant, and reports every speaker as pending', async () => {
+    // THE regression test for round 2's HIGH: with no grant there is no policy, default or argument
+    // that can cause an approval to exist. `reconcile` is the only creator and it needs a grant.
+    const book = bookOf()
+    const result = await app.review.reconcile({ book })
+
+    expect(result.created).toEqual([])
+    expect(result.approved).toEqual([])
+    expect(result.grant).toBeUndefined()
+    expect(app.approvals.saved).toEqual([])
+    expect(app.approvals.approvals.size).toBe(0)
+    expect(result.pending.map((item) => [item.segmentId, item.decision])).toEqual([
+      [UNRESOLVED_SEGMENT, 'pending'],
+      [MIRA_SEGMENT, 'pending'],
+    ])
+  })
+
+  it('never re-creates an approval the human withdrew, even under a book-wide grant', async () => {
+    // Without a durable exclusion the grant would silently undo the revocation on the next run, and
+    // "revoking one speaker's approval invalidates only that speaker's audio" would be false.
+    const book = bookOf()
+    await grantBookFallback(app, book)
+    expect(app.approvals.approvals.size).toBe(2)
+
+    expect(
+      await app.review.revoke({
+        jobId: 'job-review',
+        segmentId: MIRA_SEGMENT,
+        decidedBy: REVIEWER,
+      }),
+    ).toBe(true)
+    const afterRevoke = await app.review.reconcile({ book })
+
+    expect(afterRevoke.created).toEqual([])
+    expect(afterRevoke.approved.map((record) => record.segmentId)).toEqual([UNRESOLVED_SEGMENT])
+    expect(afterRevoke.pending.map((item) => [item.segmentId, item.decision])).toEqual([
+      [MIRA_SEGMENT, 'excluded'],
+    ])
+    // Re-granting the whole book does not override an explicit withdrawal either.
+    const regranted = await app.review.grantBookFallback({
+      jobId: 'job-review',
+      decidedBy: REVIEWER,
+    })
+    expect(regranted.created).toEqual([])
+    expect(regranted.pending.map((item) => item.segmentId)).toEqual([MIRA_SEGMENT])
+  })
+
+  it('refuses every review mutation while a render owns the job', async () => {
+    const book = bookOf()
+    await grantBookFallback(app, book)
+    const job = app.jobs.jobs.get('job-review')
+    if (job === undefined) throw new Error('fixture job missing')
+    job.resumeApprovedRender()
+    job.beginRendering(4)
+    expect(job.state).toBe('running')
+
+    // A decision landing now would leave the in-flight render finishing segments under a catalog it
+    // already captured — the round-2 race.
+    await expect(
+      app.review.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT, decidedBy: REVIEWER }),
+    ).rejects.toThrow(RenderInProgressError)
+    await expect(
+      app.review.approve({ jobId: 'job-review', segmentId: MIRA_SEGMENT, decidedBy: REVIEWER }),
+    ).rejects.toThrow(RenderInProgressError)
+    await expect(
+      app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER }),
+    ).rejects.toThrow(RenderInProgressError)
+    await expect(
+      app.review.revokeBookFallback({ jobId: 'job-review', decidedBy: REVIEWER }),
+    ).rejects.toThrow(RenderInProgressError)
+    expect(app.approvals.approvals.size).toBe(2)
   })
 
   it('leaves an unchanged decision byte-for-byte alone on a second reconciliation', async () => {
     const book = bookOf()
-    const first = await app.review.reconcile({ book, policy: 'pre-approve-book-fallback' })
+    directedJob(app.jobs, book)
+    const first = await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
     // A later clock proves idempotence is by content, not by luck: the second pass runs at a
     // different instant and must still not restale a segment, or every generation run would
     // re-render every fallback segment in the book.
@@ -233,10 +301,10 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
       jobs: app.jobs,
       approvals: app.approvals,
       now: () => LATER,
-    }).reconcile({ book: bookOf(), policy: 'pre-approve-book-fallback' })
+    }).reconcile({ book: bookOf() })
 
     expect(second.created).toEqual([])
-    expect(second.revoked).toEqual([])
+    expect(second.invalidated).toEqual([])
     expect(second.unchanged.map((record) => record.approvalId)).toEqual(
       first.created.map((record) => record.approvalId),
     )
@@ -244,8 +312,8 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
   })
 
   it('revokes a decision whose approved line was re-directed under it', async () => {
-    await app.review.reconcile({ book: bookOf(), policy: 'pre-approve-book-fallback' })
-    const before = app.approvals.records.get(MIRA_SEGMENT)?.approvalId
+    await grantBookFallback(app, bookOf())
+    const before = app.approvals.approvals.get(`${BOOK_ID}:${MIRA_SEGMENT}`)?.approvalId
 
     // Same speaker and same position, different words: PLAN.md:132 makes that an invalidation, and
     // the human approved a line, not a slot.
@@ -254,18 +322,17 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
         ...DEFAULT_LINES.slice(0, 3),
         { text: '“Then stop counting.”', kind: 'dialogue', speakerId: 'mira' },
       ]),
-      policy: 'pre-approve-book-fallback',
     })
 
-    expect(rewritten.revoked.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
+    expect(rewritten.invalidated.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
     expect(rewritten.created.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
-    expect(app.approvals.records.get(MIRA_SEGMENT)?.approvalId).not.toBe(before)
+    expect(app.approvals.approvals.get(`${BOOK_ID}:${MIRA_SEGMENT}`)?.approvalId).not.toBe(before)
     // The other speaker's decision was untouched.
     expect(rewritten.unchanged.map((record) => record.segmentId)).toEqual([UNRESOLVED_SEGMENT])
   })
 
   it('revokes a decision whose segment no longer falls back at all', async () => {
-    await app.review.reconcile({ book: bookOf(), policy: 'pre-approve-book-fallback' })
+    await grantBookFallback(app, bookOf())
     // The cast gained a voice for mira, so that segment resolves and needs no human decision.
     const withMira = new VoiceCast(
       voice('cast-narrator', 'narrator', null),
@@ -313,22 +380,16 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
       chapters: [chapter],
     })
 
-    const result = await app.review.reconcile({ book: recast, policy: 'pre-approve-book-fallback' })
-    expect(result.revoked.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
+    const result = await app.review.reconcile({ book: recast })
+    expect(result.invalidated.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
     expect(result.approved.map((record) => record.segmentId)).toEqual([UNRESOLVED_SEGMENT])
     expect(collectFallbackSubjects(recast).map((subject) => subject.segment.id)).toEqual([
       UNRESOLVED_SEGMENT,
     ])
   })
 
-  it('reports every unresolved speaker as pending under require-explicit-review and writes nothing', async () => {
-    const result = await app.review.reconcile({
-      book: bookOf(),
-      policy: 'require-explicit-review',
-    })
-    expect(result.created).toEqual([])
-    expect(result.approved).toEqual([])
-    expect(app.approvals.saved).toEqual([])
+  it('gives the review UI a readable excerpt, speaker and reason for each pending speaker', async () => {
+    const result = await app.review.reconcile({ book: bookOf() })
     expect(result.pending.map((item) => item.segmentId)).toEqual([UNRESOLVED_SEGMENT, MIRA_SEGMENT])
     expect(result.pending.map((item) => item.sourceTextExcerpt)).toEqual([
       '“Nobody counted the hours.”',
@@ -340,24 +401,19 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     )
   })
 
-  it('offers exactly two policies and rejects anything else', async () => {
-    expect([...FALLBACK_APPROVAL_POLICIES]).toEqual([
-      'pre-approve-book-fallback',
-      'require-explicit-review',
-    ])
-    await expect(
-      app.review.reconcile({
-        book: bookOf(),
-        // A caller reaching for an auto-approve escape hatch does not get one.
-        policy: 'auto-approve' as unknown as 'require-explicit-review',
-      }),
-    ).rejects.toThrow('Unsupported fallback approval policy')
+  it('has no policy argument through which approval could be defaulted in', () => {
+    // Structural, not behavioural: `reconcile` takes only a book. There is no string a caller or a
+    // composition root could pass that makes it approve anything, which is what round 2's HIGH
+    // required. `grantBookFallback` is the only creator and it requires an actor.
+    expect(Object.keys({ book: bookOf() })).toEqual(['book'])
+    expect(app.review.reconcile.length).toBe(1)
+    expect(app.review.grantBookFallback.length).toBe(1)
   })
 
   it('returns a completed job to review when one decision is revoked, and only then', async () => {
     const book = bookOf()
     const job = directedJob(app.jobs, book)
-    await app.review.reconcile({ book, policy: 'pre-approve-book-fallback' })
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
     job.resumeApprovedRender()
     job.beginRendering(4)
     for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
@@ -369,31 +425,52 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     })
     expect(job.state).toBe('completed')
 
-    expect(await app.review.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT })).toBe(true)
+    expect(
+      await app.review.revoke({
+        jobId: 'job-review',
+        segmentId: MIRA_SEGMENT,
+        decidedBy: REVIEWER,
+      }),
+    ).toBe(true)
     expect(job.state).toBe('awaiting_review')
     expect(job.output).toBeNull()
     // The reuse ledger is untouched: only the revoked segment's content address became unreachable.
-    expect(app.approvals.records.has(UNRESOLVED_SEGMENT)).toBe(true)
+    expect(app.approvals.approvals.has(`${BOOK_ID}:${UNRESOLVED_SEGMENT}`)).toBe(true)
 
     // A second revocation of the same segment changes nothing and does not reopen anything.
     const saves = app.jobs.savedJobs.length
-    expect(await app.review.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT })).toBe(false)
+    expect(
+      await app.review.revoke({
+        jobId: 'job-review',
+        segmentId: MIRA_SEGMENT,
+        decidedBy: REVIEWER,
+      }),
+    ).toBe(false)
     expect(app.jobs.savedJobs).toHaveLength(saves)
   })
 
   it('re-approving a revoked segment records a new decision with a new identity', async () => {
     const book = bookOf()
     directedJob(app.jobs, book)
-    await app.review.reconcile({ book, policy: 'pre-approve-book-fallback' })
-    const original = app.approvals.records.get(MIRA_SEGMENT)?.approvalId
-    await app.review.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT })
+    const first = await app.review.approve({
+      jobId: 'job-review',
+      segmentId: MIRA_SEGMENT,
+      decidedBy: REVIEWER,
+    })
+    expect(first.grantId).toBeNull()
+    const original = first.approvalId
+    await app.review.revoke({ jobId: 'job-review', segmentId: MIRA_SEGMENT, decidedBy: REVIEWER })
 
     const later = new ReviewFallbackApprovals({
       jobs: app.jobs,
       approvals: app.approvals,
       now: () => LATER,
     })
-    const record = await later.approve({ jobId: 'job-review', segmentId: MIRA_SEGMENT })
+    const record = await later.approve({
+      jobId: 'job-review',
+      segmentId: MIRA_SEGMENT,
+      decidedBy: REVIEWER,
+    })
     expect(record.approvalId).not.toBe(original)
     expect(record.decidedAt).toBe(LATER.toISOString())
     expect(record.sourceTextSha256).toBe(hashSourceText('“Then start counting.”'))
@@ -403,11 +480,11 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     const book = bookOf()
     directedJob(app.jobs, book)
     const narration = StableIds.segment(PASSAGE_ID, 1)
-    await expect(app.review.approve({ jobId: 'job-review', segmentId: narration })).rejects.toThrow(
-      'does not need a fallback approval',
-    )
     await expect(
-      app.review.revoke({ jobId: 'job-review', segmentId: 'not-a-segment' }),
+      app.review.approve({ jobId: 'job-review', segmentId: narration, decidedBy: REVIEWER }),
+    ).rejects.toThrow('does not need a fallback approval')
+    await expect(
+      app.review.revoke({ jobId: 'job-review', segmentId: 'not-a-segment', decidedBy: REVIEWER }),
     ).rejects.toThrow('does not need a fallback approval')
     await expect(app.review.list('job-missing')).rejects.toThrow(DomainError)
   })
@@ -415,7 +492,7 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
   it('lists decided and undecided speakers together for the review UI', async () => {
     const book = bookOf()
     directedJob(app.jobs, book)
-    await app.review.approve({ jobId: 'job-review', segmentId: MIRA_SEGMENT })
+    await app.review.approve({ jobId: 'job-review', segmentId: MIRA_SEGMENT, decidedBy: REVIEWER })
 
     const listed = await app.review.list('job-review')
     expect(listed.map((item) => [item.segmentId, item.decision])).toEqual([
@@ -423,7 +500,9 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
       [MIRA_SEGMENT, 'approved'],
     ])
     expect(listed[0]?.approvalId).toBeNull()
-    expect(listed[1]?.approvalId).toBe(app.approvals.records.get(MIRA_SEGMENT)?.approvalId)
+    expect(listed[1]?.approvalId).toBe(
+      app.approvals.approvals.get(`${BOOK_ID}:${MIRA_SEGMENT}`)?.approvalId,
+    )
   })
 
   it('caps a review excerpt and collapses its whitespace', () => {
@@ -433,3 +512,88 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     expect(long.endsWith('…')).toBe(true)
   })
 })
+
+describe('standalone render provenance (issue #45, round-2 MEDIUM)', () => {
+  let app: Harness
+
+  beforeEach(() => {
+    app = harness()
+  })
+
+  /**
+   * `RenderAudiobook` is a public continuation path — the review UI calls it directly after a decision
+   * — but it holds no extractor and no director, so it cannot recompute `commandIdentity` to check it
+   * was handed the same inputs direction used. Per-segment identities stop the *audio* being reused
+   * under a changed cast or engine, but they do not stop the job completing, and the assembler is not
+   * represented in them at all. Without the contract the stored `commandIdentity` would stop
+   * describing what actually produced the output.
+   */
+  const contractFor = (voices: VoiceCast, speech: string, assembly: string): string =>
+    createRenderContract({
+      voices,
+      speechEngineIdentity: speech,
+      audioAssemblerIdentity: assembly,
+    })
+
+  it('moves for a changed cast, speech engine or assembler, and only for those', () => {
+    const base = contractFor(cast, 'speech-1', 'assembly-1')
+    expect(contractFor(cast, 'speech-1', 'assembly-1')).toBe(base)
+    expect(contractFor(cast, 'speech-2', 'assembly-1')).not.toBe(base)
+    // The assembler is the case per-segment identities cannot catch at all.
+    expect(contractFor(cast, 'speech-1', 'assembly-2')).not.toBe(base)
+
+    const otherCast = new VoiceCast(
+      voice('cast-narrator', 'narrator', null),
+      voice('cast-fallback-two', 'fallback', null),
+      [voice('cast-alice', 'character', 'alice')],
+    )
+    expect(contractFor(otherCast, 'speech-1', 'assembly-1')).not.toBe(base)
+  })
+
+  it('refuses a continuation whose render inputs are not the ones direction bound', async () => {
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    job.bindRenderContract(contractFor(cast, 'speech-1', 'assembly-1'))
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
+
+    const render = new RenderAudiobook({
+      speechEngineFactory: { identity: 'speech-2', create: () => neverRenders },
+      audioAssembler: {
+        identity: 'assembly-1',
+        assemble: () => Promise.reject(new Error('unused')),
+      },
+      jobs: app.jobs,
+      approvals: app.approvals,
+    })
+
+    await expect(render.execute({ jobId: 'job-review', voices: cast })).rejects.toThrow(
+      RenderContractMismatchError,
+    )
+    // Refused before the job left its resting state, so nothing was rendered and nothing failed it.
+    expect(job.state).toBe('awaiting_review')
+    expect(job.progress.totalSegments).toBe(0)
+  })
+
+  it('binds the contract on the first render when direction never did', async () => {
+    // A job directed before this field existed has `renderContract === null`. The first render binds
+    // it rather than refusing, so an in-flight job is not wedged; the second render is then checked.
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    expect(job.renderContract).toBeNull()
+    job.bindRenderContract(contractFor(cast, 'speech-1', 'assembly-1'))
+    expect(job.renderContract).not.toBeNull()
+    // Re-binding the same contract is idempotent; a different one is refused by the domain itself.
+    expect(() => job.bindRenderContract(contractFor(cast, 'speech-1', 'assembly-1'))).not.toThrow()
+    expect(() => job.bindRenderContract(contractFor(cast, 'speech-2', 'assembly-1'))).toThrow(
+      'bound to different render inputs',
+    )
+  })
+})
+
+/** A speech engine that would fail loudly if the contract check ever let a render through. */
+const neverRenders = {
+  identity: 'speech-2',
+  beginBatch: (): Promise<void> => Promise.reject(new Error('render must not have started')),
+  render: (): Promise<never> => Promise.reject(new Error('render must not have started')),
+  endBatch: (): Promise<void> => Promise.resolve(),
+}

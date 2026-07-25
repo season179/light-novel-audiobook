@@ -1,5 +1,10 @@
 import { extname } from 'node:path'
-import type { JobRepository } from '@light-novel-audiobook/application'
+import type {
+  JobRepository,
+  PendingFallbackApproval,
+  ReviewFallbackApprovals,
+} from '@light-novel-audiobook/application'
+import { RenderInProgressError } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
@@ -60,6 +65,16 @@ export interface AudiobookWebApiDependencies {
   readonly books: BookReadModelStore
   readonly runner: GenerationRunner
   readonly voices: VoiceCast
+  readonly review: ReviewFallbackApprovals
+}
+
+/** The review queue for one job, plus whether a book-wide decision has already been made. */
+export interface FallbackReviewView {
+  readonly jobId: string
+  readonly awaitingReview: boolean
+  readonly grantedBy: string | null
+  readonly pendingCount: number
+  readonly items: readonly PendingFallbackApproval[]
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
@@ -101,6 +116,7 @@ export class AudiobookWebApi {
   private readonly books: BookReadModelStore
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
+  private readonly review: ReviewFallbackApprovals
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -109,6 +125,136 @@ export class AudiobookWebApi {
     this.books = dependencies.books
     this.runner = dependencies.runner
     this.voices = dependencies.voices
+    this.review = dependencies.review
+  }
+
+  /**
+   * The unresolved speakers in a job's approved script and what has been decided about each.
+   *
+   * `sourceTextExcerpt` on each item is story text — nobody can approve a voice for a line they
+   * cannot read. It must never be written to a log or into job state.
+   */
+  async listFallbackReview(input: { readonly jobId: string }): Promise<FallbackReviewView> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.bookId === null) {
+      return {
+        jobId: input.jobId,
+        awaitingReview: false,
+        grantedBy: null,
+        pendingCount: 0,
+        items: [],
+      }
+    }
+    const items = await this.review.list(input.jobId)
+    const grant = await this.review.findGrant(input.jobId)
+    return {
+      jobId: input.jobId,
+      awaitingReview: job.state === 'awaiting_review',
+      grantedBy: grant?.decidedBy ?? null,
+      pendingCount: items.filter((item) => item.decision !== 'approved').length,
+      items,
+    }
+  }
+
+  /**
+   * The M1 book-wide human decision: use the fallback voice for every unresolved speaker in this
+   * book. One explicit act — a 2,328-passage book must not stop for a click per line — recorded as
+   * one durable per-segment record each, so withdrawing one speaker later touches only that speaker.
+   */
+  async approveAllFallbacks(input: {
+    readonly jobId: string
+    readonly decidedBy: string
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.grantBookFallback({ jobId: input.jobId, decidedBy: input.decidedBy }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  async approveFallback(input: {
+    readonly jobId: string
+    readonly segmentId: string
+    readonly decidedBy: string
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.approve({
+        jobId: input.jobId,
+        segmentId: input.segmentId,
+        decidedBy: input.decidedBy,
+      }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  async revokeFallback(input: {
+    readonly jobId: string
+    readonly segmentId: string
+    readonly decidedBy: string
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.revoke({
+        jobId: input.jobId,
+        segmentId: input.segmentId,
+        decidedBy: input.decidedBy,
+      }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  /**
+   * Resumes a job that stopped for review. Reuses the same runner and the same command, so rendering
+   * continues from the persisted script without re-extracting or re-directing.
+   */
+  async renderApprovedScript(input: { readonly jobId: string }): Promise<StartedGeneration> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.state !== 'awaiting_review') {
+      throw new WebApiError(
+        'generation_rejected',
+        'This audiobook is not waiting for a fallback-voice decision.',
+      )
+    }
+    // The job ID is a prefix of the upload digest, so the upload is found by re-deriving it rather
+    // than by storing a reverse mapping that could drift.
+    const upload = (await this.uploads.list()).find(
+      (candidate) => deriveJobId(candidate.sha256) === input.jobId,
+    )
+    if (upload === undefined) {
+      throw new WebApiError('unknown_upload', 'The uploaded EPUB for this job is no longer here.')
+    }
+    if (!this.runner.isActive(input.jobId)) {
+      this.runner.start({
+        jobId: input.jobId,
+        epubPath: upload.epubPath,
+        epubSha256: upload.sha256,
+        voices: this.voices,
+      })
+    }
+    return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
+  }
+
+  /** A review decision is refused outright while a render owns the job, never queued behind it. */
+  private async runReviewDecision<T>(jobId: string, decide: () => Promise<T>): Promise<T> {
+    if (this.runner.isActive(jobId)) {
+      throw new WebApiError(
+        'generation_rejected',
+        'This audiobook is rendering. Wait for it to finish before changing a fallback-voice decision.',
+      )
+    }
+    try {
+      return await decide()
+    } catch (error) {
+      if (error instanceof RenderInProgressError) {
+        throw new WebApiError(
+          'generation_rejected',
+          'This audiobook is rendering. Wait for it to finish before changing a fallback-voice decision.',
+        )
+      }
+      throw error
+    }
   }
 
   /** Throws `invalid_upload` with an actionable message when the bytes are not an EPUB. */

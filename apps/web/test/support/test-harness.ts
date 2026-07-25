@@ -51,8 +51,6 @@ export interface TestHarness {
 
 export interface TestHarnessOptions {
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
-  /** Defaults to the composition root's M1 stand-in; set `'reject'` to test the real contract. */
-  readonly unreviewedFallbackPolicy?: 'reject' | 'auto-approve' | undefined
 }
 
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
@@ -61,21 +59,27 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   const pinnedConfig = await loadPinnedQwenConfig()
   const voices = createM1VoiceCast(pinnedConfig)
   // A shared speech engine is the legitimate factory shape for an adapter whose endBatch is not
-  // terminal, and it lets a test count renders across two runs. The fallback policy mirrors what the
-  // composition root passes: the fake refuses unapproved fallback speech like the real Qwen adapter,
-  // so the M1 stand-in has to be explicit here too.
+  // terminal, and it lets a test count renders across two runs. There is deliberately no fallback
+  // policy: the fake refuses unapproved fallback speech exactly as the real Qwen adapter does, so a
+  // book with unresolved speakers stops for review until a test issues a real approval.
   const speechEngine = new FakeSpeechEngine(workspace, {
     beforeRender: options.beforeRender,
     fallbackVoiceProfileId: voices.fallback.id,
     pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
-    unreviewedFallbackPolicy: options.unreviewedFallbackPolicy ?? 'auto-approve',
   })
   const directors: FakeDirectorModel[] = []
 
   const api = await createAudiobookWebApi({
     workspace,
     voices,
-    createSpeechEngine: () => speechEngine,
+    speechEngineFactory: {
+      identity: speechEngine.identity,
+      create: (context) => {
+        speechEngine.replaceApprovals(context.fallbackApprovals)
+        return speechEngine
+      },
+    },
+    directorIdentity: new FakeDirectorModel().identity,
     createDirectorModel: () => {
       const director = new FakeDirectorModel()
       directors.push(director)
@@ -107,8 +111,28 @@ export const createInProcessClient = (api: AudiobookWebApi): AudiobookClient => 
   listChapterAudio: (input) =>
     toWebApiResult('listChapterAudio', () => api.listChapterAudio(input)),
   listUploads: () => toWebApiResult('listUploads', () => api.listUploads()),
+  listFallbackReview: (input) =>
+    toWebApiResult('listFallbackReview', () => api.listFallbackReview(input)),
+  approveAllFallbacks: (input) =>
+    toWebApiResult('approveAllFallbacks', () => api.approveAllFallbacks(input)),
+  revokeFallback: (input) => toWebApiResult('revokeFallback', () => api.revokeFallback(input)),
+  renderApprovedScript: (input) =>
+    toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
 })
 
+/** The actor recorded on decisions this harness makes on the user's behalf. */
+export const TEST_REVIEWER = 'test-reviewer'
+
+/**
+ * Waits for a job state, making the user's fallback-voice decision if the job stops for it.
+ *
+ * The fixture book contains unresolved speakers, so **every** run now stops at `awaiting_review`
+ * until a human decides — there is no policy or default that approves anything. Rather than repeat
+ * that dance in twenty tests, this helper performs it through the real
+ * `approveAllFallbacks` + `renderApprovedScript` API, so a broken approval path fails the whole
+ * suite instead of being papered over. The stop itself, and that nothing renders before the
+ * decision, are asserted directly in `fallback-review.test.ts`.
+ */
 export const waitForJobState = async (
   api: AudiobookWebApi,
   jobId: string,
@@ -117,9 +141,15 @@ export const waitForJobState = async (
 ): Promise<JobStateView> => {
   const deadline = Date.now() + timeoutMs
   let latest: JobStateView | null = null
+  let decided = false
   while (Date.now() < deadline) {
     latest = await api.getJobState({ jobId })
     if (latest !== null && predicate(latest)) return latest
+    if (latest?.state === 'awaiting_review' && !decided) {
+      decided = true
+      await api.approveAllFallbacks({ jobId, decidedBy: TEST_REVIEWER })
+      await api.renderApprovedScript({ jobId })
+    }
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
   throw new Error(

@@ -66,6 +66,8 @@ const approvalAt = (decidedAt: string): PersistedFallbackApproval =>
     voiceProfileId: fallbackVoice.id,
     sourceTextSha256: hashSourceText(LINE),
     decidedAt,
+    decidedBy: 'local-reviewer',
+    grantId: null,
   })
 
 describe('render input identity binds the human fallback decision (issue #45, prerequisite 1)', () => {
@@ -116,6 +118,8 @@ describe('render input identity binds the human fallback decision (issue #45, pr
       voiceProfileId: fallbackVoice.id,
       sourceTextSha256: hashSourceText(LINE),
       decidedAt: '2026-07-25T10:00:00.000Z',
+      decidedBy: 'local-reviewer',
+      grantId: null,
     })
 
     expect(otherApproval.approvalId).not.toBe(approvalAt('2026-07-25T10:00:00.000Z').approvalId)

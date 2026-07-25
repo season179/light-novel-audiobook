@@ -71,6 +71,13 @@ export class ProjectingJobRepository implements JobRepository {
     this.books.record(book)
   }
 
+  /** Also refreshes the projection: a job resumed from persistence never called `saveBook`. */
+  async findBook(bookId: string): Promise<Book | undefined> {
+    const book = await this.inner.findBook(bookId)
+    if (book !== undefined) this.books.record(book)
+    return book
+  }
+
   findReusableSegment(query: ReusableSegmentQuery): Promise<CompletedSegmentAudio | undefined> {
     return this.inner.findReusableSegment(query)
   }

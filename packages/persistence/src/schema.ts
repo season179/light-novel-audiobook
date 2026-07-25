@@ -142,9 +142,50 @@ migrations.set(
     voice_profile_id TEXT NOT NULL,
     source_text_sha256 TEXT NOT NULL,
     decided_at TEXT NOT NULL,
+    -- Required. A record with a time but no actor is not evidence of a human decision, which is
+    -- how issue #45's first round shipped a renamed auto-approval.
+    decided_by TEXT NOT NULL,
+    -- The book-wide grant this record was derived from, or NULL when the human decided this one
+    -- segment individually.
+    grant_id TEXT,
     approval_id TEXT NOT NULL,
     approval_sha256 TEXT NOT NULL,
     PRIMARY KEY(book_id, segment_id)
+  );
+
+  -- Segments the human explicitly refused to authorize.
+  --
+  -- Recorded rather than merely deleted, because a book-wide grant would otherwise re-create the
+  -- approval on the next reconciliation and silently undo the revocation. An exclusion outranks any
+  -- grant and is cleared only by approving that segment again. A *system* invalidation -- a decision
+  -- that no longer describes its segment -- deliberately writes no exclusion, or a re-directed line
+  -- would be blocked forever instead of simply re-decided.
+  CREATE TABLE fallback_approval_exclusions (
+    book_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY(book_id, segment_id)
+  );
+
+  -- One human decision authorizing the fallback voice for every unresolved speaker in one book.
+  -- The M1 answer to a 2,328-passage book that must not stop for a click per line; it still
+  -- produces one per-segment approval row each, so revoking one speaker touches only that speaker.
+  CREATE TABLE fallback_book_grants (
+    book_id TEXT PRIMARY KEY NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    grant_sha256 TEXT NOT NULL
+  );
+
+  -- Monotonic per-book counter, incremented in the SAME transaction as every approval, exclusion and
+  -- grant mutation. A render reads it together with the records it renders under and re-checks it
+  -- before publishing anything, so a decision that lands mid-render cannot let that render complete
+  -- under a withdrawn approval.
+  CREATE TABLE fallback_catalog_revisions (
+    book_id TEXT PRIMARY KEY NOT NULL,
+    revision INTEGER NOT NULL
   );
 `,
 )
