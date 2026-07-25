@@ -13,5 +13,8 @@
   "dependencies": {
     "@light-novel-audiobook/application": "workspace:*",
     "@light-novel-audiobook/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@light-novel-audiobook/persistence": "workspace:*"
   }
 }
