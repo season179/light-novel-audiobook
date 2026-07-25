@@ -1,6 +1,8 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
@@ -15,6 +17,68 @@ async function readJson(relativePath: string): Promise<Record<string, unknown>> 
     string,
     unknown
   >
+}
+
+const spikeRoot = 'packages/llama-cpp-spike'
+const spikeEvidenceRoot = `${spikeRoot}/evidence/`
+const provenanceVerifier = `${spikeRoot}/test/evidence.test.ts`
+
+async function gitOutput(repository: string, args: Array<string>): Promise<string> {
+  const { stdout } = await execFile('git', args, { cwd: repository })
+  return stdout
+}
+
+async function verifierDiffSha256(
+  repository: string,
+  implementationCommit: string,
+  currentRevision: string,
+  path: string,
+): Promise<string> {
+  const patch = await gitOutput(repository, [
+    'diff',
+    '--no-renames',
+    '--full-index',
+    implementationCommit,
+    currentRevision,
+    '--',
+    path,
+  ])
+  return createHash('sha256').update(patch).digest('hex')
+}
+
+async function readUnapprovedSpikeChanges(
+  repository: string,
+  implementationCommit: string,
+  currentRevision: string,
+  authorizedVerifierPatches: Record<string, string>,
+): Promise<Array<string>> {
+  const names = await gitOutput(repository, [
+    'diff',
+    '--name-only',
+    '--no-renames',
+    '-z',
+    implementationCommit,
+    currentRevision,
+    '--',
+    spikeRoot,
+  ])
+  const changes = names
+    .split('\0')
+    .filter(Boolean)
+    .filter((path) => !path.startsWith(spikeEvidenceRoot))
+  const unapproved = []
+  for (const path of changes) {
+    const expectedPatch = authorizedVerifierPatches[path]
+    if (
+      path !== provenanceVerifier ||
+      !expectedPatch ||
+      (await verifierDiffSha256(repository, implementationCommit, currentRevision, path)) !==
+        expectedPatch
+    ) {
+      unapproved.push(path)
+    }
+  }
+  return unapproved.sort()
 }
 
 describe('committed spike provenance and host evidence', () => {
@@ -56,6 +120,7 @@ describe('committed spike provenance and host evidence', () => {
     })
     const packages = (provenance.tanstackAi as { packages: Array<Record<string, unknown>> })
       .packages
+    const currentLockfile = await readFile(resolve(repositoryRoot, 'pnpm-lock.yaml'), 'utf8')
     expect(packages.map((entry) => entry.name)).toEqual([
       '@tanstack/ai',
       '@tanstack/ai-openai',
@@ -69,6 +134,14 @@ describe('committed spike provenance and host evidence', () => {
       })
       expect(entry.tarball).toMatch(/^https:\/\/registry\.npmjs\.org\//)
       expect(entry.integrity).toMatch(/^sha512-/)
+      const packageKey = `${entry.name as string}@${entry.version as string}`.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&',
+      )
+      const integrity = (entry.integrity as string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      expect(currentLockfile).toMatch(
+        new RegExp(`  '${packageKey}':\\n    resolution: \\{integrity: ${integrity}\\}`),
+      )
     }
   })
 
@@ -84,15 +157,31 @@ describe('committed spike provenance and host evidence', () => {
       cwd: repositoryRoot,
     })
     const recorded = await readImplementationIdentity(repositoryRoot, git.implementationCommit)
-    const current = await readImplementationIdentity(repositoryRoot, 'HEAD')
     expect(recorded).toEqual({
       commit: git.implementationCommit,
       tree: git.implementationTree,
       canonicalSourceSetSha256: git.canonicalSourceSetSha256,
       sourceFiles: git.sourceFiles,
     })
-    expect(current.canonicalSourceSetSha256).toBe(recorded.canonicalSourceSetSha256)
-    expect(current.sourceFiles).toEqual(recorded.sourceFiles)
+    const guard = JSON.parse(
+      await readFile(resolve(repositoryRoot, 'config/issue-5-evidence-guard.json'), 'utf8'),
+    ) as {
+      schemaVersion: number
+      implementationCommit: string
+      authorizedVerifierPatches: Record<string, string>
+    }
+    expect(guard).toMatchObject({
+      schemaVersion: 1,
+      implementationCommit: git.implementationCommit,
+    })
+    expect(
+      await readUnapprovedSpikeChanges(
+        repositoryRoot,
+        git.implementationCommit,
+        'HEAD',
+        guard.authorizedVerifierPatches,
+      ),
+    ).toEqual([])
     expect(git.sourceFiles).toEqual(
       expect.arrayContaining([
         'packages/llama-cpp-spike/src/client.ts',
@@ -108,6 +197,80 @@ describe('committed spike provenance and host evidence', () => {
         'pnpm-lock.yaml',
       ]),
     )
+  })
+
+  it('allows unrelated additions and evidence commits but rejects spike source edits', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'llama-spike-evidence-guard-'))
+    const sourcePath = join(repository, spikeRoot, 'src/client.ts')
+    const evidencePath = join(repository, spikeEvidenceRoot, 'run.json')
+    const verifierPath = join(repository, provenanceVerifier)
+    const commit = async (message: string) => {
+      await gitOutput(repository, ['add', '.'])
+      await gitOutput(repository, ['commit', '-m', message])
+      return (await gitOutput(repository, ['rev-parse', 'HEAD'])).trim()
+    }
+    try {
+      await gitOutput(repository, ['init'])
+      await gitOutput(repository, ['config', 'user.name', 'Fixture'])
+      await gitOutput(repository, ['config', 'user.email', 'fixture@example.invalid'])
+      await Promise.all([
+        mkdir(dirname(sourcePath), { recursive: true }),
+        mkdir(dirname(evidencePath), { recursive: true }),
+        mkdir(dirname(verifierPath), { recursive: true }),
+      ])
+      await writeFile(sourcePath, 'export const value = 1\n')
+      await writeFile(evidencePath, '{"run":1}\n')
+      await writeFile(verifierPath, 'export const verifier = 1\n')
+      const implementationCommit = await commit('implementation')
+
+      await mkdir(join(repository, 'packages/unrelated'), { recursive: true })
+      await writeFile(join(repository, 'package.json'), '{"private":true}\n')
+      await writeFile(join(repository, 'packages/unrelated/index.ts'), 'export {}\n')
+      await writeFile(evidencePath, '{"run":2}\n')
+      await writeFile(verifierPath, 'export const verifier = 2\n')
+      const allowedCommit = await commit('unrelated and evidence changes')
+      const authorization = {
+        [provenanceVerifier]: await verifierDiffSha256(
+          repository,
+          implementationCommit,
+          allowedCommit,
+          provenanceVerifier,
+        ),
+      }
+      expect(
+        await readUnapprovedSpikeChanges(
+          repository,
+          implementationCommit,
+          allowedCommit,
+          authorization,
+        ),
+      ).toEqual([])
+
+      await writeFile(sourcePath, 'export const value = 2\n')
+      const sourceEdit = await commit('spike source edit')
+      expect(
+        await readUnapprovedSpikeChanges(
+          repository,
+          implementationCommit,
+          sourceEdit,
+          authorization,
+        ),
+      ).toContain(`${spikeRoot}/src/client.ts`)
+
+      await gitOutput(repository, ['reset', '--hard', allowedCommit])
+      await writeFile(verifierPath, 'export const verifier = 3\n')
+      const verifierEdit = await commit('unapproved verifier edit')
+      expect(
+        await readUnapprovedSpikeChanges(
+          repository,
+          implementationCommit,
+          verifierEdit,
+          authorization,
+        ),
+      ).toContain(provenanceVerifier)
+    } finally {
+      await rm(repository, { recursive: true, force: true })
+    }
   })
 
   it('keeps real evidence sanitized and proves auth, exact request forwarding, deadlines, and cleanup', async () => {
