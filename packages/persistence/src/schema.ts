@@ -1,14 +1,14 @@
 /** Versioned SQLite schema and migration SQL for the persistence package. */
 
+import type { DatabaseSync } from 'node:sqlite'
+
 export const SCHEMA_VERSION = 1 satisfies number
 
 const migrations = new Map<number, string>()
 
-migrations.set(1, `
-  CREATE TABLE schema_migrations (
-    version INTEGER PRIMARY KEY
-  );
-
+migrations.set(
+  1,
+  `
   CREATE TABLE books (
     id TEXT PRIMARY KEY NOT NULL,
     title TEXT NOT NULL,
@@ -62,30 +62,31 @@ migrations.set(1, `
     id TEXT PRIMARY KEY NOT NULL,
     snapshot_json TEXT NOT NULL
   );
-`)
+`,
+)
 
 /** Execute migrations up to SCHEMA_VERSION on the given database. */
-export function migrateSchema(db: { exec(sql: string): void }): void {
+export function migrateSchema(db: DatabaseSync): void {
   // Create migrations tracking table if missing
-  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`)
 
-  const existing = db
-    .prepare("SELECT MAX(version) AS v FROM schema_migrations")
-    .get() as { v: number | null } | null;
+  const existing = db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as {
+    v: number | null
+  } | null
 
-  const current = existing?.v ?? 0;
+  const current = existing?.v ?? 0
   if (current > SCHEMA_VERSION) {
     throw new Error(
       `Database schema version ${current} exceeds supported version ${SCHEMA_VERSION}`,
-    );
+    )
   }
 
   for (let v = current + 1; v <= SCHEMA_VERSION; v += 1) {
-    const sql = migrations.get(v);
+    const sql = migrations.get(v)
     if (!sql) {
-      throw new Error(`Missing migration for version ${v}`);
+      throw new Error(`Missing migration for version ${v}`)
     }
-    db.exec(sql);
-    db.prepare("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)").run(v);
+    db.exec(sql)
+    db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)').run(v)
   }
 }
