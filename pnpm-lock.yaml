@@ -79,6 +79,15 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/audio-assembly:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/contracts:
     dependencies:
       zod:
