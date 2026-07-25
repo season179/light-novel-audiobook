@@ -3,6 +3,7 @@ import {
   AUDIOBOOK_JOB_STAGES,
   AUDIOBOOK_JOB_STATES,
   AudiobookJob,
+  type AudiobookJobSnapshot,
   Book,
   CHAPTER_STATES,
   Chapter,
@@ -417,6 +418,7 @@ describe('audiobook job and numbered output lifecycle', () => {
     const job = new AudiobookJob('job-duplicate-output')
     job.bindCommand(commandIdentity)
     job.start()
+    job.attachBook(bookId)
     job.beginDirection()
     job.beginRendering(1)
     job.recordSegmentCompleted('segment-1')
@@ -428,5 +430,160 @@ describe('audiobook job and numbered output lifecycle', () => {
         chapters: [{ chapterId, path: '/output/shared' }],
       }),
     ).toThrow('pairwise distinct')
+  })
+
+  it('rejects every unreachable stage-specific persistence snapshot', () => {
+    const runningExtracting = new AudiobookJob('snapshot-running-extracting')
+    runningExtracting.bindCommand(commandIdentity)
+    runningExtracting.start()
+
+    const directing = new AudiobookJob('snapshot-directing')
+    directing.bindCommand(commandIdentity)
+    directing.start()
+    directing.attachBook(bookId)
+    directing.beginDirection()
+
+    const rendering = new AudiobookJob('snapshot-rendering')
+    rendering.bindCommand(commandIdentity)
+    rendering.start()
+    rendering.attachBook(bookId)
+    rendering.beginDirection()
+    rendering.beginRendering(2)
+
+    const assembling = AudiobookJob.reconstitute(rendering.snapshot())
+    assembling.recordSegmentCompleted('segment-1')
+    assembling.recordSegmentCompleted('segment-2')
+    assembling.beginAssembly()
+
+    const completed = AudiobookJob.reconstitute(assembling.snapshot())
+    completed.complete({
+      version: new OutputVersion(1),
+      m4bPath: '/output/book-v001.m4b',
+      chapters: [{ chapterId, path: '/output/book-v001-ch01.flac' }],
+    })
+
+    const pending = new AudiobookJob('snapshot-pending').snapshot()
+    const runningSnapshot = runningExtracting.snapshot()
+    const directingSnapshot = directing.snapshot()
+    const renderingSnapshot = rendering.snapshot()
+    const assemblingSnapshot = assembling.snapshot()
+    const completedSnapshot = completed.snapshot()
+    for (const reachable of [
+      pending,
+      runningSnapshot,
+      directingSnapshot,
+      renderingSnapshot,
+      assemblingSnapshot,
+      completedSnapshot,
+    ]) {
+      expect(AudiobookJob.reconstitute(reachable).snapshot()).toEqual(reachable)
+    }
+
+    const warning = {
+      segmentId: 'segment-warning',
+      speakerId: null,
+      voiceProfileId: 'fallback',
+      reason: 'unresolved_speaker' as const,
+    }
+    const impossible: readonly [string, unknown][] = [
+      ['old schema', { ...pending, schemaVersion: 1 }],
+      ['pending with book', { ...pending, bookId }],
+      [
+        'pending with progress',
+        { ...pending, progress: { ...pending.progress, totalSegments: 1 } },
+      ],
+      ['pending directing', { ...pending, stage: 'directing' }],
+      [
+        'extracting with total',
+        { ...runningSnapshot, progress: { ...runningSnapshot.progress, totalSegments: 1 } },
+      ],
+      ['extracting with warning', { ...runningSnapshot, warnings: [warning] }],
+      [
+        'extracting with chapter',
+        {
+          ...runningSnapshot,
+          progress: { ...runningSnapshot.progress, currentChapterId: chapterId },
+        },
+      ],
+      ['directing without book', { ...directingSnapshot, bookId: null }],
+      [
+        'directing with total',
+        { ...directingSnapshot, progress: { ...directingSnapshot.progress, totalSegments: 1 } },
+      ],
+      [
+        'rendering without total',
+        { ...renderingSnapshot, progress: { ...renderingSnapshot.progress, totalSegments: 0 } },
+      ],
+      ['rendering without book', { ...renderingSnapshot, bookId: null }],
+      [
+        'assembling incomplete',
+        {
+          ...assemblingSnapshot,
+          progress: { ...assemblingSnapshot.progress, completedSegments: 1 },
+        },
+      ],
+      [
+        'assembling with chapter',
+        {
+          ...assemblingSnapshot,
+          progress: { ...assemblingSnapshot.progress, currentChapterId: chapterId },
+        },
+      ],
+      ['failed message differs', { ...runningSnapshot, state: 'failed', error: 'failure' }],
+      ['running with error', { ...runningSnapshot, error: 'impossible' }],
+      ['abandoned message differs', { ...runningSnapshot, state: 'abandoned' }],
+      ['completed without book', { ...completedSnapshot, bookId: null }],
+      ['completed invalid command', { ...completedSnapshot, commandIdentity: 'unsafe' }],
+      [
+        'completed with zero total',
+        {
+          ...completedSnapshot,
+          progress: { ...completedSnapshot.progress, completedSegments: 0, totalSegments: 0 },
+        },
+      ],
+      [
+        'completed incomplete',
+        { ...completedSnapshot, progress: { ...completedSnapshot.progress, completedSegments: 0 } },
+      ],
+      [
+        'completed current chapter',
+        {
+          ...completedSnapshot,
+          progress: { ...completedSnapshot.progress, currentChapterId: chapterId },
+        },
+      ],
+      [
+        'completed wrong message',
+        {
+          ...completedSnapshot,
+          progress: { ...completedSnapshot.progress, latestMessage: 'Not done' },
+        },
+      ],
+      ['completed without output', { ...completedSnapshot, output: null }],
+      [
+        'completed invalid version',
+        { ...completedSnapshot, output: { ...completedSnapshot.output, version: 0 } },
+      ],
+      [
+        'completed empty path',
+        { ...completedSnapshot, output: { ...completedSnapshot.output, m4bPath: '' } },
+      ],
+      [
+        'completed duplicate paths',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [{ chapterId, path: completedSnapshot.output?.m4bPath }],
+          },
+        },
+      ],
+    ]
+
+    for (const [name, snapshot] of impossible) {
+      expect(() => AudiobookJob.reconstitute(snapshot as AudiobookJobSnapshot), name).toThrow(
+        DomainError,
+      )
+    }
   })
 })

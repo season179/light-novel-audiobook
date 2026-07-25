@@ -147,7 +147,12 @@ const makeCast = (fallbackRevision = 1): VoiceCast =>
   )
 
 class FakeExtractor implements EpubExtractor {
+  readonly identity: string
   calls: EpubExtractionRequest[] = []
+
+  constructor(identity = 'fake-epub-extractor:version-1:policy-1') {
+    this.identity = identity
+  }
 
   async extract(request: EpubExtractionRequest): Promise<Book> {
     this.calls.push(request)
@@ -334,13 +339,14 @@ interface Harness {
 const harness = (
   options: {
     corruptDirection?: boolean
+    extractorIdentity?: string
     directorIdentity?: string
     speechIdentity?: string
     assemblerIdentity?: string
   } = {},
 ): Harness => {
   const events: string[] = []
-  const extractor = new FakeExtractor()
+  const extractor = new FakeExtractor(options.extractorIdentity)
   const director = new FakeDirector(events, options.corruptDirection, options.directorIdentity)
   const speech = new FakeSpeechEngine(events, options.speechIdentity)
   const assembler = new FakeAssembler(events, options.assemblerIdentity)
@@ -508,6 +514,24 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       }),
     ).rejects.toThrow('stale for the requested generation inputs')
 
+    const changedExtractor = new FakeExtractor('fake-epub-extractor:version-2:policy-1')
+    const changedExtractorUseCase = new GenerateAudiobook({
+      epubExtractor: changedExtractor,
+      directorModel: app.director,
+      speechEngine: app.speech,
+      audioAssembler: app.assembler,
+      jobs: app.repository,
+    })
+    await expect(
+      changedExtractorUseCase.execute({
+        jobId: 'job-bound-inputs',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toThrow('stale for the requested generation inputs')
+    expect(changedExtractor.calls).toHaveLength(0)
+
     const changedSpeech = new FakeSpeechEngine(app.events, 'fake-qwen:model-revision-2:settings-1')
     const changedUseCase = new GenerateAudiobook({
       epubExtractor: app.extractor,
@@ -529,19 +553,31 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.repository.reservations).toHaveLength(1)
   })
 
-  it('includes director and assembly settings in deterministic command identity', () => {
-    const identity = (directorIdentity: string, audioAssemblerIdentity: string) =>
+  it('includes extractor, director, and assembly settings in deterministic command identity', () => {
+    const identity = (
+      epubExtractorIdentity: string,
+      directorIdentity: string,
+      audioAssemblerIdentity: string,
+    ) =>
       createGenerationCommandIdentity({
         epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
         voices: makeCast(),
+        epubExtractorIdentity,
         directorIdentity,
         speechEngineIdentity: app.speech.identity,
         audioAssemblerIdentity,
       })
-    const original = identity(app.director.identity, app.assembler.identity)
-    expect(identity('changed-director-settings', app.assembler.identity)).not.toBe(original)
-    expect(identity(app.director.identity, 'changed-assembly-settings')).not.toBe(original)
+    const original = identity(app.extractor.identity, app.director.identity, app.assembler.identity)
+    expect(
+      identity('changed-extractor-policy', app.director.identity, app.assembler.identity),
+    ).not.toBe(original)
+    expect(
+      identity(app.extractor.identity, 'changed-director-settings', app.assembler.identity),
+    ).not.toBe(original)
+    expect(
+      identity(app.extractor.identity, app.director.identity, 'changed-assembly-settings'),
+    ).not.toBe(original)
   })
 
   it('rejects an active duplicate request and only recovers with explicit abandonment', async () => {
@@ -550,6 +586,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices,
+      epubExtractorIdentity: app.extractor.identity,
       directorIdentity: app.director.identity,
       speechEngineIdentity: app.speech.identity,
       audioAssemblerIdentity: app.assembler.identity,

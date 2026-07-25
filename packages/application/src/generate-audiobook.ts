@@ -73,6 +73,7 @@ export class GenerateAudiobook {
       epubPath: command.epubPath,
       epubSha256: command.epubSha256,
       voices: command.voices,
+      epubExtractorIdentity: this.epubExtractor.identity,
       directorIdentity: this.directorModel.identity,
       speechEngineIdentity: this.speechEngine.identity,
       audioAssemblerIdentity: this.audioAssembler.identity,
@@ -326,7 +327,7 @@ export class GenerateAudiobook {
     const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
     if (
       reservation.bookId !== book.id ||
-      paths.some((path) => path.length === 0) ||
+      paths.some((path) => path.trim().length === 0) ||
       new Set(paths).size !== paths.length ||
       chapterIds.length !== book.chapters.length ||
       chapterIds.some((id, index) => id !== book.chapters[index]?.id) ||

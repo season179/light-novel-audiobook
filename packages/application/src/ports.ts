@@ -13,8 +13,9 @@ export interface EpubExtractionRequest {
   readonly epubPath: string
 }
 
-/** Implemented by issue #28's deterministic EPUB adapter. */
+/** Implemented by issue #28. identity binds extractor version, policy, and settings. */
 export interface EpubExtractor {
+  readonly identity: string
   extract(request: EpubExtractionRequest): Promise<Book>
 }
 
