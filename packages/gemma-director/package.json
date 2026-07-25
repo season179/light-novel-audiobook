@@ -14,6 +14,8 @@
     "smoke:real": "tsx scripts/real-smoke.ts"
   },
   "dependencies": {
+    "@light-novel-audiobook/application": "workspace:*",
+    "@light-novel-audiobook/domain": "workspace:*",
     "@tanstack/ai": "0.42.0",
     "@tanstack/ai-openai": "0.17.1",
     "zod": "4.4.3"

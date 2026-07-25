@@ -1,7 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "profileId": "google-gemma-4-26b-a4b-it-qat-q4-0",
   "baseUrl": "http://127.0.0.1:8080/v1",
   "runtimeRoot": "~/.cache/light-novel-audiobook/issue-6-brain",
-  "timeoutMs": 900000
+  "startupTimeoutMs": 600000,
+  "requestTimeoutMs": 900000,
+  "confidenceThreshold": 0.8
 }

@@ -1,21 +1,28 @@
+import type { DirectorModel as ApplicationDirectorModel } from '@light-novel-audiobook/application'
+import type {
+  Book,
+  Chapter,
+  DirectedSegment as DomainDirectedSegment,
+} from '@light-novel-audiobook/domain'
 import { chat } from '@tanstack/ai'
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
-import { canonicalSha256 } from './canonical-json.js'
+import { canonicalJson, canonicalSha256 } from './canonical-json.js'
 import { GemmaDirectorEndpoint } from './config.js'
 import { classifyDirectorError, DirectorError } from './errors.js'
 import type {
   DirectionOptions,
   DirectionRequest,
-  DirectionResult,
+  DirectorContextProvider,
   DirectorHealth,
-  DirectorModel,
-  DirectorModelIdentity,
+  DirectorParameters,
   DirectorProgressEvent,
   DirectorProgressStore,
   DirectorRunState,
+  DirectorRuntimeLifecycle,
+  GemmaDirectedChapter,
 } from './port.js'
 import {
-  GEMMA_DIRECTOR_IDENTITY,
+  GEMMA_DIRECTOR_MODEL_IDENTITY,
   GEMMA_DIRECTOR_SYSTEM_PROMPT,
   SELECTED_GEMMA_PROFILE,
 } from './profile.js'
@@ -30,7 +37,11 @@ export interface GemmaDirectorModelOptions {
   readonly baseUrl?: string
   /** Server-side credential. Never expose this adapter or key to browser code. */
   readonly apiKey: string
+  readonly confidenceThreshold: number
+  readonly contextProvider: DirectorContextProvider
   readonly progressStore: DirectorProgressStore
+  /** Must unload/stop the runtime owned by the caller or launcher. */
+  readonly lifecycle: DirectorRuntimeLifecycle
   readonly fetch?: typeof globalThis.fetch
 }
 
@@ -38,26 +49,60 @@ interface ModelsResponse {
   readonly data?: readonly { readonly id?: unknown }[]
 }
 
-export class GemmaDirectorModel implements DirectorModel {
-  readonly identity: DirectorModelIdentity = GEMMA_DIRECTOR_IDENTITY
+export class GemmaDirectorModel implements ApplicationDirectorModel {
+  readonly modelIdentity = GEMMA_DIRECTOR_MODEL_IDENTITY
+  readonly identity: string
   readonly endpoint: GemmaDirectorEndpoint
   private readonly apiKey: string
+  private readonly confidenceThreshold: number
+  private readonly contextProvider: DirectorContextProvider
   private readonly progressStore: DirectorProgressStore
+  private readonly lifecycle: DirectorRuntimeLifecycle
   private readonly fetchImplementation: typeof globalThis.fetch
+  private readonly shutdownController = new AbortController()
+  private readonly activeOperations = new Set<Promise<unknown>>()
+  private releasePromise: Promise<void> | undefined
+  private released = false
 
   constructor(options: GemmaDirectorModelOptions) {
     this.endpoint = new GemmaDirectorEndpoint(options.baseUrl)
     if (options.apiKey.trim().length < 16) {
       throw new Error('A server-side llama.cpp API key of at least 16 characters is required')
     }
+    if (
+      !Number.isFinite(options.confidenceThreshold) ||
+      options.confidenceThreshold < 0 ||
+      options.confidenceThreshold > 1
+    ) {
+      throw new Error('Gemma Director confidence threshold must be between zero and one')
+    }
     this.apiKey = options.apiKey
+    this.confidenceThreshold = options.confidenceThreshold
+    this.contextProvider = options.contextProvider
     this.progressStore = options.progressStore
+    this.lifecycle = options.lifecycle
     this.fetchImplementation = options.fetch ?? globalThis.fetch
+    this.identity = canonicalJson({
+      ...this.modelIdentity,
+      parameters: {
+        confidenceThreshold: this.confidenceThreshold,
+        maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
+        seed: SELECTED_GEMMA_PROFILE.seed,
+        temperature: SELECTED_GEMMA_PROFILE.temperature,
+        topP: SELECTED_GEMMA_PROFILE.topP,
+      },
+    })
   }
 
-  async health(
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
-  ): Promise<DirectorHealth> {
+  health(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<DirectorHealth> {
+    this.assertAvailable()
+    return this.trackOperation(this.healthInternal(options))
+  }
+
+  private async healthInternal(options: {
+    signal?: AbortSignal
+    timeoutMs?: number
+  }): Promise<DirectorHealth> {
     const control = this.abortControl(options.signal, options.timeoutMs ?? 2_000, 'health check')
     try {
       const headers = {
@@ -95,13 +140,13 @@ export class GemmaDirectorModel implements DirectorModel {
       const modelIds = modelsValue.data.map((item) => item.id as string)
       return {
         status: healthValue.status,
-        selectedModelAvailable: modelIds.includes(this.identity.modelId),
+        selectedModelAvailable: modelIds.includes(this.modelIdentity.modelId),
         modelIds,
       }
     } catch (error: unknown) {
       throw classifyDirectorError(error, {
         timedOut: control.timedOut(),
-        callerCancelled: control.callerCancelled(),
+        callerCancelled: control.cancelled(),
         operation: 'Gemma Director health check',
       })
     } finally {
@@ -109,27 +154,82 @@ export class GemmaDirectorModel implements DirectorModel {
     }
   }
 
-  async direct(input: DirectionRequest, options: DirectionOptions = {}): Promise<DirectionResult> {
-    const request = parseDirectionRequest(input)
-    const maxTokens = options.maxTokens ?? SELECTED_GEMMA_PROFILE.maxTokens
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options: DirectionOptions = {},
+  ): Promise<GemmaDirectedChapter> {
+    this.assertAvailable()
     if (
-      !Number.isSafeInteger(maxTokens) ||
-      maxTokens < 1 ||
-      maxTokens > SELECTED_GEMMA_PROFILE.maxTokens
+      chapter.bookId !== book.id ||
+      book.chapters.find((candidate) => candidate.id === chapter.id) !== chapter
     ) {
-      throw new Error(
-        `Gemma Director maxTokens must be from 1 through ${SELECTED_GEMMA_PROFILE.maxTokens}`,
+      return Promise.reject(
+        new Error('Director chapter must be the exact chapter owned by the book'),
       )
     }
-    const parameters = Object.freeze({
+    return this.trackOperation(this.directChapterInternal(book, chapter, options))
+  }
+
+  release(): Promise<void> {
+    if (this.releasePromise !== undefined) return this.releasePromise
+    this.released = true
+    this.shutdownController.abort(new DOMException('Gemma Director released', 'AbortError'))
+    const active = [...this.activeOperations]
+    this.releasePromise = (async () => {
+      await Promise.allSettled(active)
+      await this.lifecycle.release()
+    })()
+    return this.releasePromise
+  }
+
+  private async directChapterInternal(
+    book: Book,
+    chapter: Chapter,
+    options: DirectionOptions,
+  ): Promise<GemmaDirectedChapter> {
+    const context = await this.contextProvider.forChapter(book, chapter)
+    const requestId = `direction-${canonicalSha256({
+      bookId: book.id,
+      bookSourceSha256: book.source.sha256,
+      chapterId: chapter.id,
+      identity: this.identity,
+    }).slice(0, 32)}`
+    const request = parseDirectionRequest({
+      requestId,
+      bookId: book.id,
+      bookTitle: book.title,
+      bookAuthor: book.author,
+      bookSourceSha256: book.source.sha256,
+      chapterId: chapter.id,
+      chapterPosition: chapter.position,
+      chapterTitle: chapter.title,
+      passages: chapter.sourcePassages.map((passage) => ({
+        id: passage.id,
+        text: passage.sourceText,
+      })),
+      speakers: context.speakers,
+      narratorSpeakerId: context.narratorSpeakerId,
+      fallbackSpeakerId: context.fallbackSpeakerId,
+      ...(context.storyContext === undefined ? {} : { storyContext: context.storyContext }),
+    })
+    return await this.executeDirection(request, options)
+  }
+
+  private async executeDirection(
+    request: DirectionRequest,
+    options: DirectionOptions,
+  ): Promise<GemmaDirectedChapter> {
+    const parameters: DirectorParameters = Object.freeze({
       seed: SELECTED_GEMMA_PROFILE.seed,
       temperature: SELECTED_GEMMA_PROFILE.temperature,
       topP: SELECTED_GEMMA_PROFILE.topP,
-      maxTokens,
+      maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
+      confidenceThreshold: this.confidenceThreshold,
     })
     const requestPayload = this.requestPayload(request)
     const requestSha256 = canonicalSha256({
-      identity: this.identity,
+      identity: this.modelIdentity,
       parameters,
       request: requestPayload,
     })
@@ -140,6 +240,7 @@ export class GemmaDirectorModel implements DirectorModel {
       completedPassages: number,
       message: string,
       error?: DirectorProgressEvent['error'],
+      warningCount?: number,
     ): Promise<void> => {
       sequence += 1
       const event: DirectorProgressEvent = {
@@ -152,6 +253,7 @@ export class GemmaDirectorModel implements DirectorModel {
         completedPassages,
         totalPassages,
         message,
+        ...(warningCount === undefined ? {} : { warningCount }),
         ...(error === undefined ? {} : { error }),
       }
       try {
@@ -171,7 +273,7 @@ export class GemmaDirectorModel implements DirectorModel {
     try {
       await emit('started', 0, `Direction started for ${totalPassages} passages`)
       await emit('requesting', 0, 'Waiting for the local Gemma director')
-      const adapter = openaiCompatibleText(this.identity.modelId, {
+      const adapter = openaiCompatibleText(this.modelIdentity.modelId, {
         name: 'llama.cpp-gemma-director',
         baseURL: this.endpoint.baseUrl,
         apiKey: this.apiKey,
@@ -188,9 +290,9 @@ export class GemmaDirectorModel implements DirectorModel {
         abortController: control.controller,
         debug: false,
         modelOptions: {
-          temperature: SELECTED_GEMMA_PROFILE.temperature,
-          seed: SELECTED_GEMMA_PROFILE.seed,
-          top_p: SELECTED_GEMMA_PROFILE.topP,
+          temperature: parameters.temperature,
+          seed: parameters.seed,
+          top_p: parameters.topP,
           max_tokens: parameters.maxTokens,
         },
       })
@@ -236,24 +338,48 @@ export class GemmaDirectorModel implements DirectorModel {
         throw new DirectorError('malformed_output', 'Gemma Director response did not complete')
       }
 
-      await emit('validating', 0, 'Validating exact source coverage and speaker semantics')
-      const validated = validateDirectionOutput(output, request)
-      const result: DirectionResult = {
-        requestId: request.requestId,
+      await emit('validating', 0, 'Validating exact source ranges and speaker semantics')
+      const validated = validateDirectionOutput(output, request, this.confidenceThreshold)
+      const warningRanges = new Set(
+        validated.warnings.map(
+          (warning) =>
+            `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+        ),
+      )
+      const segments = validated.annotations.map((annotation): DomainDirectedSegment => {
+        const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
+        const useNarrator = annotation.kind === 'narration' || annotation.kind === 'sound_cue'
+        return Object.freeze({
+          sourcePassageId: annotation.sourcePassageId,
+          sourceText: annotation.sourceText,
+          kind: annotation.kind,
+          speakerId: useNarrator || warningRanges.has(rangeKey) ? null : annotation.speakerId,
+          confidence: annotation.confidence,
+          delivery: annotation.delivery,
+        })
+      })
+      const result: GemmaDirectedChapter = {
         chapterId: request.chapterId,
+        requestId: request.requestId,
         requestSha256,
         outputSha256: canonicalSha256(output),
-        identity: this.identity,
+        modelIdentity: this.modelIdentity,
         parameters,
-        segments: validated.segments,
+        segments: Object.freeze(segments),
         warnings: validated.warnings,
       }
-      await emit('completed', totalPassages, `Directed ${totalPassages} passages`)
+      await emit(
+        'completed',
+        totalPassages,
+        `Directed ${segments.length} fragments from ${totalPassages} passages`,
+        undefined,
+        validated.warnings.length,
+      )
       return Object.freeze(result)
     } catch (error: unknown) {
       const classified = classifyDirectorError(error, {
         timedOut: control.timedOut(),
-        callerCancelled: control.callerCancelled(),
+        callerCancelled: control.cancelled(),
         operation: 'Gemma Director direction request',
       })
       try {
@@ -281,7 +407,17 @@ export class GemmaDirectorModel implements DirectorModel {
     messages: Array<{ role: 'user'; content: string }>
   } {
     const userInput = {
-      chapter_id: request.chapterId,
+      book: {
+        book_id: request.bookId,
+        title: request.bookTitle,
+        author: request.bookAuthor,
+        source_sha256: request.bookSourceSha256,
+      },
+      chapter: {
+        chapter_id: request.chapterId,
+        position: request.chapterPosition,
+        title: request.chapterTitle,
+      },
       story_context: request.storyContext ?? '',
       narrator_speaker_id: request.narratorSpeakerId,
       fallback_speaker_id: request.fallbackSpeakerId,
@@ -300,30 +436,48 @@ export class GemmaDirectorModel implements DirectorModel {
     }
   }
 
+  private trackOperation<T>(operation: Promise<T>): Promise<T> {
+    this.activeOperations.add(operation)
+    void operation.finally(() => this.activeOperations.delete(operation)).catch(() => undefined)
+    return operation
+  }
+
+  private assertAvailable(): void {
+    if (this.released) {
+      throw new DirectorError('released', 'Gemma Director has been released')
+    }
+  }
+
   private abortControl(signal: AbortSignal | undefined, timeoutMs: number, label: string) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
       throw new Error('Gemma Director timeout must be a positive integer')
     }
     const controller = new AbortController()
     let timedOut = false
-    let callerCancelled = false
-    const onCallerAbort = (): void => {
-      callerCancelled = true
-      controller.abort(signal?.reason)
+    let cancelled = false
+    const abortFrom = (source: AbortSignal): void => {
+      cancelled = true
+      controller.abort(source.reason)
     }
+    const onCallerAbort = (): void => abortFrom(signal as AbortSignal)
+    const onShutdown = (): void => abortFrom(this.shutdownController.signal)
     signal?.addEventListener('abort', onCallerAbort, { once: true })
+    this.shutdownController.signal.addEventListener('abort', onShutdown, { once: true })
     if (signal?.aborted) onCallerAbort()
+    if (this.shutdownController.signal.aborted) onShutdown()
     const timer = setTimeout(() => {
       timedOut = true
+      cancelled = false
       controller.abort(new DOMException(`Gemma Director ${label} timed out`, 'TimeoutError'))
     }, timeoutMs)
     return {
       controller,
       timedOut: () => timedOut,
-      callerCancelled: () => callerCancelled,
+      cancelled: () => cancelled,
       dispose: () => {
         clearTimeout(timer)
         signal?.removeEventListener('abort', onCallerAbort)
+        this.shutdownController.signal.removeEventListener('abort', onShutdown)
       },
     }
   }

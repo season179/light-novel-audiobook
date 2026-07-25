@@ -9,6 +9,7 @@ export type DirectorErrorCode =
   | 'schema_validation'
   | 'fidelity'
   | 'progress'
+  | 'released'
   | 'unexpected'
 
 export class DirectorError extends Error {

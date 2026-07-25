@@ -4,6 +4,8 @@ export const DEFAULT_GEMMA_DIRECTOR_BASE_URL = 'http://127.0.0.1:8080/v1'
 export class GemmaDirectorEndpoint {
   readonly baseUrl: string
   readonly origin: string
+  readonly host = '127.0.0.1'
+  readonly port: number
 
   constructor(value = DEFAULT_GEMMA_DIRECTOR_BASE_URL) {
     const url = new URL(value)
@@ -25,7 +27,8 @@ export class GemmaDirectorEndpoint {
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {
       throw new Error(`Invalid Gemma Director port: ${url.port}`)
     }
-    this.origin = `http://127.0.0.1:${port}`
+    this.port = port
+    this.origin = `http://${this.host}:${this.port}`
     this.baseUrl = `${this.origin}/v1`
   }
 }

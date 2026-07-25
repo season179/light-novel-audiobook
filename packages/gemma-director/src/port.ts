@@ -1,3 +1,10 @@
+import type { DirectedChapter } from '@light-novel-audiobook/application'
+import type {
+  Book,
+  Chapter,
+  DirectedSegment as DomainDirectedSegment,
+} from '@light-novel-audiobook/domain'
+
 export const DIRECTOR_SEGMENT_KINDS = [
   'narration',
   'dialogue',
@@ -18,15 +25,29 @@ export interface DirectorSpeaker {
   readonly aliases: readonly string[]
 }
 
-export interface DirectionRequest {
-  /** Stable application run/job ID used by persisted progress records. */
-  readonly requestId: string
-  readonly chapterId: string
-  readonly passages: readonly DirectorSourcePassage[]
+export interface DirectorChapterContext {
   readonly speakers: readonly DirectorSpeaker[]
   readonly narratorSpeakerId: string
   readonly fallbackSpeakerId: string
   readonly storyContext?: string
+}
+
+/** Supplies the story bible/cast context that is deliberately absent from the domain Book. */
+export interface DirectorContextProvider {
+  forChapter(book: Book, chapter: Chapter): Promise<DirectorChapterContext>
+}
+
+export interface DirectionRequest extends DirectorChapterContext {
+  /** Stable application run/job ID used by persisted progress records. */
+  readonly requestId: string
+  readonly bookId: string
+  readonly bookTitle: string
+  readonly bookAuthor: string | null
+  readonly bookSourceSha256: string
+  readonly chapterId: string
+  readonly chapterPosition: number
+  readonly chapterTitle: string
+  readonly passages: readonly DirectorSourcePassage[]
 }
 
 export type DeliveryEmotion =
@@ -46,24 +67,28 @@ export interface DeliveryDirection {
   readonly pauseAfterMs: number
 }
 
-export interface DirectedSegment {
-  readonly sourcePassageId: string
-  readonly sourceText: string
-  readonly kind: DirectorSegmentKind
+/** A source-relative model annotation before mapping to issue #29's DirectedSegment. */
+export interface DirectedAnnotation extends DomainDirectedSegment {
+  readonly sourceStart: number
+  readonly sourceEnd: number
   readonly speakerId: string
-  readonly confidence: number
-  readonly delivery: DeliveryDirection
   readonly unresolvedSpeaker: boolean
   readonly speakerReason: string | null
 }
 
+export type DirectorWarningCode = 'unresolved_speaker' | 'low_confidence_speaker'
+
 export interface DirectorWarning {
-  readonly code: 'unresolved_speaker'
+  readonly code: DirectorWarningCode
   readonly sourcePassageId: string
-  readonly fallbackSpeakerId: string
+  readonly sourceStart: number
+  readonly sourceEnd: number
+  readonly candidateSpeakerId: string | null
   readonly confidence: number
+  readonly confidenceThreshold: number
   readonly message: string
   readonly reviewRequired: true
+  readonly usesFallback: true
 }
 
 export interface DirectorModelIdentity {
@@ -81,16 +106,18 @@ export interface DirectorParameters {
   readonly temperature: 0
   readonly topP: 1
   readonly maxTokens: number
+  readonly confidenceThreshold: number
 }
 
-export interface DirectionResult {
-  readonly requestId: string
+/** Exact issue #29 result plus review data retained by the concrete adapter. */
+export interface GemmaDirectedChapter extends DirectedChapter {
   readonly chapterId: string
+  readonly segments: readonly DomainDirectedSegment[]
+  readonly requestId: string
   readonly requestSha256: string
   readonly outputSha256: string
-  readonly identity: DirectorModelIdentity
+  readonly modelIdentity: DirectorModelIdentity
   readonly parameters: DirectorParameters
-  readonly segments: readonly DirectedSegment[]
   readonly warnings: readonly DirectorWarning[]
 }
 
@@ -119,11 +146,11 @@ export interface DirectorProgressEvent {
   readonly state: DirectorRunState
   readonly completedPassages: number
   readonly totalPassages: number
+  readonly warningCount?: number
   readonly message: string
   readonly error?: DirectorProgressError
 }
 
-/** Minimal persistence port; the M1 application layer should back this with its job store. */
 export interface DirectorProgressStore {
   append(event: DirectorProgressEvent): Promise<void>
 }
@@ -131,7 +158,6 @@ export interface DirectorProgressStore {
 export interface DirectionOptions {
   readonly signal?: AbortSignal
   readonly timeoutMs?: number
-  readonly maxTokens?: number
 }
 
 export interface DirectorHealth {
@@ -140,9 +166,7 @@ export interface DirectorHealth {
   readonly modelIds: readonly string[]
 }
 
-/** Minimal port intentionally independent of the concurrently finalized issue #29 domain types. */
-export interface DirectorModel {
-  readonly identity: DirectorModelIdentity
-  health(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<DirectorHealth>
-  direct(request: DirectionRequest, options?: DirectionOptions): Promise<DirectionResult>
+/** Owns or delegates shutdown/unload of the exact local runtime used by this adapter. */
+export interface DirectorRuntimeLifecycle {
+  release(): Promise<void>
 }

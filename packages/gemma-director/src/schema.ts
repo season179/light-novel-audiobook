@@ -2,10 +2,17 @@ import { z } from 'zod'
 import { DIRECTOR_SEGMENT_KINDS, type DirectionRequest } from './port.js'
 
 const opaqueIdSchema = z.string().min(1).max(256)
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
 
 export const directionRequestSchema = z.strictObject({
   requestId: opaqueIdSchema,
+  bookId: opaqueIdSchema,
+  bookTitle: z.string().min(1),
+  bookAuthor: z.string().min(1).nullable(),
+  bookSourceSha256: sha256Schema,
   chapterId: opaqueIdSchema,
+  chapterPosition: z.int().positive(),
+  chapterTitle: z.string().min(1),
   passages: z
     .array(
       z.strictObject({
@@ -34,6 +41,8 @@ const deliverySchema = z.strictObject({
 
 export const directedWireSegmentSchema = z.strictObject({
   source_passage_id: opaqueIdSchema,
+  source_start: z.int().min(0),
+  source_end: z.int().min(1),
   source_text: z.string().min(1),
   kind: z.enum(DIRECTOR_SEGMENT_KINDS),
   speaker_id: opaqueIdSchema,
@@ -71,7 +80,13 @@ export function parseDirectionRequest(input: unknown): DirectionRequest {
   }
   return {
     requestId: request.requestId,
+    bookId: request.bookId,
+    bookTitle: request.bookTitle,
+    bookAuthor: request.bookAuthor,
+    bookSourceSha256: request.bookSourceSha256,
     chapterId: request.chapterId,
+    chapterPosition: request.chapterPosition,
+    chapterTitle: request.chapterTitle,
     passages: request.passages,
     speakers: request.speakers,
     narratorSpeakerId: request.narratorSpeakerId,
