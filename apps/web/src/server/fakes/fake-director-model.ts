@@ -66,6 +66,11 @@ const findSpeaker = (fragments: readonly Fragment[], dialogueIndex: number): str
 /**
  * FAKE director. Deterministic, offline, and never rewrites source text: every passage is split
  * into fragments whose concatenation reproduces the passage exactly. Issue #30 replaces it.
+ *
+ * Its lifecycle is deliberately as strict as `GemmaDirectorModel`'s: release is terminal and every
+ * later `directChapter()` throws, and a chapter must be the exact chapter owned by the book. A fake
+ * that is more permissive than the real adapter manufactures confidence, which is worse than no
+ * fake at all — this one would have caught a retained-director composition root.
  */
 export class FakeDirectorModel implements DirectorModel {
   readonly identity = 'fake-director/1'
@@ -75,7 +80,17 @@ export class FakeDirectorModel implements DirectorModel {
     return this.released
   }
 
-  async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
+  async directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
+    if (this.released) {
+      throw new Error('Fake director has been released')
+    }
+    if (
+      chapter.bookId !== book.id ||
+      book.chapters.find((candidate) => candidate.id === chapter.id) !== chapter
+    ) {
+      throw new Error('Fake director chapter must be the exact chapter owned by the book')
+    }
+
     const segments: DirectedSegment[] = []
     for (const passage of chapter.sourcePassages) {
       const fragments = splitPassage(passage.sourceText)

@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
@@ -14,13 +14,21 @@ const EXPECTED_CHAPTERS = 3
 
 let harness: TestHarness
 
-const upload = async (fileName = 'the-lantern-courier.epub', marker = 'stub') => {
-  const result = await harness.api.uploadEpub({
-    fileName,
-    bytes: createStubEpubBytes(marker),
-  })
-  if (!result.ok) throw new Error(`Upload unexpectedly failed: ${result.error.message}`)
-  return result.upload
+const upload = (fileName = 'the-lantern-courier.epub', marker = 'stub') =>
+  harness.api.uploadEpub({ fileName, bytes: createStubEpubBytes(marker) })
+
+/** Linux-only precision: `undefined` elsewhere, and the assertions using it are then skipped. */
+const countOpenDescriptors = async (): Promise<number | undefined> => {
+  try {
+    return (await readdir('/proc/self/fd')).length
+  } catch {
+    return undefined
+  }
+}
+
+const startAndFinish = async (uploadId: string) => {
+  const started = await harness.api.startGeneration({ uploadId })
+  return waitForJobState(harness.api, started.jobId, (job) => job.finished)
 }
 
 describe('AudiobookWebApi', () => {
@@ -51,27 +59,21 @@ describe('AudiobookWebApi', () => {
   })
 
   it('reports malformed uploads with an actionable message', async () => {
-    const notAnEpub = await harness.api.uploadEpub({
-      fileName: 'notes.txt',
-      bytes: createStubEpubBytes(),
-    })
-    expect(notAnEpub).toEqual({
-      ok: false,
-      error: { code: 'invalid_upload', message: expect.stringContaining('.epub') },
-    })
+    await expect(
+      harness.api.uploadEpub({ fileName: 'notes.txt', bytes: createStubEpubBytes() }),
+    ).rejects.toThrow(/\.epub/)
 
-    const corrupt = await harness.api.uploadEpub({
-      fileName: 'story.epub',
-      bytes: new TextEncoder().encode('this is not a container at all'),
-    })
-    expect(corrupt.ok).toBe(false)
+    await expect(
+      harness.api.uploadEpub({
+        fileName: 'story.epub',
+        bytes: new TextEncoder().encode('this is not a container at all'),
+      }),
+    ).rejects.toThrow()
   })
 
   it('rejects generation for an upload that is not in the workspace', async () => {
-    const result = await harness.api.startGeneration({ uploadId: 'f'.repeat(64) })
-    expect(result).toEqual({
-      ok: false,
-      error: { code: 'unknown_upload', message: expect.any(String) },
+    await expect(harness.api.startGeneration({ uploadId: 'f'.repeat(64) })).rejects.toMatchObject({
+      code: 'unknown_upload',
     })
   })
 
@@ -82,9 +84,6 @@ describe('AudiobookWebApi', () => {
   it('runs upload to playable chapters and a numbered M4B', async () => {
     const stored = await upload()
     const started = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    expect(started.ok).toBe(true)
-    if (!started.ok) return
-
     const completed = await waitForJobState(harness.api, started.jobId, (job) => job.finished)
 
     expect(completed.state).toBe('completed')
@@ -117,11 +116,58 @@ describe('AudiobookWebApi', () => {
     expect(listing.download?.fileName).toBe(output.m4bFileName)
   })
 
+  /**
+   * Regression for the HIGH finding: `GenerateAudiobook` always releases the director, and a real
+   * director's release is terminal, so a retained director serves the first book and fails every one
+   * after it. Two distinct books through one API instance must both direct successfully.
+   */
+  it('generates two distinct books through one web API instance', async () => {
+    const first = await upload('first-book.epub', 'first')
+    const second = await upload('second-book.epub', 'second')
+    expect(second.uploadId).not.toBe(first.uploadId)
+
+    const firstJob = await startAndFinish(first.uploadId)
+    const secondJob = await startAndFinish(second.uploadId)
+
+    expect(firstJob.state).toBe('completed')
+    expect(secondJob.state).toBe('completed')
+    expect(secondJob.jobId).not.toBe(firstJob.jobId)
+    expect(secondJob.bookId).not.toBe(firstJob.bookId)
+    expect(secondJob.error).toBeNull()
+    expect(secondJob.completedSegments).toBe(EXPECTED_SEGMENTS)
+    expect(secondJob.output?.m4bFileName).toBe('second-book-v001.m4b')
+
+    // One director per run, and each was released exactly once by the use case.
+    expect(harness.directors).toHaveLength(2)
+    expect(harness.directors.map((director) => director.isReleased)).toEqual([true, true])
+  })
+
+  it('serializes runs so two jobs never hold model adapters at the same time', async () => {
+    const gate = new RenderGate(2)
+    await harness.dispose()
+    harness = await createTestHarness({ beforeRender: gate.beforeRender })
+
+    const first = await upload('first-book.epub', 'first')
+    const second = await upload('second-book.epub', 'second')
+
+    const startedFirst = await harness.api.startGeneration({ uploadId: first.uploadId })
+    await waitForJobState(harness.api, startedFirst.jobId, (job) => job.completedSegments >= 1)
+
+    // The second job is accepted but must wait: only one director exists so far.
+    const startedSecond = await harness.api.startGeneration({ uploadId: second.uploadId })
+    expect(startedSecond.job.state).toBe('pending')
+    expect(startedSecond.job.latestMessage).toBe('Waiting for the current generation to finish')
+    expect(harness.directors).toHaveLength(1)
+
+    gate.open()
+    await waitForJobState(harness.api, startedFirst.jobId, (job) => job.finished)
+    await waitForJobState(harness.api, startedSecond.jobId, (job) => job.finished)
+    expect(harness.directors).toHaveLength(2)
+  })
+
   it('reports fallback-speaker warnings for both unresolved and uncast speakers', async () => {
     const stored = await upload()
-    const started = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    if (!started.ok) throw new Error('Generation was not accepted')
-    const completed = await waitForJobState(harness.api, started.jobId, (job) => job.finished)
+    const completed = await startAndFinish(stored.uploadId)
 
     const reasons = new Set(completed.warnings.map((warning) => warning.reason))
     expect(reasons).toEqual(new Set(['unresolved_speaker', 'missing_speaker_voice']))
@@ -134,28 +180,73 @@ describe('AudiobookWebApi', () => {
 
   it('serves chapter audio and the M4B from persisted output only', async () => {
     const stored = await upload()
-    const started = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    if (!started.ok) throw new Error('Generation was not accepted')
-    const completed = await waitForJobState(harness.api, started.jobId, (job) => job.finished)
+    const completed = await startAndFinish(stored.uploadId)
+    const jobId = completed.jobId
     const chapterId = completed.output?.chapters[0]?.chapterId ?? ''
 
-    const chapterFile = await harness.api.readChapterAudioFile({
-      jobId: started.jobId,
-      chapterId,
-    })
-    expect(chapterFile.contentType).toBe('audio/wav')
-    expect(chapterFile.attachment).toBe(false)
-    expect(harness.workspace.contains(chapterFile.path)).toBe(true)
-    expect((await readFile(chapterFile.path)).subarray(0, 4).toString('latin1')).toBe('RIFF')
+    const chapterFile = await harness.api.openChapterAudioFile({ jobId, chapterId })
+    try {
+      expect(chapterFile.descriptor.contentType).toBe('audio/wav')
+      expect(chapterFile.descriptor.attachment).toBe(false)
+      expect(harness.workspace.contains(chapterFile.descriptor.path)).toBe(true)
+      expect((await readFile(chapterFile.descriptor.path)).subarray(0, 4).toString('latin1')).toBe(
+        'RIFF',
+      )
+    } finally {
+      await chapterFile.close()
+    }
 
-    const audiobookFile = await harness.api.readAudiobookFile({ jobId: started.jobId })
-    expect(audiobookFile.contentType).toBe('audio/mp4')
-    expect(audiobookFile.attachment).toBe(true)
-    expect((await stat(audiobookFile.path)).size).toBeGreaterThan(0)
+    const audiobookFile = await harness.api.openAudiobookFile({ jobId })
+    try {
+      expect(audiobookFile.descriptor.contentType).toBe('audio/mp4')
+      expect(audiobookFile.descriptor.attachment).toBe(true)
+      expect((await stat(audiobookFile.descriptor.path)).size).toBeGreaterThan(0)
+    } finally {
+      await audiobookFile.close()
+    }
 
     await expect(
-      harness.api.readChapterAudioFile({ jobId: started.jobId, chapterId: 'nope' }),
-    ).rejects.toThrow(/no generated audio/i)
+      harness.api.openChapterAudioFile({ jobId, chapterId: 'nope' }),
+    ).rejects.toMatchObject({ code: 'output_unavailable' })
+  })
+
+  it('streams the opened file and releases its handle', async () => {
+    const stored = await upload()
+    const completed = await startAndFinish(stored.uploadId)
+    const file = await harness.api.openAudiobookFile({ jobId: completed.jobId })
+
+    const chunks: Uint8Array[] = []
+    for await (const chunk of file.body() as unknown as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk)
+    }
+    const streamed = Buffer.concat(chunks)
+
+    expect(streamed.byteLength).toBe(file.descriptor.byteLength)
+    expect(streamed.subarray(0, 4).toString('latin1')).toBe('RIFF')
+    // Consuming the body closed the handle; a second close must stay harmless.
+    await expect(file.close()).resolves.toBeUndefined()
+  })
+
+  it('releases the file descriptor when a caller abandons the stream', async () => {
+    const stored = await upload()
+    const completed = await startAndFinish(stored.uploadId)
+    const baseline = await countOpenDescriptors()
+
+    // A browser that stops a download cancels the body; the descriptor must not be left to the GC.
+    const file = await harness.api.openAudiobookFile({ jobId: completed.jobId })
+    const reader = file.body().getReader()
+    const first = await reader.read()
+    expect(first.value?.byteLength).toBeGreaterThan(0)
+    if (baseline !== undefined) {
+      expect(await countOpenDescriptors()).toBeGreaterThan(baseline)
+    }
+
+    await reader.cancel()
+
+    if (baseline !== undefined) {
+      expect(await countOpenDescriptors()).toBe(baseline)
+    }
+    await expect(file.close()).resolves.toBeUndefined()
   })
 
   it('rejects a duplicate request while a job is still generating', async () => {
@@ -165,12 +256,10 @@ describe('AudiobookWebApi', () => {
 
     const stored = await upload()
     const started = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    if (!started.ok) throw new Error('Generation was not accepted')
     await waitForJobState(harness.api, started.jobId, (job) => job.completedSegments >= 1)
 
     const duplicate = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    expect(duplicate.ok).toBe(true)
-    if (duplicate.ok) expect(duplicate.job.state).toBe('running')
+    expect(duplicate.job.state).toBe('running')
 
     gate.open()
     await waitForJobState(harness.api, started.jobId, (job) => job.finished)
@@ -187,17 +276,17 @@ describe('AudiobookWebApi', () => {
 
     const stored = await upload()
     const first = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    if (!first.ok) throw new Error('Generation was not accepted')
     const failed = await waitForJobState(harness.api, first.jobId, (job) => job.state === 'failed')
     expect(failed.error).toContain('Simulated speech engine crash')
     expect(harness.speechEngine.rendered).toBe(5)
 
     const second = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    if (!second.ok) throw new Error('Retry was not accepted')
     const completed = await waitForJobState(harness.api, second.jobId, (job) => job.finished)
 
     expect(completed.completedSegments).toBe(EXPECTED_SEGMENTS)
     // Five clips survived the crash, so only the remaining eleven are rendered again.
     expect(harness.speechEngine.rendered).toBe(EXPECTED_SEGMENTS)
+    // The retry needed a second director because the first was already released.
+    expect(harness.directors).toHaveLength(2)
   })
 })

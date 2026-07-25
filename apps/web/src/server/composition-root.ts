@@ -22,21 +22,38 @@ import { createWorkspace, type LocalWorkspace } from './workspace.js'
 /**
  * The single place where concrete adapters meet the application ports.
  *
- * Everything above this file depends on the ports only. Today the boundary adapters are the fakes
- * in `./fakes`, which need no GPU and no models; issue #21 swaps them for the real EPUB extractor
- * (#28), Gemma director (#30), Qwen speech engine (#31), FFmpeg assembler (#32), and SQLite job
- * repository (#27) by replacing the overrides below. No page, component, or server function changes.
+ * Adapters are supplied as **factories, called once per generation run**, not as instances. This is
+ * not a style choice: `GenerateAudiobook` always releases the director when direction finishes, and
+ * a real director's release is terminal, so a retained director would serve the first book and fail
+ * every book after it. A factory may still return a long-lived shared instance where the adapter
+ * genuinely supports repeated use — see the per-field notes.
+ *
+ * Issue #21 replaces the fake factories with the real EPUB extractor (#28), Gemma director (#30),
+ * Qwen speech engine (#31), FFmpeg assembler (#32), and SQLite job repository (#27). No page,
+ * component, server function, or route changes.
  */
-export interface AudiobookAdapterOverrides {
-  readonly epubExtractor?: EpubExtractor | undefined
-  readonly directorModel?: DirectorModel | undefined
-  readonly speechEngine?: SpeechEngine | undefined
-  readonly audioAssembler?: AudioAssembler | undefined
+export interface AudiobookAdapterFactories {
+  /**
+   * MUST return a director that has not been released. `GemmaDirectorModel.release()` memoises its
+   * shutdown and every later `directChapter()` throws, so this has to construct per run.
+   */
+  readonly createDirectorModel?: (() => DirectorModel | Promise<DirectorModel>) | undefined
+  /** Stateless in practice; a shared instance is fine. */
+  readonly createEpubExtractor?: (() => EpubExtractor | Promise<EpubExtractor>) | undefined
+  /**
+   * MAY return a shared instance: `endBatch()` is not terminal for the real Qwen adapter, which
+   * clears its batch and accepts a later `beginBatch()`, and docs/PLAN.md wants the TTS model to
+   * stay loaded across requests. Exactly one begin/end pair happens per run either way.
+   */
+  readonly createSpeechEngine?: (() => SpeechEngine | Promise<SpeechEngine>) | undefined
+  /** Stateless in practice; a shared instance is fine. */
+  readonly createAudioAssembler?: (() => AudioAssembler | Promise<AudioAssembler>) | undefined
+  /** Shared for the whole process: this is the persistence boundary, not a per-run resource. */
   readonly jobs?: JobRepository | undefined
   readonly voices?: VoiceCast | undefined
 }
 
-export interface AudiobookWebApiOptions extends AudiobookAdapterOverrides {
+export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly workspaceRoot?: string | undefined
   readonly workspace?: LocalWorkspace | undefined
 }
@@ -50,12 +67,27 @@ export const createAudiobookWebApi = async (
     options.jobs ?? new InMemoryJobRepository(workspace),
     books,
   )
-  const generate = new GenerateAudiobook({
-    epubExtractor: options.epubExtractor ?? new FakeEpubExtractor(),
-    directorModel: options.directorModel ?? new FakeDirectorModel(),
-    speechEngine: options.speechEngine ?? new FakeSpeechEngine(workspace),
-    audioAssembler: options.audioAssembler ?? new FakeAudioAssembler(),
-    jobs,
+
+  const createEpubExtractor = options.createEpubExtractor ?? (() => new FakeEpubExtractor())
+  const createDirectorModel = options.createDirectorModel ?? (() => new FakeDirectorModel())
+  const createSpeechEngine = options.createSpeechEngine ?? (() => new FakeSpeechEngine(workspace))
+  const createAudioAssembler = options.createAudioAssembler ?? (() => new FakeAudioAssembler())
+
+  // One use case per run, with adapters that have not been released or batched yet.
+  const runner = new GenerationRunner(async () => {
+    const [epubExtractor, directorModel, speechEngine, audioAssembler] = await Promise.all([
+      createEpubExtractor(),
+      createDirectorModel(),
+      createSpeechEngine(),
+      createAudioAssembler(),
+    ])
+    return new GenerateAudiobook({
+      epubExtractor,
+      directorModel,
+      speechEngine,
+      audioAssembler,
+      jobs,
+    })
   })
 
   return new AudiobookWebApi({
@@ -63,7 +95,7 @@ export const createAudiobookWebApi = async (
     uploads: new EpubUploadStore(workspace),
     jobs,
     books,
-    runner: new GenerationRunner(generate),
+    runner,
     voices: options.voices ?? createM1VoiceCast(),
   })
 }

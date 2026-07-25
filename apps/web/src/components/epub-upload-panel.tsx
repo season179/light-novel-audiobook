@@ -31,7 +31,12 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
 
   const recentUploads = useQuery({
     queryKey: ['epub-uploads'],
-    queryFn: () => client.listUploads(),
+    // A failure here only costs a convenience list, so it degrades to empty rather than blocking
+    // the upload form. Real failures the user must act on come back through the mutations.
+    queryFn: async () => {
+      const result = await client.listUploads()
+      return result.ok ? result.value : []
+    },
   })
 
   const uploadMutation = useMutation({
@@ -44,7 +49,7 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
       }
       setFailure(null)
       setRecoverable(null)
-      setUpload(result.upload)
+      setUpload(result.value)
       await queryClient.invalidateQueries({ queryKey: ['epub-uploads'] })
     },
   })
@@ -60,7 +65,7 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
       }
       setFailure(null)
       setRecoverable(null)
-      onStarted(result.jobId)
+      onStarted(result.value.jobId)
     },
   })
 

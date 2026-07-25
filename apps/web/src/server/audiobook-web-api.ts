@@ -1,10 +1,9 @@
-import { stat } from 'node:fs/promises'
 import { extname } from 'node:path'
 import type { JobRepository } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
-import { toWebApiFailure, WebApiError, type WebApiFailure } from './errors.js'
+import { WebApiError } from './errors.js'
 import type { GenerationRunner } from './generation-runner.js'
 import {
   buildJobStateView,
@@ -12,7 +11,7 @@ import {
   fileNameOf,
   type JobStateView,
 } from './job-state-view.js'
-import type { LocalWorkspace } from './workspace.js'
+import type { ContainedFile, LocalWorkspace } from './workspace.js'
 
 export interface EpubUploadView {
   readonly uploadId: string
@@ -24,13 +23,10 @@ export interface EpubUploadView {
   readonly jobId: string
 }
 
-export type UploadEpubResult =
-  | { readonly ok: true; readonly upload: EpubUploadView }
-  | { readonly ok: false; readonly error: WebApiFailure }
-
-export type StartGenerationResult =
-  | { readonly ok: true; readonly jobId: string; readonly job: JobStateView }
-  | { readonly ok: false; readonly error: WebApiFailure }
+export interface StartedGeneration {
+  readonly jobId: string
+  readonly job: JobStateView
+}
 
 export interface ChapterAudioListing {
   readonly jobId: string
@@ -45,6 +41,16 @@ export interface AudioFileDescriptor {
   readonly contentType: string
   readonly byteLength: number
   readonly attachment: boolean
+}
+
+/**
+ * A generated file that has been opened and proven to live inside the workspace. Either consume
+ * `body()` — which closes the handle when the stream ends — or call `close()`.
+ */
+export interface OpenAudioFile {
+  readonly descriptor: AudioFileDescriptor
+  body(): ReadableStream<Uint8Array>
+  close(): Promise<void>
 }
 
 export interface AudiobookWebApiDependencies {
@@ -64,6 +70,8 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.mp3': 'audio/mpeg',
 }
 
+const STREAM_CHUNK_BYTES = 64 * 1024
+
 /** A job is addressed by its EPUB content, so re-opening or refreshing always finds the same run. */
 export const deriveJobId = (uploadSha256: string): string => `job-${uploadSha256.slice(0, 24)}`
 
@@ -80,6 +88,9 @@ const toUploadView = (upload: StoredEpubUpload): EpubUploadView => ({
  * The complete local web API for the M1 flow. It depends only on the application ports and the
  * `GenerateAudiobook` use case, holds no domain rules of its own, and answers every read from
  * persisted job state.
+ *
+ * Every method either returns a value or throws `WebApiError`. Boundaries (server functions, server
+ * routes) normalize that into `WebApiResult`, so a caller has one contract to handle.
  */
 export class AudiobookWebApi {
   private readonly workspace: LocalWorkspace
@@ -98,16 +109,12 @@ export class AudiobookWebApi {
     this.voices = dependencies.voices
   }
 
+  /** Throws `invalid_upload` with an actionable message when the bytes are not an EPUB. */
   async uploadEpub(input: {
     readonly fileName: string
     readonly bytes: Uint8Array
-  }): Promise<UploadEpubResult> {
-    try {
-      const upload = await this.uploads.store(input.fileName, input.bytes)
-      return { ok: true, upload: toUploadView(upload) }
-    } catch (error) {
-      return { ok: false, error: toWebApiFailure(error) }
-    }
+  }): Promise<EpubUploadView> {
+    return toUploadView(await this.uploads.store(input.fileName, input.bytes))
   }
 
   async listUploads(): Promise<readonly EpubUploadView[]> {
@@ -115,58 +122,51 @@ export class AudiobookWebApi {
   }
 
   /**
-   * Starts generation in the background and returns immediately with the job to watch. Rejections
-   * the user can act on (unknown upload, a run already in flight) come back as failures rather than
-   * thrown errors; anything the use case rejects later appears in the job state.
+   * Starts generation in the background and returns the job to watch. Runs are serialized, so a
+   * second job waits rather than competing for the GPU. Throws `generation_rejected` when the user
+   * has to make a choice first, and `unknown_upload` when the EPUB is gone.
    */
   async startGeneration(input: {
     readonly uploadId: string
     readonly recoverAbandoned?: boolean | undefined
-  }): Promise<StartGenerationResult> {
-    try {
-      const upload = await this.uploads.require(input.uploadId)
-      const jobId = deriveJobId(upload.sha256)
-      const recoverAbandoned = input.recoverAbandoned === true
-      const existing = await this.jobs.findJob(jobId)
+  }): Promise<StartedGeneration> {
+    const upload = await this.uploads.require(input.uploadId)
+    const jobId = deriveJobId(upload.sha256)
+    const recoverAbandoned = input.recoverAbandoned === true
 
-      if (this.runner.isActive(jobId)) {
-        const job = await this.getJobState({ jobId })
-        if (job === null) throw new WebApiError('internal', 'Generation state is unavailable.')
-        return { ok: true, jobId, job }
-      }
-      if (existing?.state === 'running' && !recoverAbandoned) {
-        throw new WebApiError(
-          'generation_rejected',
-          'This audiobook is already generating. Refresh to see its progress.',
-        )
-      }
-      if (existing?.state === 'abandoned' && !recoverAbandoned) {
-        throw new WebApiError(
-          'generation_rejected',
-          'This job stopped unexpectedly. Choose “Recover and continue” to take it over.',
-        )
-      }
-
-      this.runner.start({
-        jobId,
-        epubPath: upload.epubPath,
-        epubSha256: upload.sha256,
-        voices: this.voices,
-        ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
-      })
-
-      const job = await this.getJobState({ jobId })
-      return {
-        ok: true,
-        jobId,
-        job: job ?? this.pendingJobView(jobId),
-      }
-    } catch (error) {
-      return { ok: false, error: toWebApiFailure(error) }
+    if (this.runner.isActive(jobId)) {
+      return { jobId, job: await this.requireJobState({ jobId }) }
     }
+
+    const existing = await this.jobs.findJob(jobId)
+    if (existing?.state === 'running' && !recoverAbandoned) {
+      throw new WebApiError(
+        'generation_rejected',
+        'This audiobook is already generating. Refresh to see its progress.',
+      )
+    }
+    if (existing?.state === 'abandoned' && !recoverAbandoned) {
+      throw new WebApiError(
+        'generation_rejected',
+        'This job stopped unexpectedly. Choose “Recover and continue” to take it over.',
+      )
+    }
+
+    this.runner.start({
+      jobId,
+      epubPath: upload.epubPath,
+      epubSha256: upload.sha256,
+      voices: this.voices,
+      ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
+    })
+
+    return { jobId, job: (await this.getJobState({ jobId })) ?? this.pendingJobView(jobId) }
   }
 
-  /** Reads current job state from stored data. Safe to call at any time, including after a refresh. */
+  /**
+   * Reads current job state from stored data. Safe at any time, including after a refresh.
+   * `null` means no such job — a deliberate part of the contract, not a failure.
+   */
   async getJobState(input: { readonly jobId: string }): Promise<JobStateView | null> {
     const job = await this.jobs.findJob(input.jobId)
     if (job === undefined) {
@@ -198,21 +198,29 @@ export class AudiobookWebApi {
     }
   }
 
-  async readChapterAudioFile(input: {
+  async openChapterAudioFile(input: {
     readonly jobId: string
     readonly chapterId: string
-  }): Promise<AudioFileDescriptor> {
-    const path = await this.outputPath(input.jobId, input.chapterId)
-    return this.describeFile(path, fileNameOf(path), false)
+  }): Promise<OpenAudioFile> {
+    return this.openOutputFile(input.jobId, input.chapterId, false)
   }
 
-  async readAudiobookFile(input: { readonly jobId: string }): Promise<AudioFileDescriptor> {
-    const path = await this.outputPath(input.jobId, null)
-    return this.describeFile(path, fileNameOf(path), true)
+  async openAudiobookFile(input: { readonly jobId: string }): Promise<OpenAudioFile> {
+    return this.openOutputFile(input.jobId, null, true)
+  }
+
+  private async openOutputFile(
+    jobId: string,
+    chapterId: string | null,
+    attachment: boolean,
+  ): Promise<OpenAudioFile> {
+    const path = await this.persistedOutputPath(jobId, chapterId)
+    const file = await this.workspace.openContainedFile(path)
+    return this.toOpenAudioFile(file, attachment)
   }
 
   /** Paths only ever come from the persisted job output, never from the request. */
-  private async outputPath(jobId: string, chapterId: string | null): Promise<string> {
+  private async persistedOutputPath(jobId: string, chapterId: string | null): Promise<string> {
     const job = await this.jobs.findJob(jobId)
     if (job === undefined) {
       throw new WebApiError('unknown_job', 'That job is not in the local workspace.')
@@ -221,43 +229,73 @@ export class AudiobookWebApi {
     if (output === null) {
       throw new WebApiError('output_unavailable', 'This audiobook has not been assembled yet.')
     }
-    if (chapterId === null) return this.workspace.assertContains(output.m4bPath)
+    if (chapterId === null) return output.m4bPath
     const chapter = output.chapters.find((entry) => entry.chapterId === chapterId)
     if (chapter === undefined) {
       throw new WebApiError('output_unavailable', 'That chapter has no generated audio yet.')
     }
-    return this.workspace.assertContains(chapter.path)
+    return chapter.path
   }
 
-  private async describeFile(
-    path: string,
-    fileName: string,
-    attachment: boolean,
-  ): Promise<AudioFileDescriptor> {
-    let byteLength: number
-    try {
-      byteLength = (await stat(path)).size
-    } catch {
-      throw new WebApiError(
-        'output_unavailable',
-        'The generated file is missing from the workspace.',
-      )
+  private toOpenAudioFile(file: ContainedFile, attachment: boolean): OpenAudioFile {
+    let closed = false
+    const close = async (): Promise<void> => {
+      if (closed) return
+      closed = true
+      await file.handle.close()
     }
+
+    /**
+     * Read straight from the validated handle rather than wrapping a Node stream: end-of-file,
+     * error, and client cancellation each close the handle on a path this code owns, instead of
+     * depending on which events a stream adapter happens to forward.
+     */
+    const body = (): ReadableStream<Uint8Array> => {
+      let position = 0
+      return new ReadableStream<Uint8Array>({
+        pull: async (controller) => {
+          try {
+            const chunk = Buffer.allocUnsafe(STREAM_CHUNK_BYTES)
+            const { bytesRead } = await file.handle.read(chunk, 0, STREAM_CHUNK_BYTES, position)
+            if (bytesRead === 0) {
+              await close()
+              controller.close()
+              return
+            }
+            position += bytesRead
+            controller.enqueue(chunk.subarray(0, bytesRead))
+          } catch (error) {
+            await close()
+            controller.error(error)
+          }
+        },
+        cancel: async () => {
+          await close()
+        },
+      })
+    }
+
     return {
-      path,
-      fileName,
-      contentType: CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream',
-      byteLength,
-      attachment,
+      descriptor: {
+        path: file.path,
+        fileName: fileNameOf(file.path),
+        contentType: CONTENT_TYPES[extname(file.path).toLowerCase()] ?? 'application/octet-stream',
+        byteLength: file.byteLength,
+        attachment,
+      },
+      body,
+      close,
     }
   }
 
   private pendingJobView(jobId: string): JobStateView {
+    const queued = this.runner.status(jobId) === 'queued'
+    const message = queued ? 'Waiting for the current generation to finish' : 'Starting generation'
     return {
       jobId,
       state: 'pending',
       stage: 'extracting',
-      stageLabel: 'Starting generation',
+      stageLabel: message,
       bookId: null,
       bookTitle: null,
       currentChapterId: null,
@@ -266,7 +304,7 @@ export class AudiobookWebApi {
       completedSegments: 0,
       totalSegments: 0,
       percentComplete: null,
-      latestMessage: 'Starting generation',
+      latestMessage: message,
       error: null,
       active: true,
       finished: false,

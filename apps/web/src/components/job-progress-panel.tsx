@@ -37,7 +37,10 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
   const jobQuery = useQuery({
     queryKey: ['job-state', jobId],
     queryFn: () => client.getJobState({ jobId }),
-    refetchInterval: (query) => (query.state.data?.active === true ? interval : false),
+    refetchInterval: (query) => {
+      const result = query.state.data
+      return result?.ok === true && result.value?.active === true ? interval : false
+    },
     refetchOnMount: 'always',
   })
 
@@ -50,7 +53,8 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     )
   }
 
-  if (jobQuery.isError) {
+  const result = jobQuery.data
+  if (jobQuery.isError || result === undefined) {
     return (
       <section className="panel" aria-labelledby="job-heading">
         <h2 id="job-heading">Generation</h2>
@@ -61,8 +65,19 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     )
   }
 
-  const job = jobQuery.data
-  if (job === null || job === undefined) {
+  if (!result.ok) {
+    return (
+      <section className="panel" aria-labelledby="job-heading">
+        <h2 id="job-heading">Generation</h2>
+        <p className="error" role="alert">
+          {result.error.message}
+        </p>
+      </section>
+    )
+  }
+
+  const job = result.value
+  if (job === null) {
     return (
       <section className="panel" aria-labelledby="job-heading">
         <h2 id="job-heading">Generation</h2>

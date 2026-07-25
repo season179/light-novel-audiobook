@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import type { AudiobookClient } from '../../src/client/audiobook-client.js'
 import type { AudiobookWebApi } from '../../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../../src/server/composition-root.js'
+import { toWebApiResult } from '../../src/server/errors.js'
+import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
 import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace.js'
@@ -12,7 +14,6 @@ import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace
 export class RenderGate {
   private readonly blockAt: number
   private release: (() => void) | undefined
-  private blocked: Promise<void> | undefined
   private seen = 0
 
   constructor(blockAt: number) {
@@ -22,10 +23,9 @@ export class RenderGate {
   readonly beforeRender = async (): Promise<void> => {
     this.seen += 1
     if (this.seen !== this.blockAt) return
-    this.blocked = new Promise<void>((resolve) => {
+    await new Promise<void>((resolve) => {
       this.release = resolve
     })
-    await this.blocked
   }
 
   open(): void {
@@ -36,7 +36,10 @@ export class RenderGate {
 export interface TestHarness {
   readonly api: AudiobookWebApi
   readonly workspace: LocalWorkspace
+  /** The shared fake engine, so a test can count renders across runs. */
   readonly speechEngine: FakeSpeechEngine
+  /** Every director the composition root built, newest last. One per generation run. */
+  readonly directors: readonly FakeDirectorModel[]
   readonly client: AudiobookClient
   dispose(): Promise<void>
 }
@@ -48,26 +51,45 @@ export interface TestHarnessOptions {
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
   const root = await mkdtemp(join(tmpdir(), 'lna-web-'))
   const workspace = await createWorkspace(root)
+  // A shared speech engine is the legitimate factory shape for an adapter whose endBatch is not
+  // terminal, and it lets a test count renders across two runs.
   const speechEngine = new FakeSpeechEngine(workspace, { beforeRender: options.beforeRender })
-  const api = await createAudiobookWebApi({ workspace, speechEngine })
+  const directors: FakeDirectorModel[] = []
+
+  const api = await createAudiobookWebApi({
+    workspace,
+    createSpeechEngine: () => speechEngine,
+    createDirectorModel: () => {
+      const director = new FakeDirectorModel()
+      directors.push(director)
+      return director
+    },
+  })
 
   return {
     api,
     workspace,
     speechEngine,
+    directors,
     client: createInProcessClient(api),
     dispose: () => rm(root, { recursive: true, force: true }),
   }
 }
 
-/** Calls the same API the server functions call, without the HTTP transport. */
+/**
+ * Calls the same API the server functions call, and normalizes failures exactly the same way, so a
+ * component test sees the contract the browser sees.
+ */
 export const createInProcessClient = (api: AudiobookWebApi): AudiobookClient => ({
-  uploadEpub: async ({ file }) =>
-    api.uploadEpub({ fileName: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }),
-  startGeneration: (input) => api.startGeneration(input),
-  getJobState: (input) => api.getJobState(input),
-  listChapterAudio: (input) => api.listChapterAudio(input),
-  listUploads: () => api.listUploads(),
+  uploadEpub: ({ file }) =>
+    toWebApiResult('uploadEpub', async () =>
+      api.uploadEpub({ fileName: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }),
+    ),
+  startGeneration: (input) => toWebApiResult('startGeneration', () => api.startGeneration(input)),
+  getJobState: (input) => toWebApiResult('getJobState', () => api.getJobState(input)),
+  listChapterAudio: (input) =>
+    toWebApiResult('listChapterAudio', () => api.listChapterAudio(input)),
+  listUploads: () => toWebApiResult('listUploads', () => api.listUploads()),
 })
 
 export const waitForJobState = async (

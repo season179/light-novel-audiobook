@@ -13,31 +13,82 @@ pnpm --filter @light-novel-audiobook/web dev   # http://localhost:3000
 | --- | --- |
 | `src/server/audiobook-web-api.ts` | The whole local API surface. Depends on the application ports only. |
 | `src/server/composition-root.ts` | The single place adapters are chosen and injected. |
+| `src/server/generation-runner.ts` | Runs generation outside the request, one run at a time. |
 | `src/server/fakes/` | Offline fake adapters — no GPU, no models. Replaced by the real ones in #21. |
 | `src/api/audiobook-server-fns.ts` | TanStack Start server functions; thin wrappers over the API. |
 | `src/routes/api.jobs.*` | Server routes that stream generated audio and the M4B. |
 | `src/client/audiobook-client.ts` | The interface pages depend on, so components never know the transport. |
 | `src/components/` | Presentational React only. No domain rules, no model orchestration. |
+| `src/start.ts` | Host/Origin allowlist and anti-CSRF at the HTTP boundary. |
+
+## The composition-root seam (read this before wiring #21)
+
+Adapters are supplied as **factories called once per generation run**, not as instances:
+
+```ts
+import { createAudiobookWebApi } from './server/composition-root.js'
+
+const api = await createAudiobookWebApi({
+  createEpubExtractor: () => sharedExtractor,          // may be shared
+  createDirectorModel: () => new GemmaDirectorModel(config),  // MUST be fresh per run
+  createSpeechEngine: () => sharedQwenEngine,          // may be shared
+  createAudioAssembler: () => sharedFfmpegAssembler,   // may be shared
+  jobs: sqliteJobRepository,                           // shared: this is persistence
+  voices: approvedCast,                                // optional; defaults to the PLAN §7 M1 cast
+  workspaceRoot: '/path/outside/the/repo',             // optional
+})
+```
+
+Why `createDirectorModel` has to construct per run: `GenerateAudiobook` always calls
+`DirectorModel.release()` when direction finishes, and `GemmaDirectorModel.release()` memoises its
+shutdown so every later `directChapter()` throws `Gemma Director has been released`. A retained
+director would generate the first book and fail every book after it.
+
+Why the others may be shared: the real Qwen adapter's `endBatch()` clears its batch and accepts a
+later `beginBatch()`, and docs/PLAN.md wants the TTS model to stay loaded across requests. The
+extractor and assembler hold no lifecycle. Exactly one begin/end batch pair happens per run either way.
+
+Runs are **serialized** by `GenerationRunner`: a second job is accepted and queued rather than run
+concurrently, because two concurrent runs would put two models on one 16 GB card — what
+`packages/gpu-lease` exists to prevent. A queued job reports `state: 'pending'` with
+`latestMessage: 'Waiting for the current generation to finish'`.
 
 ## Server functions
 
-| Function | Method | Input | Output |
+Every function returns `WebApiResult<T>`: `{ ok: true, value }` or
+`{ ok: false, error: { code, message } }`. Codes: `invalid_request`, `invalid_upload`,
+`unknown_upload`, `unknown_job`, `generation_rejected`, `output_unavailable`, `internal`. Unexpected
+adapter failures are logged server-side and reported as a generic `internal` message — infrastructure
+detail never reaches the browser.
+
+| Function | Method | Input | `value` |
 | --- | --- | --- | --- |
-| `uploadEpubFn` | POST | `FormData` with `file` | `{ ok: true, upload }` or `{ ok: false, error }` |
-| `startGenerationFn` | POST | `{ uploadId, recoverAbandoned? }` | `{ ok: true, jobId, job }` or `{ ok: false, error }` |
-| `getJobStateFn` | GET | `{ jobId }` | `JobStateView \| null` |
+| `uploadEpubFn` | POST | `FormData` with `file` | `EpubUploadView` |
+| `startGenerationFn` | POST | `{ uploadId, recoverAbandoned? }` | `{ jobId, job }` |
+| `getJobStateFn` | GET | `{ jobId }` | `JobStateView \| null` (`null` = no such job) |
 | `listChapterAudioFn` | GET | `{ jobId }` | `ChapterAudioListing` |
 | `listUploadsFn` | GET | — | `EpubUploadView[]` |
 
 Binary routes: `GET /api/jobs/$jobId/audio/$chapterId` (inline chapter audio) and
 `GET /api/jobs/$jobId/download` (the M4B as an attachment). Both resolve paths from persisted job
-output only, and refuse anything outside the workspace.
+output only, then prove containment on **canonical** paths and refuse symlinked files or parent
+directories. The validated file handle is what gets streamed, so the file cannot be swapped between
+check and read, and the handle is closed on end-of-file, error, and client cancellation.
 
 ## Local workspace
 
 EPUBs, segment WAVs, and exports live outside the repository, by default in
-`~/.local/share/light-novel-audiobook/workspace`. Override it with `AUDIOBOOK_WORKSPACE_DIR`; a path
-inside the repository is refused so book text and audio can never be committed.
+`~/.local/share/light-novel-audiobook/workspace`. Override it with `AUDIOBOOK_WORKSPACE_DIR`. A path
+inside the repository is refused, and so is one that only *resolves* inside it through a symlink.
+
+## HTTP boundary
+
+`AUDIOBOOK_WEB_ORIGINS` (comma-separated) sets the exact allowed origins; it defaults to
+`http://localhost:3000` and `http://127.0.0.1:3000`. Requests whose `Host` is not in that list are
+refused on every method, which is what stops DNS rebinding — `Sec-Fetch-Site: same-origin` is
+browser-relative and a rebound host satisfies it. Anti-CSRF additionally covers every state-changing
+request; safe methods are exempt from *CSRF only*, because a top-level navigation legitimately
+arrives with `Sec-Fetch-Site: none`.
 
 ## Refresh safety
 

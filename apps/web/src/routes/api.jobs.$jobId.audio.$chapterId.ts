@@ -9,13 +9,14 @@ export const Route = createFileRoute('/api/jobs/$jobId/audio/$chapterId')({
       GET: async ({ params }) => {
         try {
           const api = await getAudiobookWebApi()
-          const file = await api.readChapterAudioFile({
-            jobId: params.jobId,
-            chapterId: params.chapterId,
-          })
-          return audioFileResponse(file)
+          return audioFileResponse(
+            await api.openChapterAudioFile({
+              jobId: params.jobId,
+              chapterId: params.chapterId,
+            }),
+          )
         } catch (error) {
-          return audioFileErrorResponse(error)
+          return audioFileErrorResponse(error, 'openChapterAudioFile')
         }
       },
     },

@@ -1,9 +1,12 @@
-import { createReadStream } from 'node:fs'
-import { Readable } from 'node:stream'
-import type { AudioFileDescriptor } from './audiobook-web-api.js'
-import { toWebApiFailure, WebApiError } from './errors.js'
+import type { OpenAudioFile } from './audiobook-web-api.js'
+import { toPublicFailure } from './errors.js'
 
-const NOT_FOUND_CODES = new Set(['unknown_job', 'unknown_upload', 'output_unavailable'])
+const NOT_FOUND_CODES = new Set([
+  'unknown_job',
+  'unknown_upload',
+  'output_unavailable',
+  'invalid_request',
+])
 
 const contentDisposition = (fileName: string, attachment: boolean): string => {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
@@ -11,24 +14,28 @@ const contentDisposition = (fileName: string, attachment: boolean): string => {
   return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
 }
 
-/** Streams a generated file from the workspace; the file is never buffered in memory. */
-export const audioFileResponse = (file: AudioFileDescriptor): Response => {
-  const stream = Readable.toWeb(createReadStream(file.path)) as ReadableStream<Uint8Array>
-  return new Response(stream, {
+/**
+ * Streams an already-validated workspace file from its open handle. Nothing is buffered, and the
+ * handle came from the containment check itself, so the file cannot be swapped between check and read.
+ */
+export const audioFileResponse = (file: OpenAudioFile): Response => {
+  const { descriptor } = file
+  return new Response(file.body(), {
     status: 200,
     headers: {
-      'Content-Type': file.contentType,
-      'Content-Length': String(file.byteLength),
-      'Content-Disposition': contentDisposition(file.fileName, file.attachment),
+      'Content-Type': descriptor.contentType,
+      'Content-Length': String(descriptor.byteLength),
+      'Content-Disposition': contentDisposition(descriptor.fileName, descriptor.attachment),
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
     },
   })
 }
 
-export const audioFileErrorResponse = (error: unknown): Response => {
-  const failure = toWebApiFailure(error)
-  const status = error instanceof WebApiError && NOT_FOUND_CODES.has(failure.code) ? 404 : 500
+/** Sanitized: an unexpected adapter failure is logged server-side, never echoed to the browser. */
+export const audioFileErrorResponse = (error: unknown, context: string): Response => {
+  const failure = toPublicFailure(error, context)
+  const status = NOT_FOUND_CODES.has(failure.code) ? 404 : 500
   return new Response(failure.message, {
     status,
     headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },

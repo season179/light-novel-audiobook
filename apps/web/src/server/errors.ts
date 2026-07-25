@@ -1,8 +1,9 @@
 /**
- * Serializable failure vocabulary for the local web API. Every boundary failure the browser can
- * act on gets a stable code so the UI never has to parse error prose.
+ * Serializable failure vocabulary for the local web API. Every boundary failure the browser can act
+ * on gets a stable code, so a caller switches on `code` and never parses error prose.
  */
 export const WEB_API_ERROR_CODES = [
+  'invalid_request',
   'invalid_upload',
   'unknown_upload',
   'unknown_job',
@@ -18,6 +19,15 @@ export interface WebApiFailure {
   readonly message: string
 }
 
+/**
+ * The one shape every operation returns. `ok: true` always carries `value`; `ok: false` always
+ * carries a `WebApiFailure`. Reads that legitimately have "no such thing" answers use
+ * `{ ok: true, value: null }` so a caller can tell absence from failure.
+ */
+export type WebApiResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: WebApiFailure }
+
 export class WebApiError extends Error {
   readonly code: WebApiErrorCode
 
@@ -32,11 +42,35 @@ export class WebApiError extends Error {
   }
 }
 
-/** Never leaks a stack trace or adapter internals to the browser. */
-export const toWebApiFailure = (error: unknown): WebApiFailure => {
+const UNEXPECTED_MESSAGE =
+  'The local server hit an unexpected error. Check the server log for details.'
+
+/**
+ * Only messages this layer authored reach the browser. An unexpected adapter failure — a SQLite
+ * path, a model stack trace — is logged here and replaced with a generic message, because the
+ * browser is not the place to publish infrastructure internals.
+ */
+export const toPublicFailure = (error: unknown, context: string): WebApiFailure => {
   if (error instanceof WebApiError) return error.failure
-  return {
-    code: 'internal',
-    message: error instanceof Error ? error.message : String(error),
+  console.error(`[audiobook-web-api] unexpected failure in ${context}:`, error)
+  return { code: 'internal', message: UNEXPECTED_MESSAGE }
+}
+
+/** Normalizes one operation into `WebApiResult`. Used at every boundary, with no exceptions. */
+export const toWebApiResult = async <T>(
+  context: string,
+  operation: () => Promise<T>,
+): Promise<WebApiResult<T>> => {
+  try {
+    return { ok: true, value: await operation() }
+  } catch (error) {
+    return { ok: false, error: toPublicFailure(error, context) }
   }
+}
+
+export const requireIdInput = (value: unknown, label: string): string => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new WebApiError('invalid_request', `${label} is required.`)
+  }
+  return value
 }
