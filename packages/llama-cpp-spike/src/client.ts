@@ -235,7 +235,12 @@ export class LlamaCppSpikeClient {
           ],
           abortController: controller,
           debug: false,
-          modelOptions: { temperature: 0, seed: 5, max_tokens: 4_096 },
+          modelOptions: {
+            temperature: 0,
+            seed: 5,
+            max_tokens: 4_096,
+            ignore_eos: true,
+          },
         })
         for await (const event of stream) {
           if (event.type === 'RUN_ERROR') throw event
