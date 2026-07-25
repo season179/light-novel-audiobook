@@ -440,8 +440,14 @@ async function main(): Promise<void> {
     const cancellationReachedServer = await observeBusySlot(2_000, apiKey)
     cancellationController.abort(new DOMException('host cancellation probe', 'AbortError'))
     const cancellation = await cancellationResult
-    if (!cancellationReachedServer)
-      throw new Error('Cancellation probe was not observed in a server slot')
+    if (!cancellationReachedServer) {
+      const outcome = cancellation.completed
+        ? 'completed before observation'
+        : cancellation.error instanceof SpikeError
+          ? `failed as ${cancellation.error.code}`
+          : 'failed without a classified error'
+      throw new Error(`Cancellation probe was not observed in a server slot (${outcome})`)
+    }
     if (cancellation.completed || !(cancellation.error instanceof SpikeError)) {
       throw new Error('TanStack AI cancellation did not return a classified error')
     }
