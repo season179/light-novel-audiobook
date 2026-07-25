@@ -28,6 +28,7 @@ import {
   type SpeechEngine,
   type SpeechRenderRequest,
 } from '../src/index.js'
+import { splitterIdentity } from '../src/split-directed-segments.js'
 
 const sourceHash = 'b'.repeat(64)
 const bookId = StableIds.book(sourceHash)
@@ -569,6 +570,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
         directorIdentity,
         speechEngineIdentity: app.speech.identity,
         audioAssemblerIdentity,
+        splitterIdentity: splitterIdentity(),
       })
     const original = identity(app.extractor.identity, app.director.identity, app.assembler.identity)
     expect(
@@ -592,6 +594,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       directorIdentity: app.director.identity,
       speechEngineIdentity: app.speech.identity,
       audioAssemblerIdentity: app.assembler.identity,
+      splitterIdentity: splitterIdentity(),
     })
     const active = new AudiobookJob('job-active')
     active.bindCommand(identity)

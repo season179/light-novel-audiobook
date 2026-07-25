@@ -1,11 +1,7 @@
 import { VoiceCast, VoiceProfile, type VoiceProfileProps } from '@light-novel-audiobook/domain'
 import { describe, expect, it } from 'vitest'
 import { createGenerationCommandIdentity } from '../src/generation-command-identity.js'
-import {
-  DEFAULT_SPLITTER_POLICY,
-  SEPARATOR_OVERSHOOT,
-  splitterIdentity,
-} from '../src/split-directed-segments.js'
+import { SEPARATOR_OVERSHOOT, splitterIdentity } from '../src/split-directed-segments.js'
 
 const profile = (
   id: string,
@@ -39,7 +35,8 @@ const baseInput = {
   directorIdentity: 'director-identity',
   speechEngineIdentity: 'speech-identity',
   audioAssemblerIdentity: 'assembler-identity',
-} as const
+  splitterIdentity: splitterIdentity(),
+}
 
 describe('splitter identity is bound into the generation command identity (#55 r2, MEDIUM 2)', () => {
   it('splitterIdentity changes when the budget or overshoot changes', () => {
@@ -57,15 +54,6 @@ describe('splitter identity is bound into the generation command identity (#55 r
     })
     expect(at400).not.toBe(at380)
     expect(at400).not.toBe(tighterOvershoot)
-  })
-
-  it('defaults to the production splitter policy, so the binding is always present', () => {
-    const defaulted = createGenerationCommandIdentity(baseInput)
-    const explicitDefault = createGenerationCommandIdentity({
-      ...baseInput,
-      splitterIdentity: splitterIdentity(DEFAULT_SPLITTER_POLICY),
-    })
-    expect(defaulted).toBe(explicitDefault)
   })
 
   it('changing the splitter budget invalidates the generation command identity', () => {
