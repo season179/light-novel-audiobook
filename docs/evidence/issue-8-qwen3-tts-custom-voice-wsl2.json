@@ -1,0 +1,2110 @@
+{
+  "evidenceSchemaVersion": 1,
+  "capturedAt": "2026-07-25T06:34:47.994936Z",
+  "issue": 8,
+  "run": {
+    "runId": "qwen3tts-50a6642ec71f15a3-20260725T063447993240Z-394e8bf293b6",
+    "sourceIdentity": "50a6642ec71f15a36b6fb8769d01056bd8f4ebb4336012b53934b1dcbc61d144",
+    "createNewImmutable": true,
+    "artifactManifestSha256": "74ca4bea51924c12616de05f03eca0c534cdc404649ca1a6716b4c5e146e635d",
+    "rawManifestSha256": "c6441e2e27544fa006bc4592eb9cbad940bd8cf46dee736f663280c4a9a905ce"
+  },
+  "provenance": {
+    "generatedFromCommit": "ce94ed7acef3e288dd9e95daf50e3bc5e6e9803d",
+    "sourceHashes": {
+      "config": "52eb83769efd950f0fbc0d7936db0e3381b133582e2a405f8f074f4458670d27",
+      "core": "5417648c62276657e8f5d08e6c51a047c6e594ae79ea3730a5306e88d52154b9",
+      "probe": "175466c596f01f3d5ac42b4ea6a49eeeb8c32a83a8fef6d205aa8a29cb914f2f",
+      "pyproject": "cfd3018ff8c93ca56634e525b14a5e9a84ff3a2fff8ebd2cf5522f546fb8bf9f",
+      "shell": "034848b38339937eb71b0ceace046ea13c18d70e1c863fa6515949c197d7f807",
+      "tests": "83a2b16033126c71daceb4708774d3942c52107a72ee9a5f65b7b2f1e58ef8de",
+      "uvLock": "6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9"
+    },
+    "sourceIdentity": "50a6642ec71f15a36b6fb8769d01056bd8f4ebb4336012b53934b1dcbc61d144",
+    "configurationSha256": "52eb83769efd950f0fbc0d7936db0e3381b133582e2a405f8f074f4458670d27",
+    "model": {
+      "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      "createdAt": "2026-01-21T08:56:49.000Z",
+      "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+      "license": "Apache-2.0",
+      "huggingFaceUsedStorageBytes": 4523965995,
+      "revisionPayloadBytes": 4520218951,
+      "completeFileCount": 13,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1519,
+          "sha256": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+        },
+        {
+          "path": "README.md",
+          "size": 57846,
+          "sha256": "64f65e809b51cc0c35f393fbbfcc2d735c0cb3fdbbc6f3fdc4a5e6ce55e9d088"
+        },
+        {
+          "path": "config.json",
+          "size": 4908,
+          "sha256": "17a07f527a1c25ea30b4e023a184482a23d3e279d697b1dc81b1bde498d29cf9"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 245,
+          "sha256": "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa"
+        },
+        {
+          "path": "merges.txt",
+          "size": 1671839,
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 3833402552,
+          "sha256": "38b1d5971bdbd982b561cccec982669a53b0537c3cf5e9bd4778ed07bb2f5137"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "size": 127,
+          "sha256": "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119"
+        },
+        {
+          "path": "speech_tokenizer/config.json",
+          "size": 2336,
+          "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167"
+        },
+        {
+          "path": "speech_tokenizer/configuration.json",
+          "size": 76,
+          "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd"
+        },
+        {
+          "path": "speech_tokenizer/model.safetensors",
+          "size": 682293092,
+          "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"
+        },
+        {
+          "path": "speech_tokenizer/preprocessor_config.json",
+          "size": 234,
+          "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 7344,
+          "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"
+        },
+        {
+          "path": "vocab.json",
+          "size": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ],
+      "loadedFromLocalPath": true,
+      "localPathReason": "qwen-tts 0.1.1 processor loading does not propagate a remote revision; a fully verified local snapshot avoids revision drift"
+    },
+    "runtime": {
+      "pythonVersion": "3.12.13",
+      "uvVersion": "uv 0.11.7",
+      "uvLockSha256": "6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9",
+      "environmentManifestSha256": "e2010b3e6b43bbfa269e8b7ef3e3c149d83d448dc5265cedab1b36e807220fd3",
+      "packageCount": 103,
+      "packages": [
+        {
+          "name": "accelerate",
+          "version": "1.12.0"
+        },
+        {
+          "name": "annotated-doc",
+          "version": "0.0.4"
+        },
+        {
+          "name": "annotated-types",
+          "version": "0.8.0"
+        },
+        {
+          "name": "anyio",
+          "version": "4.14.2"
+        },
+        {
+          "name": "audioread",
+          "version": "3.1.0"
+        },
+        {
+          "name": "brotli",
+          "version": "1.2.0"
+        },
+        {
+          "name": "certifi",
+          "version": "2026.7.22"
+        },
+        {
+          "name": "cffi",
+          "version": "2.1.0"
+        },
+        {
+          "name": "charset-normalizer",
+          "version": "3.4.9"
+        },
+        {
+          "name": "click",
+          "version": "8.4.2"
+        },
+        {
+          "name": "decorator",
+          "version": "5.3.1"
+        },
+        {
+          "name": "einops",
+          "version": "0.8.2"
+        },
+        {
+          "name": "fastapi",
+          "version": "0.140.0"
+        },
+        {
+          "name": "filelock",
+          "version": "3.32.0"
+        },
+        {
+          "name": "flatbuffers",
+          "version": "25.12.19"
+        },
+        {
+          "name": "fsspec",
+          "version": "2026.6.0"
+        },
+        {
+          "name": "gradio",
+          "version": "6.17.3"
+        },
+        {
+          "name": "gradio_client",
+          "version": "2.5.0"
+        },
+        {
+          "name": "groovy",
+          "version": "0.1.2"
+        },
+        {
+          "name": "h11",
+          "version": "0.16.0"
+        },
+        {
+          "name": "hf-gradio",
+          "version": "0.4.1"
+        },
+        {
+          "name": "hf-xet",
+          "version": "1.5.2"
+        },
+        {
+          "name": "httpcore",
+          "version": "1.0.9"
+        },
+        {
+          "name": "httpx",
+          "version": "0.28.1"
+        },
+        {
+          "name": "huggingface_hub",
+          "version": "0.36.2"
+        },
+        {
+          "name": "idna",
+          "version": "3.18"
+        },
+        {
+          "name": "jinja2",
+          "version": "3.1.6"
+        },
+        {
+          "name": "joblib",
+          "version": "1.5.3"
+        },
+        {
+          "name": "lazy-loader",
+          "version": "0.5"
+        },
+        {
+          "name": "librosa",
+          "version": "0.11.0"
+        },
+        {
+          "name": "llvmlite",
+          "version": "0.48.0"
+        },
+        {
+          "name": "markdown-it-py",
+          "version": "4.2.0"
+        },
+        {
+          "name": "markupsafe",
+          "version": "3.0.3"
+        },
+        {
+          "name": "mdurl",
+          "version": "0.1.2"
+        },
+        {
+          "name": "mpmath",
+          "version": "1.3.0"
+        },
+        {
+          "name": "msgpack",
+          "version": "1.2.1"
+        },
+        {
+          "name": "narwhals",
+          "version": "2.24.0"
+        },
+        {
+          "name": "networkx",
+          "version": "3.6.1"
+        },
+        {
+          "name": "numba",
+          "version": "0.66.0"
+        },
+        {
+          "name": "numpy",
+          "version": "2.4.6"
+        },
+        {
+          "name": "nvidia-cublas-cu12",
+          "version": "12.8.4.1"
+        },
+        {
+          "name": "nvidia-cuda-cupti-cu12",
+          "version": "12.8.90"
+        },
+        {
+          "name": "nvidia-cuda-nvrtc-cu12",
+          "version": "12.8.93"
+        },
+        {
+          "name": "nvidia-cuda-runtime-cu12",
+          "version": "12.8.90"
+        },
+        {
+          "name": "nvidia-cudnn-cu12",
+          "version": "9.10.2.21"
+        },
+        {
+          "name": "nvidia-cufft-cu12",
+          "version": "11.3.3.83"
+        },
+        {
+          "name": "nvidia-cufile-cu12",
+          "version": "1.13.1.3"
+        },
+        {
+          "name": "nvidia-curand-cu12",
+          "version": "10.3.9.90"
+        },
+        {
+          "name": "nvidia-cusolver-cu12",
+          "version": "11.7.3.90"
+        },
+        {
+          "name": "nvidia-cusparse-cu12",
+          "version": "12.5.8.93"
+        },
+        {
+          "name": "nvidia-cusparselt-cu12",
+          "version": "0.7.1"
+        },
+        {
+          "name": "nvidia-nccl-cu12",
+          "version": "2.27.5"
+        },
+        {
+          "name": "nvidia-nvjitlink-cu12",
+          "version": "12.8.93"
+        },
+        {
+          "name": "nvidia-nvshmem-cu12",
+          "version": "3.3.20"
+        },
+        {
+          "name": "nvidia-nvtx-cu12",
+          "version": "12.8.90"
+        },
+        {
+          "name": "onnxruntime",
+          "version": "1.28.0"
+        },
+        {
+          "name": "orjson",
+          "version": "3.11.9"
+        },
+        {
+          "name": "packaging",
+          "version": "26.2"
+        },
+        {
+          "name": "pandas",
+          "version": "3.0.5"
+        },
+        {
+          "name": "pillow",
+          "version": "12.3.0"
+        },
+        {
+          "name": "platformdirs",
+          "version": "4.11.0"
+        },
+        {
+          "name": "pooch",
+          "version": "1.9.0"
+        },
+        {
+          "name": "protobuf",
+          "version": "7.35.1"
+        },
+        {
+          "name": "psutil",
+          "version": "7.2.2"
+        },
+        {
+          "name": "pycparser",
+          "version": "3.0"
+        },
+        {
+          "name": "pydantic",
+          "version": "2.13.4"
+        },
+        {
+          "name": "pydantic_core",
+          "version": "2.46.4"
+        },
+        {
+          "name": "pydub",
+          "version": "0.25.1"
+        },
+        {
+          "name": "pygments",
+          "version": "2.20.0"
+        },
+        {
+          "name": "python-dateutil",
+          "version": "2.9.0.post0"
+        },
+        {
+          "name": "python-multipart",
+          "version": "0.0.32"
+        },
+        {
+          "name": "pytz",
+          "version": "2026.2"
+        },
+        {
+          "name": "pyyaml",
+          "version": "6.0.3"
+        },
+        {
+          "name": "qwen-tts",
+          "version": "0.1.1"
+        },
+        {
+          "name": "regex",
+          "version": "2026.7.19"
+        },
+        {
+          "name": "requests",
+          "version": "2.34.2"
+        },
+        {
+          "name": "rich",
+          "version": "15.0.0"
+        },
+        {
+          "name": "safehttpx",
+          "version": "0.1.7"
+        },
+        {
+          "name": "safetensors",
+          "version": "0.8.0"
+        },
+        {
+          "name": "scikit-learn",
+          "version": "1.9.0"
+        },
+        {
+          "name": "scipy",
+          "version": "1.18.0"
+        },
+        {
+          "name": "semantic-version",
+          "version": "2.10.0"
+        },
+        {
+          "name": "setuptools",
+          "version": "83.0.0"
+        },
+        {
+          "name": "shellingham",
+          "version": "1.5.4"
+        },
+        {
+          "name": "six",
+          "version": "1.17.0"
+        },
+        {
+          "name": "soundfile",
+          "version": "0.14.0"
+        },
+        {
+          "name": "sox",
+          "version": "1.5.0"
+        },
+        {
+          "name": "soxr",
+          "version": "1.1.0"
+        },
+        {
+          "name": "starlette",
+          "version": "1.3.1"
+        },
+        {
+          "name": "sympy",
+          "version": "1.14.0"
+        },
+        {
+          "name": "threadpoolctl",
+          "version": "3.6.0"
+        },
+        {
+          "name": "tokenizers",
+          "version": "0.22.2"
+        },
+        {
+          "name": "tomlkit",
+          "version": "0.14.0"
+        },
+        {
+          "name": "torch",
+          "version": "2.9.1"
+        },
+        {
+          "name": "torchaudio",
+          "version": "2.9.1"
+        },
+        {
+          "name": "tqdm",
+          "version": "4.69.1"
+        },
+        {
+          "name": "transformers",
+          "version": "4.57.3"
+        },
+        {
+          "name": "triton",
+          "version": "3.5.1"
+        },
+        {
+          "name": "typer",
+          "version": "0.27.0"
+        },
+        {
+          "name": "typing-inspection",
+          "version": "0.4.2"
+        },
+        {
+          "name": "typing_extensions",
+          "version": "4.16.0"
+        },
+        {
+          "name": "urllib3",
+          "version": "2.7.0"
+        },
+        {
+          "name": "uvicorn",
+          "version": "0.51.0"
+        }
+      ],
+      "package": "qwen-tts",
+      "version": "0.1.1",
+      "releasedAt": "2026-02-06T04:10:51.716041Z",
+      "wheelSha256": "11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d",
+      "sourceCommit": "6cafe5582caea83df269c36b1ce62d953a9cc66b",
+      "sourceTree": "3bd8928130d289476ab9139e7e863ba48563b24d",
+      "license": "Apache-2.0",
+      "torchRuntimeVersion": "2.9.1"
+    },
+    "projectAuthoredComparisonTextOnly": true,
+    "referenceAudioUsed": false
+  },
+  "capabilities": {
+    "supportedSpeakers": [
+      "aiden",
+      "dylan",
+      "eric",
+      "ono_anna",
+      "ryan",
+      "serena",
+      "sohee",
+      "uncle_fu",
+      "vivian"
+    ],
+    "supportedLanguages": [
+      "auto",
+      "chinese",
+      "english",
+      "french",
+      "german",
+      "italian",
+      "japanese",
+      "korean",
+      "portuguese",
+      "russian",
+      "spanish"
+    ],
+    "requiredSpeakersPresent": true,
+    "englishPresent": true,
+    "greedyFlagsSupported": true,
+    "attention": {
+      "requested": "sdpa",
+      "modelConfig": "sdpa",
+      "speechTokenizerConfig": "sdpa",
+      "flashAttentionInstalled": false
+    },
+    "stockGenerationDefaults": {
+      "doSample": true,
+      "topK": 50,
+      "topP": 1.0,
+      "temperature": 0.9,
+      "repetitionPenalty": 1.05,
+      "subtalkerDoSample": true,
+      "subtalkerTopK": 50,
+      "subtalkerTopP": 1.0,
+      "subtalkerTemperature": 0.9,
+      "maxNewTokens": 8192
+    },
+    "processorLoadedFromLocalSnapshot": true,
+    "referenceAudioUsed": false
+  },
+  "isolation": {
+    "environment": "WSL2",
+    "externalAssetsOnExt4": true,
+    "assetsOutsideGit": true,
+    "offlineInference": true,
+    "attentionImplementation": "sdpa",
+    "flashAttentionInstalled": false,
+    "modelScopeRestricted": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "oldRetiredEnginesRecreated": false,
+    "workerExited": true,
+    "gpuReturnedToBaselineAfterWorkerExit": true,
+    "privatePermissionsVerified": true
+  },
+  "resources": {
+    "baselineGpu": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "memoryTotalMiB": 16303,
+      "memoryUsedMiB": 161,
+      "utilizationPercent": 0
+    },
+    "peak": {
+      "sampleCount": 641,
+      "peakGpuMemoryUsedMiB": 4619,
+      "peakGpuUtilizationPercent": 24,
+      "peakProcessRssMiB": 3987.9609375,
+      "peakSystemUsedMiB": 6403.7109375,
+      "systemTotalMiB": 56238.1484375
+    },
+    "endGpuAfterWorkerExit": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "memoryTotalMiB": 16303,
+      "memoryUsedMiB": 162,
+      "utilizationPercent": 0
+    },
+    "totalWorkerSeconds": 159.31766435499594,
+    "modelLoadSeconds": 1.8580427589913597,
+    "generationSeconds": 143.89275486599945
+  },
+  "outputs": [
+    {
+      "sequence": 1,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/narrator/line-01.wav",
+      "elapsedSeconds": 7.586232595000183,
+      "sha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 69120,
+          "durationSeconds": 2.88,
+          "bytes": 138284,
+          "sha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b"
+        },
+        "objective": {
+          "peakDbfs": -6.157388403885733,
+          "rmsDbfs": -19.586130241460197,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9444444444444444
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.4921875,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 2,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/narrator/line-02.wav",
+      "elapsedSeconds": 6.034420121999574,
+      "sha256": "98a50719368a7001c0efe7d4b13079681d838327b25bab44f6656cb0b3f4abcb",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 72960,
+          "durationSeconds": 3.04,
+          "bytes": 145964,
+          "sha256": "98a50719368a7001c0efe7d4b13079681d838327b25bab44f6656cb0b3f4abcb"
+        },
+        "objective": {
+          "peakDbfs": -3.1081177927491357,
+          "rmsDbfs": -19.329831890549695,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9539473684210527
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.69921875,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/narrator/line-03.wav",
+      "elapsedSeconds": 5.908917919994565,
+      "sha256": "0b661ddad6c762bc1ccfeb996cb5d62436b7c61dcd63258686a9c0d59ff0de8d",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 69120,
+          "durationSeconds": 2.88,
+          "bytes": 138284,
+          "sha256": "0b661ddad6c762bc1ccfeb996cb5d62436b7c61dcd63258686a9c0d59ff0de8d"
+        },
+        "objective": {
+          "peakDbfs": -1.395980717304319,
+          "rmsDbfs": -15.885050583061876,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9097222222222222
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.8515625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 4,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/narrator/line-01-repeat.wav",
+      "elapsedSeconds": 5.391291478998028,
+      "sha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 69120,
+          "durationSeconds": 2.88,
+          "bytes": 138284,
+          "sha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b"
+        },
+        "objective": {
+          "peakDbfs": -6.157388403885733,
+          "rmsDbfs": -19.586130241460197,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9444444444444444
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.4921875,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 5,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-one/line-01.wav",
+      "elapsedSeconds": 6.889502435005852,
+      "sha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d"
+        },
+        "objective": {
+          "peakDbfs": -7.617807150741861,
+          "rmsDbfs": -25.443947801757325,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9423076923076923
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.416015625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 6,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-one/line-02.wav",
+      "elapsedSeconds": 6.09669784300786,
+      "sha256": "3301a7308f4e6cea28b0e2e8207b80e62720b48a1f4de2280afa752e63838b37",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 71040,
+          "durationSeconds": 2.96,
+          "bytes": 142124,
+          "sha256": "3301a7308f4e6cea28b0e2e8207b80e62720b48a1f4de2280afa752e63838b37"
+        },
+        "objective": {
+          "peakDbfs": -6.8382807989962355,
+          "rmsDbfs": -23.289678949574224,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9527027027027027
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.455078125,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 7,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-one/line-03.wav",
+      "elapsedSeconds": 7.912313488996006,
+      "sha256": "b55919b9158c625d8db96e556c6cdca42f012708abc684d394a57195ffc849b5",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 92160,
+          "durationSeconds": 3.84,
+          "bytes": 184364,
+          "sha256": "b55919b9158c625d8db96e556c6cdca42f012708abc684d394a57195ffc849b5"
+        },
+        "objective": {
+          "peakDbfs": -7.141748857289365,
+          "rmsDbfs": -23.049028117780814,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9427083333333334
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.439453125,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 8,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-one/line-01-repeat.wav",
+      "elapsedSeconds": 6.192381150001893,
+      "sha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d"
+        },
+        "objective": {
+          "peakDbfs": -7.617807150741861,
+          "rmsDbfs": -25.443947801757325,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9423076923076923
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.416015625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 9,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-two/line-01.wav",
+      "elapsedSeconds": 6.351901604997693,
+      "sha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f"
+        },
+        "objective": {
+          "peakDbfs": -4.937907263888858,
+          "rmsDbfs": -23.693717641501202,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.8205128205128205
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.56640625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 10,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-two/line-02.wav",
+      "elapsedSeconds": 7.5734776350000175,
+      "sha256": "4bdd9181102539bf3e68afb84f05cafa02ef7dbdc7ee00aaa8f0ace4d7ce39b1",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 94080,
+          "durationSeconds": 3.92,
+          "bytes": 188204,
+          "sha256": "4bdd9181102539bf3e68afb84f05cafa02ef7dbdc7ee00aaa8f0ace4d7ce39b1"
+        },
+        "objective": {
+          "peakDbfs": -9.83572033523849,
+          "rmsDbfs": -23.439068402808473,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.8979591836734694
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.322265625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 11,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-two/line-03.wav",
+      "elapsedSeconds": 5.547701538002002,
+      "sha256": "cd7ca779c5efd4f2377640c5eaf77ad401b33c141dc0f48192d92348a0c9ecd9",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 71040,
+          "durationSeconds": 2.96,
+          "bytes": 142124,
+          "sha256": "cd7ca779c5efd4f2377640c5eaf77ad401b33c141dc0f48192d92348a0c9ecd9"
+        },
+        "objective": {
+          "peakDbfs": -9.576420791951136,
+          "rmsDbfs": -22.75427449212514,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9256756756756757
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.33203125,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 12,
+      "profileId": "stock-seeded",
+      "profileKind": "sampling",
+      "parameters": {
+        "doSample": true,
+        "topK": 50,
+        "topP": 1.0,
+        "temperature": 0.9,
+        "repetitionPenalty": 1.05,
+        "subtalkerDoSample": true,
+        "subtalkerTopK": 50,
+        "subtalkerTopP": 1.0,
+        "subtalkerTemperature": 0.9,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/stock-seeded/character-two/line-01-repeat.wav",
+      "elapsedSeconds": 5.900628731993493,
+      "sha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f"
+        },
+        "objective": {
+          "peakDbfs": -4.937907263888858,
+          "rmsDbfs": -23.693717641501202,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.8205128205128205
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.56640625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 13,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/narrator/line-01.wav",
+      "elapsedSeconds": 4.390821337001398,
+      "sha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 55680,
+          "durationSeconds": 2.32,
+          "bytes": 111404,
+          "sha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90"
+        },
+        "objective": {
+          "peakDbfs": -2.499128169110894,
+          "rmsDbfs": -18.595505789997834,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9396551724137931
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.75,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 14,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/narrator/line-02.wav",
+      "elapsedSeconds": 5.083426691999193,
+      "sha256": "71245885777bbdda70b378249de8dfda7a7820f458fa2239ffb6875b51c5f426",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 65280,
+          "durationSeconds": 2.72,
+          "bytes": 130604,
+          "sha256": "71245885777bbdda70b378249de8dfda7a7820f458fa2239ffb6875b51c5f426"
+        },
+        "objective": {
+          "peakDbfs": -2.3644550783311384,
+          "rmsDbfs": -18.78468168896998,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9485294117647058
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.76171875,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 15,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/narrator/line-03.wav",
+      "elapsedSeconds": 5.178555264006718,
+      "sha256": "6a5279cb5d25bd5ffd605e72151501c3874649e9fbc5b54f7b52aca7c3b1064a",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 69120,
+          "durationSeconds": 2.88,
+          "bytes": 138284,
+          "sha256": "6a5279cb5d25bd5ffd605e72151501c3874649e9fbc5b54f7b52aca7c3b1064a"
+        },
+        "objective": {
+          "peakDbfs": -2.5444872487203902,
+          "rmsDbfs": -17.76929641396208,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9375
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.74609375,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 16,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "narrator",
+      "role": "narrator",
+      "speaker": "Aiden",
+      "language": "English",
+      "instruction": "Speak with calm, measured audiobook narration; warm, clear, and restrained, with natural pauses.",
+      "instructionSha256": "28602b2293b076853f0d294bd9dad2600b9fed50cf64a803b8aa49e5fd71dfa1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/narrator/line-01-repeat.wav",
+      "elapsedSeconds": 4.264835926005617,
+      "sha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 55680,
+          "durationSeconds": 2.32,
+          "bytes": 111404,
+          "sha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90"
+        },
+        "objective": {
+          "peakDbfs": -2.499128169110894,
+          "rmsDbfs": -18.595505789997834,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9396551724137931
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.75,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 17,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-one/line-01.wav",
+      "elapsedSeconds": 4.331869632995222,
+      "sha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 57600,
+          "durationSeconds": 2.4,
+          "bytes": 115244,
+          "sha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e"
+        },
+        "objective": {
+          "peakDbfs": -11.262838505951853,
+          "rmsDbfs": -25.903155535608462,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9583333333333334
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.2734375,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 18,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-one/line-02.wav",
+      "elapsedSeconds": 5.171562724004616,
+      "sha256": "fa1250e562f03fc679be6ca49d9798557729194f180d41553f8bde0e33b8b539",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 69120,
+          "durationSeconds": 2.88,
+          "bytes": 138284,
+          "sha256": "fa1250e562f03fc679be6ca49d9798557729194f180d41553f8bde0e33b8b539"
+        },
+        "objective": {
+          "peakDbfs": -7.416269347424519,
+          "rmsDbfs": -23.701030700617437,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9097222222222222
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.42578125,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 19,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-one/line-03.wav",
+      "elapsedSeconds": 6.009866613007034,
+      "sha256": "4fe6e7335c90997c0e4ec6fb240238d31a3a1583a2711589434a8408ac4c193a",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "4fe6e7335c90997c0e4ec6fb240238d31a3a1583a2711589434a8408ac4c193a"
+        },
+        "objective": {
+          "peakDbfs": -5.430883294843931,
+          "rmsDbfs": -22.698775815288876,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9294871794871795
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.53515625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 20,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-one",
+      "role": "character",
+      "speaker": "Ryan",
+      "language": "English",
+      "instruction": "Speak with alert youthful energy and confident urgency; keep every word crisp.",
+      "instructionSha256": "4b8f035faf95e99f054afcb726fd62af09ac6bf315d192d868d72f56e96af1f9",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-one/line-01-repeat.wav",
+      "elapsedSeconds": 4.756815977001679,
+      "sha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 57600,
+          "durationSeconds": 2.4,
+          "bytes": 115244,
+          "sha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e"
+        },
+        "objective": {
+          "peakDbfs": -11.262838505951853,
+          "rmsDbfs": -25.903155535608462,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9583333333333334
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.2734375,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 21,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-two/line-01.wav",
+      "elapsedSeconds": 6.345528240999556,
+      "sha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 76800,
+          "durationSeconds": 3.2,
+          "bytes": 153644,
+          "sha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd"
+        },
+        "objective": {
+          "peakDbfs": -8.296074696284757,
+          "rmsDbfs": -22.82655209762515,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.88125
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.384765625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 22,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-two/line-02.wav",
+      "elapsedSeconds": 7.687109694990795,
+      "sha256": "9d0676419e6d5411c8dd34c4a4bbf587b0abb1d7afae046c741e7e852eb615fd",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 84480,
+          "durationSeconds": 3.52,
+          "bytes": 169004,
+          "sha256": "9d0676419e6d5411c8dd34c4a4bbf587b0abb1d7afae046c741e7e852eb615fd"
+        },
+        "objective": {
+          "peakDbfs": -10.157456733107587,
+          "rmsDbfs": -24.996618895537125,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.9147727272727273
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.310546875,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 23,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 0,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-two/line-03.wav",
+      "elapsedSeconds": 6.511971347004874,
+      "sha256": "14e5c401d9535656880dde23496bbeca4924f9ea01d3c238b61c6255e097706d",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 74880,
+          "durationSeconds": 3.12,
+          "bytes": 149804,
+          "sha256": "14e5c401d9535656880dde23496bbeca4924f9ea01d3c238b61c6255e097706d"
+        },
+        "objective": {
+          "peakDbfs": -6.473273747550371,
+          "rmsDbfs": -20.10909837801877,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.8910256410256411
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.474609375,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    },
+    {
+      "sequence": 24,
+      "profileId": "greedy",
+      "profileKind": "deterministic-candidate",
+      "parameters": {
+        "doSample": false,
+        "subtalkerDoSample": false,
+        "repetitionPenalty": 1.05,
+        "maxNewTokens": 8192
+      },
+      "voiceId": "character-two",
+      "role": "character",
+      "speaker": "Serena",
+      "language": "English",
+      "instruction": "Speak gently and thoughtfully with quiet concern; use a soft, steady pace.",
+      "instructionSha256": "37422ff49574e76d91d83a0bbd6a1c28d2840dcd570faf823edf708358196fe1",
+      "lineId": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "seedMethod": "Python, NumPy, torch CPU, and all CUDA RNGs reset immediately before generation",
+      "repetition": 1,
+      "referenceAudioUsed": false,
+      "nonStreamingMode": true,
+      "apiSafety": {
+        "greedyFlagsSupported": true
+      },
+      "file": "outputs/greedy/character-two/line-01-repeat.wav",
+      "elapsedSeconds": 6.774924873985583,
+      "sha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 24000,
+          "bitsPerSample": 16,
+          "frames": 76800,
+          "durationSeconds": 3.2,
+          "bytes": 153644,
+          "sha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd"
+        },
+        "objective": {
+          "peakDbfs": -8.296074696284757,
+          "rmsDbfs": -22.82655209762515,
+          "clippedSampleFraction": 0.0,
+          "activeFrameFraction": 0.88125
+        },
+        "sourceFloat": {
+          "peakAbsolute": 0.384765625,
+          "outOfRangeSampleFraction": 0.0
+        }
+      }
+    }
+  ],
+  "review": {
+    "objective": {
+      "checks": {
+        "exactOutputMatrix": true,
+        "primaryStockMatrixExact3x3": true,
+        "profileCharacterizationMatricesExact3x3": true,
+        "repeatMatricesExact": true,
+        "outputIdentity": true,
+        "fileIdentitiesUnique": true,
+        "noReferenceAudio": true,
+        "greedyApiSupported": true,
+        "strictWavAndAudioHealth": true
+      },
+      "gates": {
+        "maximumClippedSampleFraction": 0.001,
+        "minimumActiveFrameFraction": 0.15,
+        "minimumSecondsPerWord": 0.08,
+        "maximumSecondsPerWord": 2.0,
+        "maximumDurationSeconds": 30.0,
+        "requiredSampleRateHz": 24000,
+        "requiredChannels": 1,
+        "requiredBitsPerSample": 16
+      },
+      "repeatability": {
+        "comparisons": [
+          {
+            "profileId": "stock-seeded",
+            "voiceId": "narrator",
+            "primarySha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b",
+            "repeatSha256": "f27b983a77ed846b0774711e7adfd97dbb4c99b225800525b946a3d3bf70e87b",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          },
+          {
+            "profileId": "stock-seeded",
+            "voiceId": "character-one",
+            "primarySha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d",
+            "repeatSha256": "bfe9a27eba3bf4462bb3a79095484e8c2e77bbdde4bed6eced158c3fc236858d",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          },
+          {
+            "profileId": "stock-seeded",
+            "voiceId": "character-two",
+            "primarySha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f",
+            "repeatSha256": "7ddd251e1482d9f07252bec9473fd29c838eff7ab7c4925cd14a26b31fd3f19f",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          },
+          {
+            "profileId": "greedy",
+            "voiceId": "narrator",
+            "primarySha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90",
+            "repeatSha256": "9c8a963c7c736e2f0070faf58016977e612ca6851bf111c5fe96a25317669f90",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          },
+          {
+            "profileId": "greedy",
+            "voiceId": "character-one",
+            "primarySha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e",
+            "repeatSha256": "5b874155239f5d9d09ba7deaaf8254cae4dd5b0c2d189874e3e7bf20a537b04e",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          },
+          {
+            "profileId": "greedy",
+            "voiceId": "character-two",
+            "primarySha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd",
+            "repeatSha256": "819da315603dff6e2c0629aa361b58c3633b7b8904a831fdcc3417a35305f2fd",
+            "byteIdentical": true,
+            "claim": "byte-repeatable for this exact run and locked environment"
+          }
+        ],
+        "stockSeededAllByteIdentical": true,
+        "greedyAllByteIdentical": true,
+        "scope": "Observed hashes from this run only; no cross-host or general repeatability claim."
+      },
+      "decision": {
+        "result": "GO for Qwen3-TTS technical evaluation",
+        "listeningApproval": "PENDING human review",
+        "productionReadiness": "NOT ASSESSED by this extension spike",
+        "selectedModel": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+      }
+    },
+    "manualReady": {
+      "status": "pending",
+      "primaryClipCount": 18,
+      "manualReviewSha256": "6ef523ede413fc21a52cae7631af3e56820a31a7c99ae2cc560c6240360f6a34",
+      "reviewHtmlSha256": "c0ac9befb0a37a98dea581470a6ee9eb3bfaf25743e2920c69e9367e118b6a88",
+      "reviewInstructionsSha256": "2212f0540096a8feda6bc3a6746284a123fd552342f783e2354d6b4cfd4a4768",
+      "closureGate": "REQUIRED human listening; not completed",
+      "externalRelativeFiles": [
+        "manual-review.json",
+        "review.html",
+        "review-instructions.txt",
+        "outputs/"
+      ]
+    }
+  },
+  "decision": {
+    "result": "GO for Qwen3-TTS technical evaluation",
+    "listeningApproval": "PENDING human review",
+    "productionReadiness": "NOT ASSESSED by this extension spike",
+    "selectedModel": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+  },
+  "limitations": [
+    "WAV validity, activity, duration, and clipping checks do not establish word-level intelligibility or naturalness.",
+    "Byte-repeatability statements are limited to the recorded same-run hash pairs.",
+    "Human listening remains pending; this spike does not establish production readiness."
+  ],
+  "redaction": {
+    "absolutePaths": "omitted",
+    "processIds": "omitted",
+    "rawLogs": "external only",
+    "audio": "external only",
+    "referenceAudio": "not used"
+  }
+}

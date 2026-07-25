@@ -13,6 +13,10 @@ sqlite-topology-*/
 # Tool caches
 .tanstack/
 .vite/
+__pycache__/
+*.py[cod]
+.venv/
+*.whl
 
 # Editors and OS
 .vscode/
