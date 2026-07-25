@@ -43,6 +43,19 @@
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8081
+    "port": 8081,
+    "threadsHttp": 2,
+    "timeoutSeconds": 60,
+    "timeoutTestSeconds": 1
+  },
+  "probe": {
+    "longRequest": {
+      "maxSteps": 120,
+      "inferenceTimesteps": 10
+    },
+    "interruptAfterMilliseconds": 250,
+    "lifecyclePollMilliseconds": 200,
+    "lifecycleIdleSamples": 8,
+    "lifecycleMaximumSeconds": 60
   }
 }

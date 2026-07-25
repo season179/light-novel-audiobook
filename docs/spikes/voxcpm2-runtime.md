@@ -3,143 +3,146 @@
 - Issue: [#7](https://github.com/season179/light-novel-audiobook/issues/7)
 - Date: 2026-07-25
 - Evidence: [`../evidence/issue-7-voxcpm2-wsl2.json`](../evidence/issue-7-voxcpm2-wsl2.json)
-- Decision: **NO-GO for a production `SpeechEngine` adapter at the pinned upstream revision**
-- Narrow result: **GO for isolated, non-streaming, single-request-at-a-time experiments**
+- Production decision: **derived from measured gates; currently NO-GO**
+- Issue #8 gate: **may proceed only in serialized, non-streaming experimental mode**
 
-The CUDA CLI and persistent non-streaming server work, but a valid short request to the streaming
-endpoint reproducibly aborts the complete server with `SIGABRT`. The runtime also has no
-server-side cancellation, deadline, or request serialization. These are real blockers for a
-resumable production renderer, not reasons to discard the successful non-streaming measurements.
+Issue #7 does not unblock a production `SpeechEngine` or the production milestone. The narrow
+experimental allowance exists so issue #8 can evaluate synthetic voice bootstrapping without
+claiming that server reliability is production-ready.
 
 ## Immutable upstream inputs
 
 [`config/voxcpm2-spike.lock.json`](../../config/voxcpm2-spike.lock.json) is the machine-readable
-source of truth. `pnpm voxcpm2:verify` independently checks the immutable revisions, model-card and
+source of truth. `pnpm voxcpm2:verify` independently checks immutable revisions, model-card and
 license hashes, Hugging Face LFS sizes, and LFS SHA-256 values before setup.
 
 | Item | Pinned revision | License/provenance |
 | --- | --- | --- |
 | `tc-mb/llama.cpp-omni` tag `b258` | `74699a53df6ca0f4947ff37066f851532c20b12d` | MIT; pinned license hash |
-| Official `openbmb/VoxCPM2` | `bffb3df5a29440629464e5e839f4d214c8714c3d` | Apache-2.0 model card; official OpenBMB source license also pinned |
-| `DennisHuang648/VoxCPM2-GGUF` | `169f64d8b98bbaab1761e4ca3a83e6af653456cc` | Apache-2.0 card; explicitly derived from `openbmb/VoxCPM2`; publisher is an OpenBMB Hugging Face organization member |
+| Official `openbmb/VoxCPM2` | `bffb3df5a29440629464e5e839f4d214c8714c3d` | Apache-2.0 model card; official source license pinned |
+| `DennisHuang648/VoxCPM2-GGUF` | `169f64d8b98bbaab1761e4ca3a83e6af653456cc` | Apache-2.0 card; derived from `openbmb/VoxCPM2`; publisher is an OpenBMB Hugging Face organization member |
 
 The GGUF files are community conversion artifacts, not files in the official model repository.
 Their declared lineage, publisher affiliation, immutable repository revision, and LFS SHA-256
 hashes make them acceptable for this public spike. They must not be silently replaced by files
 with the same names.
 
-Required assets:
-
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `VoxCPM2-BaseLM-Q8_0.gguf` | 1,727,309,920 | `0113177abd11303503bf0b705e1613ec5f0a8508cc74a7dfd0f99312b962a962` |
 | `VoxCPM2-Acoustic-F16.gguf` | 1,825,096,352 | `5bde898488ad635ff55d24da53543768fa33d5e5cdc538ce190e5ef831038e85` |
 
-## Reproduce
+## Reproduce in two commits
 
-From WSL2 with the project Node/pnpm toolchain and a native Linux CUDA toolkit:
+The harness must be committed before evidence is generated. The probe rejects working harness
+files that differ from `HEAD`, records that commit, and binds the lock, shell harness, probe, and
+`core.mjs` hashes into one source identity.
 
 ```sh
 export PATH="$HOME/.local/share/light-novel-audiobook/toolchain/current/bin:$PATH"
-export CUDA_HOME=/usr/local/cuda # override only for another native WSL CUDA installation
+export CUDA_HOME=/usr/local/cuda
 
 pnpm voxcpm2:verify
-pnpm voxcpm2:setup
+VOXCPM2_CLEAN_BUILD=1 pnpm voxcpm2:setup
+# The evidence path must not already exist.
 pnpm voxcpm2:probe -- --output docs/evidence/issue-7-voxcpm2-wsl2.json
 pnpm test:voxcpm2
 ```
 
-The harness fails before mutation unless every artifact root resolves outside Git on WSL ext4.
-Defaults place source/builds under the TTS runtime tree, models under a TTS-only model tree, audio
-under an external spike workspace, and raw logs under external XDG state. The separate brain
-runtime root may not contain or overlap any TTS runtime path. The server refuses to start when
-`127.0.0.1:8081` is occupied; it never chooses another port.
+Commit harness changes first. Run the clean setup and host probe from that commit, then commit the
+new evidence separately. This keeps `generatedFromCommit` meaningful.
 
-CI runs only the small synthetic HTTP, WAV, resource-log, lock, and path-policy fixtures. It does
-not clone inference source, compile CUDA, download weights, or create real generated audio.
+## External artifact policy
 
-## Measured WSL2 result
+Path policy is checked before any directory creation or other mutation. Every candidate resolves
+outside Git on WSL ext4, and the TTS runtime may not overlap the standard llama.cpp brain runtime.
 
-Hardware was an RTX 5070 Ti 16 GB with 54 GiB effective WSL RAM. CUDA 13.0 compiled native SM 120
-code. Measurements are host observations, not performance guarantees.
+Build logs and each host probe use a stable source-identity parent plus a timestamp and random
+suffix for collision-safe run identity. Audio, logs, timing files, and manifests are written only
+into newly created per-run directories. Files use create-new semantics; the harness never
+silently overwrites a previous run. Each pass or failure manifest records the run ID, source
+identity, timestamps, and artifact hashes. Absolute user paths remain outside committed evidence.
 
-| Measurement | Result |
-| --- | ---: |
-| CMake configure | 14.10 s, 185 MiB peak RAM |
-| Build (`voxcpm2-cli`, `llama-tts-server`) | 270.04 s, 711 MiB peak RAM |
-| Server model load to healthy | 1.36 s |
-| Loaded steady RAM / incremental VRAM | about 521 MiB / 5,023 MiB |
-| After-request steady RAM / incremental VRAM | about 1,036 MiB / 5,157 MiB |
-| Peak incremental device VRAM | about 5,333 MiB |
-| Peak GPU utilization | 93% |
-| CLI output | 3.2 s, 48 kHz mono 16-bit PCM WAV |
-| CLI generation | 0.988 s, RTF 0.309 (2.69 s including process/model load) |
-| 20 sequential persistent requests | all 200; one PID and one model load |
-| Persistent request mean | 0.125 s for 0.8 s audio; mean RTF 0.157 |
-| Graceful server stop | exit 0 |
+CI runs only portable synthetic HTTP, strict WAV, resource-log, derivation, listener parsing, lock,
+and path-policy fixtures. It does not clone inference source, compile CUDA, download weights, or
+create model-generated audio.
 
-The probe validates RIFF chunk bounds, PCM encoding, channels, sample rate, bit depth, frame count,
-duration, and full response hash. It uses only public synthetic sentences. The voice-conditioning
-check uses audio generated by the CLI itself; no private book text or human reference recording is
-used.
+## Measured gates
 
-## API characterization
+The committed evidence contains the host-specific values. Evidence generation fails instead of
+publishing a stale conclusion if any pinned assumption changes.
 
-### Working non-streaming surface
+### Non-streaming persistence and parameters
 
-- `GET /health` and `GET /v1/health` return `{ "status": "ok", "engine": "voxcpm2" }`.
-- `GET /v1/audio/speech/models` reports model ID `voxcpm`, 48 kHz, feature dimension 64, and patch
-  size 4.
-- `POST /v1/audio/speech` returns either complete 16-bit PCM WAV (`audio/wav`) or headerless
-  float32 little-endian mono samples (`audio/pcm`).
-- Accepted model aliases are `voxcpm` and `voxcpm2`.
-- Exercised request fields are `input`, `model`, `response_format`, `seed`, `cfg_value`,
-  `inference_timesteps`, `max_steps`, `temperature`, and base64 `reference_audio`.
-- `max_steps` changed output duration from 0.8 s at 5 to 1.6 s at 10. A changed seed changed the
-  output hash. Unknown fields were ignored. Wrong field types silently used defaults.
-- Responses provide content type and length, but no effective parameters, seed, model hash,
-  generation time, or RTF metadata. The future adapter must record requested/effective values in
-  its own manifest.
-- `/v1/voxcpm2/init` exists but frees and reloads the model. It must not be called per segment.
+The probe requires all 20 sequential requests to preserve the same process identity and one model
+load. It derives parameter effects from response duration and hashes: decode steps, seed, CFG,
+temperature, and inference timesteps must have observable effects; the model alias and unknown
+field checks must preserve output; invalid types must match explicit server defaults; PCM and
+synthetic-reference paths must succeed.
 
-### Errors, cancellation, timeout, and boundaries
+The experimental caller must allow exactly one in-flight request. No concurrency claim is made.
 
-- Missing input, unknown model, unsupported format, and invalid reference WAV all return HTTP 500
-  JSON despite being client errors. Malformed JSON returns an empty HTTP 500 response.
-- A client abort or 25 ms client deadline stops receipt only. Generation continues on the server;
-  there is no cancellation token or server deadline.
-- The runtime pointer is shared across HTTP worker threads without a generation mutex. Concurrent
-  inference has no safe contract. A future adapter must enforce exactly one in-flight generation
-  until upstream supplies safe scheduling.
-- The listener was `127.0.0.1:8081` only. The upstream handler nevertheless accepts arbitrary
-  `Host`, `Origin`, and fetch-metadata headers. It emits no CORS permission, but the launcher or a
-  hardened local wrapper must enforce the model-boundary policy from ADR 0001.
+### Cancellation and deadlines
 
-### Streaming blocker
+Cancellation and timeout conclusions are experimental, not inferred from client exceptions. The
+probe first runs a long control request, then uses equally long requests for manual client abort
+and client deadline cases. It records client settlement, server process identity, GPU activity,
+idle return, and server-log size/handler lifecycle after interruption.
 
-`POST /v1/audio/speech/stream` with a normal synthetic sentence, `max_steps: 5`, and
-`inference_timesteps: 2` sends only its 44-byte WAV header, then hits:
+The evidence distinguishes:
 
-```text
-GGML_ASSERT(lp0 <= x->ne[0]) failed
-```
+- whether inference activity is observed after the client has stopped receiving;
+- whether the process survives;
+- whether GPU activity later returns to idle; and
+- that normal completion versus an internal early stop is **unknown** when the server exposes no
+  completion marker.
 
-The whole process exits via `SIGABRT`; the client reports a terminated chunked transfer. The
-streaming header also uses `0x7fffffff` placeholder RIFF/data sizes, so completed bytes would need
-header finalization before ordinary WAV validation. Do not call this route at the pinned revision.
+The probe never converts a client `AbortError` or `TimeoutError` alone into a server-side
+cancellation conclusion.
 
-## Adapter gate
+A separate server is started with the pinned short `--timeout` value. A long request measures
+whether that configured read/write timeout acts as a total generation deadline. The evidence
+records what happened rather than treating the option as an undocumented generation timeout.
 
-Do not implement the production `SpeechEngine` against this revision until either upstream or a
-separately reviewed pinned patch provides all of the following:
+### Streaming and decision derivation
 
-1. streaming requests cannot terminate the server;
-2. disconnect/deadline cancellation reaches inference and has a bounded stop time;
-3. generation is serialized or has a tested concurrency scheduler;
-4. client errors have stable structured 4xx responses;
-5. effective model identity and parameters can be recorded reliably;
-6. the local model HTTP boundary enforces exact Host/browser-origin rejection.
+A dedicated process runs the short streaming case. The result records the client lifecycle, exact
+process exit, process survival, and any runtime assertion text. The helper derives the streaming
+characterization from those observations and refuses evidence if the expected pinned behavior
+changes.
 
-The non-streaming endpoint remains suitable for continued isolated quality experiments if the
-caller serializes requests, treats timeout as an unknown still-running job, validates every full
-WAV, and restarts the process after any uncertain failure.
+The final decision is computed from measured streaming, interruption, configured-timeout, and
+persistence checks. It is not inserted as an unsupported constant. At this revision the expected
+measured blockers yield **NO-GO for production `SpeechEngine`/M2** while allowing issue #8 only in
+serialized, non-streaming experimental mode.
+
+### Audio validation
+
+Every complete WAV must satisfy all of these checks:
+
+- RIFF declared length exactly equals file length;
+- one PCM `fmt ` chunk with valid channels, sample rate, bit depth, byte rate, and block align;
+- exact data bounds, whole frames, and no trailing bytes;
+- VoxCPM2 output is 48 kHz, mono, 16-bit PCM; and
+- an independent Python standard-library `wave` check agrees for saved representative outputs.
+
+Portable tests include malformed RIFF lengths, truncated and trailing data, non-PCM format,
+inconsistent byte rate/block align, partial frames, and streaming placeholder lengths.
+
+### Loopback proof
+
+The probe parses every `ss` listener on the exact configured port and requires each to be exactly
+`127.0.0.1:8081`. It also attempts the same port through every WSL global non-loopback address and
+requires all connections to fail. Evidence records only listener/count/family results, not host
+addresses or process IDs.
+
+## Experimental issue #8 rules
+
+Issue #8 may proceed only under all of these restrictions:
+
+1. use `/v1/audio/speech`, never the streaming endpoint;
+2. serialize requests to one in flight;
+3. use only synthetic bootstrap/reference audio and public synthetic text;
+4. validate every complete WAV and retain immutable run manifests;
+5. treat any interrupted request outcome as uncertain until the measured server lifecycle settles;
+6. do not describe issue #7 as unblocking production or M2.

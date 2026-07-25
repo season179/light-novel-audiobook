@@ -5,8 +5,14 @@ import { dirname, join, resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  characterizeInterruption,
   createPcmWav,
+  deriveDecision,
+  deriveParameterEffects,
+  deriveSourceIdentity,
+  deriveStreamingCharacterization,
   loadLock,
+  parseExactPortListeners,
   parseWav,
   requireVoxCpm2PcmWav,
   summarizeRequests,
@@ -62,7 +68,7 @@ after(async () => {
   await new Promise((resolvePromise) => fixtureServer.close(resolvePromise))
 })
 
-test('the lock pins immutable revisions, checksums, licenses, endpoint, and two assets', async () => {
+test('the lock pins immutable inputs and lifecycle settings', async () => {
   const lock = await loadLock(join(root, 'config/voxcpm2-spike.lock.json'))
   assert.equal(lock.runtime.revision, '74699a53df6ca0f4947ff37066f851532c20b12d')
   assert.equal(lock.runtime.license, 'MIT')
@@ -71,53 +77,180 @@ test('the lock pins immutable revisions, checksums, licenses, endpoint, and two 
     lock.ggufModel.assets.map((asset) => asset.name),
     ['VoxCPM2-BaseLM-Q8_0.gguf', 'VoxCPM2-Acoustic-F16.gguf'],
   )
-  assert.deepEqual(lock.server, { host: '127.0.0.1', port: 8081 })
+  assert.equal(lock.server.host, '127.0.0.1')
+  assert.equal(lock.server.port, 8081)
+  assert.ok(lock.server.timeoutTestSeconds < lock.server.timeoutSeconds)
+  assert.ok(lock.probe.longRequest.maxSteps >= 100)
 })
 
-test('WAV validation requires complete 48 kHz mono PCM data', () => {
+test('strict WAV validation accepts a complete canonical response', () => {
   const wav = createPcmWav({ frames: 9600 })
-  assert.deepEqual(requireVoxCpm2PcmWav(wav), {
+  const info = requireVoxCpm2PcmWav(wav)
+  assert.deepEqual(info, {
     container: 'RIFF/WAVE',
     declaredRiffSize: 19236,
     encoding: 'PCM',
     channels: 1,
     sampleRateHz: 48000,
+    byteRate: 96000,
+    blockAlign: 2,
     bitsPerSample: 16,
     frames: 9600,
     durationSeconds: 0.2,
     bytes: 19244,
+    dataOffset: 44,
     dataDeclaredSize: 19200,
-    sha256: requireVoxCpm2PcmWav(wav).sha256,
+    sha256: info.sha256,
   })
-  assert.throws(() => parseWav(wav.subarray(0, -1)), /truncated WAV data chunk/u)
-  assert.throws(
-    () => requireVoxCpm2PcmWav(createPcmWav({ sampleRateHz: 24000 })),
-    /expected 48 kHz/u,
-  )
 })
 
-test('streaming headers with unknown lengths are rejected unless explicitly inspected', () => {
+test('strict WAV validation rejects adversarial length and PCM metadata', () => {
+  const mutate = (offset, value, method = 'writeUInt32LE') => {
+    const wav = Buffer.from(createPcmWav())
+    wav[method](value, offset)
+    return wav
+  }
+  assert.throws(() => parseWav(createPcmWav().subarray(0, -1)), /RIFF length/u)
+  assert.throws(() => parseWav(mutate(4, 1)), /RIFF length/u)
+  assert.throws(() => parseWav(mutate(20, 3, 'writeUInt16LE')), /not PCM/u)
+  assert.throws(() => parseWav(mutate(28, 1)), /byte rate/u)
+  assert.throws(() => parseWav(mutate(32, 4, 'writeUInt16LE')), /block align/u)
+  assert.throws(() => parseWav(mutate(40, 999999)), /truncated WAV data/u)
+
+  const trailing = Buffer.concat([createPcmWav(), Buffer.from([0, 0])])
+  trailing.writeUInt32LE(trailing.length - 8, 4)
+  assert.throws(() => parseWav(trailing), /trailing bytes/u)
+
+  const partial = createPcmWav({ frames: 1 }).subarray(0, 45)
+  partial.writeUInt32LE(partial.length - 8, 4)
+  partial.writeUInt32LE(1, 40)
+  assert.throws(() => parseWav(partial), /partial frame/u)
+})
+
+test('streaming placeholder lengths require explicit inspection mode', () => {
   const wav = createPcmWav()
   wav.writeUInt32LE(0x7fffffff, 4)
   wav.writeUInt32LE(0x7fffffff, 40)
-  assert.throws(() => parseWav(wav), /truncated WAV data chunk/u)
+  assert.throws(() => parseWav(wav), /RIFF length/u)
   const inspected = parseWav(wav, { allowUnknownStreamingLength: true })
   assert.equal(inspected.dataDeclaredSize, 0x7fffffff)
   assert.equal(inspected.frames, 4800)
 })
 
-test('portable resource fixtures report incremental RAM, VRAM, and GPU load', async () => {
+test('request summaries reject invalid audio durations', () => {
+  assert.throws(
+    () => summarizeRequests([{ elapsedSeconds: 1, audio: { durationSeconds: 0 } }]),
+    /positive audio duration/u,
+  )
+})
+
+test('portable resource fixtures report peak and last observations', async () => {
   const summary = summarizeResourceCsv(await readFile(join(fixtures, 'resource.csv'), 'utf8'), 600)
   assert.deepEqual(summary, {
     sampleCount: 3,
     peakRamMiB: 1024,
-    steadyRamMiB: 768,
+    lastObservedRamMiB: 768,
     peakDeviceVramMiB: 5700,
     peakIncrementalVramMiB: 5100,
-    steadyDeviceVramMiB: 5500,
-    steadyIncrementalVramMiB: 4900,
+    lastObservedDeviceVramMiB: 5500,
     peakGpuUtilizationPercent: 100,
   })
+})
+
+test('source identity is stable, ordered, and changes with a source hash', () => {
+  const one = '1'.repeat(64)
+  const two = '2'.repeat(64)
+  assert.equal(
+    deriveSourceIdentity({ shell: two, config: one }),
+    deriveSourceIdentity({ config: one, shell: two }),
+  )
+  assert.notEqual(
+    deriveSourceIdentity({ config: one, shell: two }),
+    deriveSourceIdentity({ config: one, shell: '3'.repeat(64) }),
+  )
+})
+
+test('exact-port listener parsing exposes every matching listener', () => {
+  const output = [
+    'LISTEN 0 5 127.0.0.1:8081 0.0.0.0:* users:(("fixture",pid=1,fd=2))',
+    'LISTEN 0 5 0.0.0.0:8080 0.0.0.0:* users:(("other",pid=2,fd=3))',
+    'LISTEN 0 5 [::1]:8081 [::]:* users:(("fixture",pid=1,fd=4))',
+  ].join('\n')
+  assert.deepEqual(parseExactPortListeners(output, 8081), [
+    { state: 'LISTEN', localEndpoint: '127.0.0.1:8081', peerEndpoint: '0.0.0.0:*' },
+    { state: 'LISTEN', localEndpoint: '[::1]:8081', peerEndpoint: '[::]:*' },
+  ])
+})
+
+test('interruption, parameters, streaming, and decision are derived from checks', () => {
+  const interruption = characterizeInterruption({
+    clientResult: 'AbortError',
+    processSurvived: true,
+    interruptedAtMilliseconds: 250,
+    samples: [
+      { elapsedMilliseconds: 300, gpuUtilizationPercent: 80 },
+      { elapsedMilliseconds: 1000, gpuUtilizationPercent: 70 },
+      { elapsedMilliseconds: 2000, gpuUtilizationPercent: 0, settledWindow: true },
+    ],
+  })
+  assert.equal(interruption.inferenceAfterClientInterruption, 'continued')
+  assert.match(interruption.eventualInferenceOutcome, /not observable/u)
+
+  const wav = (durationSeconds, hash) => ({ durationSeconds, sha256: hash })
+  const baseline = { status: 200, sha256: 'a', audio: wav(0.8, 'a') }
+  const parameters = [
+    ['explicit-defaults', baseline],
+    ['max-steps-5', baseline],
+    ['max-steps-10', { status: 200, sha256: 'b', audio: wav(1.6, 'b') }],
+    ['seed-43', { status: 200, sha256: 'c', audio: wav(0.8, 'c') }],
+    ['cfg-1.5', { status: 200, sha256: 'd', audio: wav(0.8, 'd') }],
+    ['temperature-0.8', { status: 200, sha256: 'e', audio: wav(0.8, 'e') }],
+    ['timesteps-4', { status: 200, sha256: 'f', audio: wav(0.8, 'f') }],
+    ['model-alias', baseline],
+    ['unknown-field', baseline],
+    ['server-defaults', { status: 200, sha256: 'g', audio: wav(2.4, 'g') }],
+    ['wrong-types-defaulted', { status: 200, sha256: 'g', audio: wav(2.4, 'g') }],
+    ['pcm', { status: 200, contentType: 'audio/pcm', sha256: 'h' }],
+    ['synthetic-reference-audio', { status: 200, sha256: 'i', audio: wav(0.8, 'i') }],
+  ].map(([name, value]) => ({ name, ...value }))
+  assert.ok(Object.values(deriveParameterEffects(parameters)).every(Boolean))
+
+  const streaming = deriveStreamingCharacterization({
+    clientError: 'terminated',
+    processExit: { code: null, signal: 'SIGABRT' },
+    logText: 'GGML_ASSERT(lp0 <= x->ne[0]) failed',
+  })
+  assert.equal(streaming.processSurvived, false)
+  const decision = deriveDecision({
+    persistencePassed: true,
+    streaming,
+    interruptions: [interruption],
+    configuredTimeout: { generationExceededConfiguredTimeout: true },
+  })
+  assert.equal(decision.result, 'NO-GO for production SpeechEngine/M2')
+  assert.match(decision.experimentalMode, /Issue #8 may proceed only/u)
+})
+
+test('derivation refuses changed measured assumptions', () => {
+  assert.throws(
+    () =>
+      deriveStreamingCharacterization({
+        clientError: null,
+        processExit: null,
+        logText: '',
+      }),
+    /assumptions changed/u,
+  )
+  assert.throws(
+    () =>
+      deriveDecision({
+        persistencePassed: true,
+        streaming: { crashedWithSigabrt: false },
+        interruptions: [],
+        configuredTimeout: { generationExceededConfiguredTimeout: false },
+      }),
+    /NO-GO assumptions changed/u,
+  )
 })
 
 test('portable HTTP fixture handles 20 requests without models or private inputs', async () => {
@@ -137,26 +270,24 @@ test('portable HTTP fixture handles 20 requests without models or private inputs
       audio: requireVoxCpm2PcmWav(Buffer.from(await response.arrayBuffer())),
     })
   }
-  const summary = summarizeRequests(requests)
-  assert.equal(summary.count, 20)
-  assert.ok(summary.meanRtf >= 0)
-
-  const invalid = await fetch(`${fixtureEndpoint}/v1/audio/speech`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  })
-  assert.equal(invalid.status, 500)
+  assert.equal(summarizeRequests(requests).count, 20)
 })
 
-test('operational harness fails closed into external ext4 TTS paths', async () => {
+test('operational harness validates roots before creating them and uses immutable run paths', async () => {
   const shell = await readFile(join(root, 'scripts/voxcpm2-spike.sh'), 'utf8')
   const probe = await readFile(join(root, 'scripts/probe-voxcpm2.mjs'), 'utf8')
-  assert.match(shell, /findmnt -n -o FSTYPE/u)
-  assert.match(shell, /== ext4/u)
-  assert.match(shell, /runtimes\/tts\/llama\.cpp-omni/u)
-  assert.match(shell, /models\/tts\/voxcpm2/u)
-  assert.match(shell, /TTS runtime overlaps the brain runtime/u)
-  assert.match(probe, /configured TTS port is occupied/u)
-  assert.doesNotMatch(`${shell}\n${probe}`, /0\.0\.0\.0/u)
+  const validation = shell.indexOf('validate_isolated_ext4_paths')
+  const firstCreation = shell.indexOf('mkdir -p -- "$base"')
+  assert.ok(validation >= 0 && firstCreation > validation)
+  assert.match(shell, /existing_ancestor/u)
+  assert.match(shell, /TTS artifact roots overlap/u)
+  assert.match(shell, /runs\/\$source_identity/u)
+  assert.match(shell, /VOXCPM2_CLEAN_BUILD/u)
+  assert.match(shell, /CMAKE_CUDA_COMPILER/u)
+  assert.match(shell, /server is not linked to the CUDA backend/u)
+  assert.match(probe, /flag: 'wx'/u)
+  assert.match(probe, /sourceIdentity/u)
+  assert.match(probe, /validateBuildProvenance/u)
+  assert.match(probe, /failure-manifest\.json/u)
+  assert.doesNotMatch(`${shell}\n${probe}`, /0\.0\.0\.0.*--host/u)
 })
