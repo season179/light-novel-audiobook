@@ -2,7 +2,7 @@
 
 Issue [#6](https://github.com/season179/light-novel-audiobook/issues/6) is implemented here up to the private-input acceptance gate. The runner performs exactly three sequential, identically configured calls, reconstructs source slices deterministically, invokes the merged #4 scorer, and writes private immutable run bundles plus a text-free report.
 
-Resume is fail-closed: one process owns an exclusive experiment lock; the directory may contain only the exact plan, run 1–3, report, and transient lock; every plan/run/report identity and canonical byte representation is revalidated. Resume rehashes and reparses raw provider bytes, reconstructs predictions, verifies experiment/dataset/source/corpus/profile/model/build/runtime/request identities, and rejects stale, tampered, symlinked, or extra artifacts.
+Resume is fail-closed: one process owns an exclusive experiment lock bound to its PID, Linux process start time, executable, and random owner token. Live concurrency is rejected; a valid stale crash lock is reclaimed without signaling any process. The directory may contain only the exact plan, run 1–3, report, and transient lock; every plan/run/report identity and canonical byte representation is revalidated. Resume rehashes and reparses raw provider bytes, reconstructs predictions, verifies experiment/dataset/source/corpus/annotations/profile/model/build/runtime/request identities, and rejects stale, substituted, tampered, symlinked, or extra artifacts.
 
 ## Locked primary profile
 
@@ -38,13 +38,13 @@ pnpm exec tsx packages/gemma-benchmark/src/cli.ts -- \
 
 Elapsed time covers each complete request. Effective WSL RAM (`MemTotal - MemAvailable`) and conservative whole-device VRAM (`nvidia-smi memory.used`) are sampled initially, periodically, and finally on success, HTTP errors, transport errors, and timeouts. Collector completeness, child exit, crash/OOM, prompt/generation counts, and rates are retained. Timers are cleared; SIGTERM/SIGKILL exit is awaited; API-key deletion and port release are verified.
 
-Operational pass requires exactly runs 1–3, each with `result_state=completed`, `failure_code=none`, valid reparsed provider output, complete resources, and no child exit/crash/OOM. Deterministic refusal surrogates used to score failed requests can never produce an operational pass or a “smoke complete” CLI status.
+Operational pass requires exactly runs 1–3, each with `result_state=completed`, `failure_code=none`, valid reparsed provider output, complete resources, and no child exit/crash/OOM. The process must also remain alive through all benchmark work and then complete the expected owned graceful shutdown: awaited SIGTERM handling, exit code 0, no crash signal/SIGKILL, API-key removal, and port release. Late or already-exited cleanup—including exit 137—invalidates the command and evidence. Deterministic refusal surrogates used to score failed requests can never produce an operational pass or a “smoke complete” CLI status.
 
 ## Synthetic operational smoke and evidence
 
 The #4 fixture may exercise loading, CUDA, JSON-schema output, orchestration, resources, cleanup, resume, and sanitization. It is always `synthetic_operational` and cannot support representative accuracy or a profile decision. The authoritative measured RAM/VRAM values are in the current evidence file rather than duplicated here.
 
-Evidence uses two commits. First commit all implementation and CI-visible verification surfaces. From that clean commit, run:
+Evidence uses two commits. First commit all implementation and CI-visible verification surfaces. The immutable plan and evidence bind the canonical gold-annotations hash without exposing annotation content. From that clean commit, run:
 
 ```sh
 pnpm exec tsx packages/gemma-benchmark/scripts/record-synthetic-evidence.ts
@@ -55,6 +55,6 @@ Then commit only `evidence/synthetic-operational-smoke.json`. Evidence binds the
 
 ## Fallback safety
 
-`fallback-history@2` requires every distinct preceding failed report in exact order. Fallback 1 requires a primary mature-content obstruction. Reaching fallback 2 requires both an ordinary primary acceptance/operational failure and a recorded fallback-1 evaluation reason for mature-content reliability; later profiles require every preceding ordered evaluation. Skips, duplicates, and mislabeled transitions fail closed. Fallback weights remain unpinned and undownloaded until authorized.
+`fallback-history@2` requires every distinct preceding failed report in exact order. Any chain selecting or containing fallback 1 requires `mature_content_refusal` in the primary report’s own `failure_reasons`; a later evaluation-reason label cannot invent that authorization. Reaching fallback 2 additionally requires `operational_impractical` in fallback 1’s own failure reasons. Later profiles require every preceding ordered evaluation. Skips, duplicates, substitutions, and mislabeled transitions fail closed. Fallback weights remain unpinned and undownloaded until authorized.
 
 The issue remains open until a lawful private representative chapter meeting #4 governance and independently prepared blind gold annotations produce a valid three-run selected-profile or final no-go result.

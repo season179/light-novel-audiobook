@@ -80,7 +80,7 @@ export const childExitEvidenceSchema = z.strictObject({
 })
 
 export const experimentPlanSchema = z.strictObject({
-  schema_version: z.literal('benchmark-experiment-plan@2'),
+  schema_version: z.literal('benchmark-experiment-plan@3'),
   experiment_id: opaqueIdSchema,
   dataset_class: datasetClassSchema,
   profile_id: opaqueIdSchema,
@@ -88,6 +88,7 @@ export const experimentPlanSchema = z.strictObject({
   run_count: z.literal(3),
   source_sha256: sha256Schema,
   corpus_sha256: sha256Schema,
+  annotations_sha256: sha256Schema,
   context_sha256: sha256Schema,
   model_id: z.string().min(1),
   model_sha256: sha256Schema,
@@ -114,7 +115,7 @@ export const runFailureCodeSchema = z.enum([
 
 export const benchmarkRunManifestSchema = z
   .strictObject({
-    schema_version: z.literal('benchmark-run-manifest@2'),
+    schema_version: z.literal('benchmark-run-manifest@3'),
     experiment_id: opaqueIdSchema,
     dataset_class: datasetClassSchema,
     run_index: z.int().min(1).max(3),
@@ -122,6 +123,7 @@ export const benchmarkRunManifestSchema = z
     host_manifest_sha256: sha256Schema,
     runtime_configuration_sha256: sha256Schema,
     request_sha256: sha256Schema,
+    annotations_sha256: sha256Schema,
     raw_response_sha256: sha256Schema,
     raw_response: z.string(),
     raw_response_json_valid: z.boolean(),
@@ -162,18 +164,31 @@ export const benchmarkRunManifestSchema = z
     }
   })
 
-export const runtimeCleanupEvidenceSchema = z.strictObject({
-  schema_version: z.literal('runtime-cleanup@1'),
-  child_exit_observed: z.literal(true),
-  exit_code: z.int().nullable(),
-  signal: z.string().nullable(),
-  termination: z.enum(['already_exited', 'sigterm', 'sigkill']),
-  sigterm_sent: z.boolean(),
-  sigkill_sent: z.boolean(),
-  exit_awaited: z.literal(true),
-  api_key_file_removed: z.literal(true),
-  port_released: z.literal(true),
-})
+export const runtimeCleanupEvidenceSchema = z
+  .strictObject({
+    schema_version: z.literal('runtime-cleanup@1'),
+    child_exit_observed: z.literal(true),
+    exit_code: z.int().nullable(),
+    signal: z.string().nullable(),
+    termination: z.enum(['already_exited', 'sigterm', 'sigkill']),
+    sigterm_sent: z.boolean(),
+    sigkill_sent: z.boolean(),
+    exit_awaited: z.literal(true),
+    api_key_file_removed: z.literal(true),
+    port_released: z.literal(true),
+  })
+  .superRefine((value, context) => {
+    if (value.exit_code !== null && value.signal !== null) {
+      context.addIssue({ code: 'custom', message: 'Cleanup has two terminal states' })
+    }
+    const signalsConsistent =
+      (value.termination === 'already_exited' && !value.sigterm_sent && !value.sigkill_sent) ||
+      (value.termination === 'sigterm' && value.sigterm_sent && !value.sigkill_sent) ||
+      (value.termination === 'sigkill' && value.sigterm_sent && value.sigkill_sent)
+    if (!signalsConsistent) {
+      context.addIssue({ code: 'custom', message: 'Cleanup termination signals are inconsistent' })
+    }
+  })
 
 const fallbackReasonSchema = z.enum([
   'acceptance_failed',
@@ -203,3 +218,17 @@ export type ExperimentPlan = z.infer<typeof experimentPlanSchema>
 export type BenchmarkRunManifest = z.infer<typeof benchmarkRunManifestSchema>
 export type RuntimeCleanupEvidence = z.infer<typeof runtimeCleanupEvidenceSchema>
 export type FallbackHistory = z.infer<typeof fallbackHistorySchema>
+
+export function isGracefulOwnedShutdown(value: RuntimeCleanupEvidence): boolean {
+  return (
+    value.child_exit_observed &&
+    value.exit_awaited &&
+    value.termination === 'sigterm' &&
+    value.sigterm_sent &&
+    !value.sigkill_sent &&
+    value.exit_code === 0 &&
+    value.signal === null &&
+    value.api_key_file_removed &&
+    value.port_released
+  )
+}

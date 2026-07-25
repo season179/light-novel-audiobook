@@ -11,6 +11,7 @@ import { type ExternalBrainProof, validateExternalBrainPaths } from './path-safe
 import type { BenchmarkProfile } from './profiles.js'
 import {
   type ChildExitEvidence,
+  isGracefulOwnedShutdown,
   type RuntimeCleanupEvidence,
   runtimeCleanupEvidenceSchema,
 } from './schemas.js'
@@ -205,6 +206,18 @@ export interface PinnedRuntimeContext {
   readonly child: ChildProcess
 }
 
+export function assertSuccessfulRuntimeLifecycle(
+  workCompletionExit: ChildExitEvidence,
+  cleanup: RuntimeCleanupEvidence,
+): void {
+  if (workCompletionExit.observed_exited) {
+    throw new Error('llama.cpp exited before benchmark work completed')
+  }
+  if (!isGracefulOwnedShutdown(cleanup)) {
+    throw new Error('llama.cpp did not complete the expected graceful owned shutdown')
+  }
+}
+
 export interface PinnedRuntimeResult<T> {
   readonly value: T
   readonly context: Omit<PinnedRuntimeContext, 'child'>
@@ -304,6 +317,7 @@ export async function withPinnedRuntime<T>(options: {
     emittedChildError = error
   }
   let value: T | undefined
+  let workCompletionExit: ChildExitEvidence | undefined
   let runError: unknown
   let cleanupError: unknown
   let cleanupBase:
@@ -328,6 +342,8 @@ export async function withPinnedRuntime<T>(options: {
     await waitForHealth(`http://127.0.0.1:${options.port}`, key, child, () => emittedChildError)
     const gateway = new LlamaCppGateway(`http://127.0.0.1:${options.port}/`, key)
     value = await options.run(gateway, context)
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise))
+    workCompletionExit = readChildExitEvidence(child)
   } catch (error: unknown) {
     runError = error
   } finally {
@@ -353,8 +369,8 @@ export async function withPinnedRuntime<T>(options: {
     }
   }
   if (cleanupError) throw cleanupError
-  if (runError) throw runError
   if (value === undefined || context === undefined || cleanupBase === undefined) {
+    if (runError) throw runError
     throw new Error('Runtime did not complete')
   }
   const cleanup = runtimeCleanupEvidenceSchema.parse({
@@ -362,6 +378,9 @@ export async function withPinnedRuntime<T>(options: {
     api_key_file_removed: keyRemoved,
     port_released: portReleased,
   })
+  if (runError) throw runError
+  if (!workCompletionExit) throw new Error('Runtime work-completion state was not captured')
+  assertSuccessfulRuntimeLifecycle(workCompletionExit, cleanup)
   return {
     value,
     context: {

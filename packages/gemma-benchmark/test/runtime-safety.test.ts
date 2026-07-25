@@ -6,7 +6,12 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateExternalBrainPaths } from '../src/path-safety.js'
-import { stopOwnedChild, waitForPortRelease } from '../src/runtime.js'
+import {
+  assertSuccessfulRuntimeLifecycle,
+  stopOwnedChild,
+  waitForPortRelease,
+} from '../src/runtime.js'
+import { type RuntimeCleanupEvidence, runtimeCleanupEvidenceSchema } from '../src/schemas.js'
 
 const execFile = promisify(execFileCallback)
 const roots: string[] = []
@@ -48,6 +53,68 @@ afterEach(async () => {
 })
 
 describe('owned runtime cleanup', () => {
+  it('accepts only an alive-through-work process and graceful owned shutdown', () => {
+    const graceful: RuntimeCleanupEvidence = {
+      schema_version: 'runtime-cleanup@1',
+      child_exit_observed: true,
+      exit_code: 0,
+      signal: null,
+      termination: 'sigterm',
+      sigterm_sent: true,
+      sigkill_sent: false,
+      exit_awaited: true,
+      api_key_file_removed: true,
+      port_released: true,
+    }
+    expect(() =>
+      assertSuccessfulRuntimeLifecycle(
+        { observed_exited: false, exit_code: null, signal: null },
+        graceful,
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertSuccessfulRuntimeLifecycle(
+        { observed_exited: true, exit_code: 137, signal: null },
+        graceful,
+      ),
+    ).toThrow('before benchmark work completed')
+
+    const invalidCleanup: RuntimeCleanupEvidence[] = [
+      {
+        ...graceful,
+        termination: 'already_exited',
+        sigterm_sent: false,
+        exit_code: 137,
+      },
+      { ...graceful, exit_code: 137 },
+      { ...graceful, exit_code: null, signal: 'SIGKILL' },
+      {
+        ...graceful,
+        termination: 'sigkill',
+        sigkill_sent: true,
+        exit_code: null,
+        signal: 'SIGKILL',
+      },
+    ]
+    for (const cleanup of invalidCleanup) {
+      expect(() =>
+        assertSuccessfulRuntimeLifecycle(
+          { observed_exited: false, exit_code: null, signal: null },
+          cleanup,
+        ),
+      ).toThrow('graceful owned shutdown')
+    }
+    expect(() =>
+      runtimeCleanupEvidenceSchema.parse({
+        ...graceful,
+        termination: 'already_exited',
+        sigterm_sent: true,
+      }),
+    ).toThrow('signals are inconsistent')
+    expect(() => runtimeCleanupEvidenceSchema.parse({ ...graceful, signal: 'SIGKILL' })).toThrow(
+      'two terminal states',
+    )
+  })
   it('awaits SIGTERM exit and records the terminal state', async () => {
     const child = new FakeChild('SIGTERM')
     const evidence = await stopOwnedChild(child as unknown as ChildProcess, {

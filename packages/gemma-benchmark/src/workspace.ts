@@ -35,6 +35,7 @@ export interface ValidatedInputs {
   readonly context: BenchmarkContext
   readonly sourceSha256: string
   readonly corpusSha256: string
+  readonly annotationsSha256: string
 }
 
 export async function validateWorkspaceInputs(options: {
@@ -79,6 +80,7 @@ export async function validateWorkspaceInputs(options: {
   const context = benchmarkContextSchema.parse(values[3])
   const sourceSha256 = governance.sourceHash
   const corpusSha256 = governance.corpusHash
+  const annotationsSha256 = canonicalSha256(governance.annotations)
   if (context.source_sha256 !== sourceSha256 || context.corpus_sha256 !== corpusSha256) {
     throw new Error('Benchmark context identity does not match source and corpus')
   }
@@ -118,6 +120,7 @@ export async function validateWorkspaceInputs(options: {
     context,
     sourceSha256,
     corpusSha256,
+    annotationsSha256,
   }
 }
 
@@ -125,6 +128,7 @@ export function inputIdentity(inputs: ValidatedInputs): string {
   return canonicalSha256({
     source: inputs.sourceSha256,
     corpus: inputs.corpusSha256,
+    annotations: inputs.annotationsSha256,
     context: canonicalSha256(inputs.context),
   })
 }

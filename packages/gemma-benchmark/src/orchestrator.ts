@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { link, lstat, mkdir, open, readdir, readFile, rm } from 'node:fs/promises'
+import { link, lstat, mkdir, open, readdir, readFile, readlink, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   canonicalJson,
@@ -99,24 +99,139 @@ async function assertExactArtifacts(experimentRoot: string): Promise<Set<string>
   return new Set(entries.map((entry) => entry.name))
 }
 
-async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
-  const lockPath = join(experimentRoot, LOCK_NAME)
-  let lock: Awaited<ReturnType<typeof open>>
+interface ExperimentLockOwner {
+  readonly schema_version: 'benchmark-experiment-lock@1'
+  readonly pid: number
+  readonly linux_start_time_ticks: string
+  readonly executable: string
+  readonly owner_token: string
+}
+
+async function linuxProcessIdentity(
+  pid: number,
+): Promise<{ startTimeTicks: string; executable: string } | null> {
   try {
-    lock = await open(lockPath, 'wx', 0o600)
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error('Experiment is already locked by another process')
+    const statBytes = await readFile(`/proc/${pid}/stat`, 'utf8')
+    const commandEnd = statBytes.lastIndexOf(')')
+    if (commandEnd === -1) throw new Error('Linux process stat is malformed')
+    const fieldsAfterCommand = statBytes
+      .slice(commandEnd + 1)
+      .trim()
+      .split(/\s+/)
+    const startTimeTicks = fieldsAfterCommand[19]
+    if (!startTimeTicks || !/^\d+$/.test(startTimeTicks)) {
+      throw new Error('Linux process start time is unavailable')
     }
+    return { startTimeTicks, executable: await readlink(`/proc/${pid}/exe`) }
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
+}
+
+function parseLockOwner(value: unknown): ExperimentLockOwner {
+  const owner = value as Partial<ExperimentLockOwner>
+  if (
+    typeof owner !== 'object' ||
+    owner === null ||
+    owner.schema_version !== 'benchmark-experiment-lock@1' ||
+    !Number.isSafeInteger(owner.pid) ||
+    (owner.pid ?? 0) <= 0 ||
+    typeof owner.linux_start_time_ticks !== 'string' ||
+    !/^\d+$/.test(owner.linux_start_time_ticks) ||
+    typeof owner.executable !== 'string' ||
+    owner.executable.length === 0 ||
+    typeof owner.owner_token !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(owner.owner_token) ||
+    Object.keys(owner).sort().join(',') !==
+      'executable,linux_start_time_ticks,owner_token,pid,schema_version'
+  ) {
+    throw new Error('Experiment lock owner identity is invalid')
+  }
+  return owner as ExperimentLockOwner
+}
+
+async function readLockOwner(
+  lockPath: string,
+): Promise<{ owner: ExperimentLockOwner; bytes: string }> {
+  const details = await lstat(lockPath)
+  if (!details.isFile() || details.isSymbolicLink()) {
+    throw new Error('Experiment lock is not a regular file')
+  }
+  const bytes = await readFile(lockPath, 'utf8')
+  const owner = parseLockOwner(JSON.parse(bytes) as unknown)
+  if (`${canonicalJson(owner as unknown as JsonValue)}\n` !== bytes) {
+    throw new Error('Experiment lock owner identity is not canonical')
+  }
+  return { owner, bytes }
+}
+
+async function lockOwnerIsLive(owner: ExperimentLockOwner): Promise<boolean> {
+  const identity = await linuxProcessIdentity(owner.pid)
+  return (
+    identity !== null &&
+    identity.startTimeTicks === owner.linux_start_time_ticks &&
+    identity.executable === owner.executable
+  )
+}
+
+async function releaseExperimentLock(lockPath: string, ownerToken: string): Promise<void> {
+  const current = await readLockOwner(lockPath)
+  if (current.owner.owner_token !== ownerToken) {
+    throw new Error('Experiment lock ownership changed unexpectedly')
+  }
+  await rm(lockPath)
+}
+
+async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
+  const identity = await linuxProcessIdentity(process.pid)
+  if (!identity) throw new Error('Current Linux process identity is unavailable')
+  const owner: ExperimentLockOwner = {
+    schema_version: 'benchmark-experiment-lock@1',
+    pid: process.pid,
+    linux_start_time_ticks: identity.startTimeTicks,
+    executable: identity.executable,
+    owner_token: randomBytes(32).toString('hex'),
+  }
+  const lockPath = join(experimentRoot, LOCK_NAME)
+  const candidatePath = join(
+    experimentRoot,
+    '..',
+    `.experiment-lock-candidate-${process.pid}-${owner.owner_token}`,
+  )
+  const candidate = await open(candidatePath, 'wx', 0o600)
   try {
-    await lock.writeFile('exclusive\n')
-    await lock.sync()
+    await candidate.writeFile(`${canonicalJson(owner as unknown as JsonValue)}\n`)
+    await candidate.sync()
+  } finally {
+    await candidate.close()
+  }
+
+  let acquired = false
+  try {
+    while (!acquired) {
+      try {
+        await link(candidatePath, lockPath)
+        acquired = true
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        const observed = await readLockOwner(lockPath)
+        if (await lockOwnerIsLive(observed.owner)) {
+          throw new Error('Experiment is already locked by another process')
+        }
+        const current = await readLockOwner(lockPath)
+        if (current.bytes !== observed.bytes) continue
+        await rm(lockPath)
+      }
+    }
+  } finally {
+    await rm(candidatePath, { force: true })
+  }
+
+  try {
     return await run()
   } finally {
-    await lock.close()
-    await rm(lockPath, { force: true })
+    await releaseExperimentLock(lockPath, owner.owner_token)
   }
 }
 
@@ -285,7 +400,7 @@ function makePlan(options: {
   request: ReturnType<typeof prepareRequest>
 }): ExperimentPlan {
   return {
-    schema_version: 'benchmark-experiment-plan@2',
+    schema_version: 'benchmark-experiment-plan@3',
     experiment_id: options.experimentId,
     dataset_class: options.datasetClass,
     profile_id: options.profile.id,
@@ -293,6 +408,7 @@ function makePlan(options: {
     run_count: 3,
     source_sha256: options.inputs.sourceSha256,
     corpus_sha256: options.inputs.corpusSha256,
+    annotations_sha256: options.inputs.annotationsSha256,
     context_sha256: canonicalSha256(options.inputs.context as unknown as JsonValue),
     model_id: options.profile.modelId,
     model_sha256: options.profile.modelSha256,
@@ -368,6 +484,8 @@ function validateResumedRun(options: {
     manifest.host_manifest_sha256 !== options.runtime.hostManifestSha256 ||
     manifest.runtime_configuration_sha256 !== options.runtime.runtimeConfigurationSha256 ||
     manifest.request_sha256 !== options.request.requestSha256 ||
+    manifest.annotations_sha256 !== options.inputs.annotationsSha256 ||
+    options.plan.annotations_sha256 !== options.inputs.annotationsSha256 ||
     manifest.evaluation_run.source_sha256 !== options.inputs.sourceSha256 ||
     manifest.evaluation_run.corpus_sha256 !== options.inputs.corpusSha256 ||
     manifest.evaluation_run.model.model_id !== options.profile.modelId ||
@@ -536,7 +654,7 @@ async function createRun(options: {
     outOfMemory,
   })
   return benchmarkRunManifestSchema.parse({
-    schema_version: 'benchmark-run-manifest@2',
+    schema_version: 'benchmark-run-manifest@3',
     experiment_id: options.plan.experiment_id,
     dataset_class: options.plan.dataset_class,
     run_index: options.runIndex,
@@ -544,6 +662,7 @@ async function createRun(options: {
     host_manifest_sha256: options.runtime.hostManifestSha256,
     runtime_configuration_sha256: options.runtime.runtimeConfigurationSha256,
     request_sha256: options.request.requestSha256,
+    annotations_sha256: options.inputs.annotationsSha256,
     raw_response_sha256: sha256(rawResponse),
     raw_response: rawResponse,
     raw_response_json_valid: rawJsonValid,
@@ -664,12 +783,13 @@ export async function runExactlyThree(options: {
       runs: manifests.map((manifest) => manifest.evaluation_run),
     })
     const report = {
-      schema_version: 'issue-6-benchmark-report@2',
+      schema_version: 'issue-6-benchmark-report@3',
       dataset_class: options.datasetClass,
       representative_accuracy_claim_permitted: options.datasetClass === 'private_representative',
       profile_id: options.profile.id,
       profile_order: options.profile.order,
       plan_sha256: planSha256,
+      annotations_sha256: options.inputs.annotationsSha256,
       run_count: RUN_COUNT,
       run_manifest_sha256: manifestHashes,
       operational_passed: operationalPassed,

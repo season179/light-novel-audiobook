@@ -59,6 +59,7 @@ describe('workspace input boundary', () => {
       datasetClass: 'private_representative',
     })
     expect(validated.corpus.storage_class).toBe('workspace_private')
+    expect(validated.annotationsSha256).toBe(canonicalSha256(annotations))
   })
 
   it('accepts only explicitly synthetic committed fixtures in smoke mode', async () => {
@@ -73,6 +74,7 @@ describe('workspace input boundary', () => {
       datasetClass: 'synthetic_operational',
     })
     expect(validated.corpus.storage_class).toBe('committed_synthetic')
+    expect(validated.annotationsSha256).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('rejects workspace permissions accessible by another user class', async () => {

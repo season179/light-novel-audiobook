@@ -4,7 +4,9 @@ import { hostManifestSchema } from './runtime.js'
 import {
   childExitEvidenceSchema,
   experimentPlanSchema,
+  isGracefulOwnedShutdown,
   performanceSchema,
+  type RuntimeCleanupEvidence,
   resourceCaptureSchema,
   runtimeCleanupEvidenceSchema,
   sha256Schema,
@@ -33,6 +35,7 @@ const evidenceRunSchema = z.strictObject({
   manifest_file_sha256: sha256Schema,
   raw_response_sha256: sha256Schema,
   evaluation_run_sha256: sha256Schema,
+  annotations_sha256: sha256Schema,
   result_state: z.literal('completed'),
   failure_code: z.literal('none'),
   provider_output_valid: z.literal(true),
@@ -44,7 +47,7 @@ const evidenceRunSchema = z.strictObject({
 })
 
 export const syntheticEvidenceSchema = z.strictObject({
-  schema_version: z.literal('issue-6-synthetic-evidence@1'),
+  schema_version: z.literal('issue-6-synthetic-evidence@2'),
   scope: z.literal('synthetic-operational-only-not-representative-accuracy'),
   representative_accuracy_claim_permitted: z.literal(false),
   implementation: gitIdentitySchema,
@@ -65,11 +68,13 @@ export const syntheticEvidenceSchema = z.strictObject({
     plan: experimentPlanSchema,
     plan_canonical_sha256: sha256Schema,
     plan_file_sha256: sha256Schema,
+    annotations_sha256: sha256Schema,
     runs: z.array(evidenceRunSchema).length(3),
     sanitized_report: z.record(z.string(), z.unknown()),
     sanitized_report_file_sha256: sha256Schema,
   }),
   cleanup: runtimeCleanupEvidenceSchema,
+  runtime_lifecycle_passed: z.literal(true),
   evidence_binding_sha256: sha256Schema,
 })
 
@@ -77,6 +82,12 @@ export type SyntheticEvidence = z.infer<typeof syntheticEvidenceSchema>
 
 export function evidenceBinding(value: Omit<SyntheticEvidence, 'evidence_binding_sha256'>): string {
   return canonicalSha256(value as unknown as JsonValue)
+}
+
+export function verifyPassingCleanupEvidence(value: RuntimeCleanupEvidence): void {
+  if (!isGracefulOwnedShutdown(value)) {
+    throw new Error('Evidence cleanup is not a graceful owned shutdown')
+  }
 }
 
 export function verifyEvidenceInternalConsistency(value: SyntheticEvidence): void {
@@ -88,23 +99,28 @@ export function verifyEvidenceInternalConsistency(value: SyntheticEvidence): voi
   ) {
     throw new Error('Evidence plan canonical hash mismatch')
   }
+  if (value.experiment.annotations_sha256 !== value.experiment.plan.annotations_sha256) {
+    throw new Error('Evidence annotations hash mismatch')
+  }
   const report = value.experiment.sanitized_report as {
     schema_version?: unknown
     dataset_class?: unknown
     representative_accuracy_claim_permitted?: unknown
     operational_passed?: unknown
     plan_sha256?: unknown
+    annotations_sha256?: unknown
     run_count?: unknown
     run_manifest_sha256?: unknown
     decision?: unknown
     runs?: Array<Record<string, unknown>>
   }
   if (
-    report.schema_version !== 'issue-6-benchmark-report@2' ||
+    report.schema_version !== 'issue-6-benchmark-report@3' ||
     report.dataset_class !== 'synthetic_operational' ||
     report.representative_accuracy_claim_permitted !== false ||
     report.operational_passed !== true ||
     report.plan_sha256 !== value.experiment.plan_canonical_sha256 ||
+    report.annotations_sha256 !== value.experiment.plan.annotations_sha256 ||
     report.run_count !== 3 ||
     report.decision !== 'synthetic-operational-smoke-only'
   ) {
@@ -123,6 +139,7 @@ export function verifyEvidenceInternalConsistency(value: SyntheticEvidence): voi
     value.experiment.runs.some(
       (run, index) =>
         run.run_index !== index + 1 ||
+        run.annotations_sha256 !== value.experiment.annotations_sha256 ||
         !run.resources.complete ||
         run.child_exit.observed_exited ||
         run.crashed ||
@@ -131,6 +148,7 @@ export function verifyEvidenceInternalConsistency(value: SyntheticEvidence): voi
   ) {
     throw new Error('Evidence contains a failed or incomplete operational run')
   }
+  verifyPassingCleanupEvidence(value.cleanup)
   const serialized = JSON.stringify(value)
   if (
     serialized.includes('The brass bell rang.') ||

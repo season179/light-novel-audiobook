@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -11,7 +11,7 @@ import {
   type RepresentativeCorpus,
   sha256,
 } from '@light-novel-audiobook/scoring-harness'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { GatewayCompletion, ModelGateway } from '../src/gateway.js'
 import { operationalRunSetPassed, runExactlyThree } from '../src/orchestrator.js'
@@ -158,6 +158,7 @@ async function inputs(root: string): Promise<ValidatedInputs> {
     context: await contextFixture(),
     sourceSha256: canonicalSha256(source as unknown as JsonValue),
     corpusSha256: canonicalSha256(corpus as unknown as JsonValue),
+    annotationsSha256: canonicalSha256(annotations as unknown as JsonValue),
   }
 }
 
@@ -189,6 +190,17 @@ async function writeCanonical(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${canonicalJson(value as JsonValue)}\n`)
 }
 
+async function currentLinuxIdentity(): Promise<{ startTimeTicks: string; executable: string }> {
+  const statBytes = await readFile(`/proc/${process.pid}/stat`, 'utf8')
+  const commandEnd = statBytes.lastIndexOf(')')
+  const startTimeTicks = statBytes
+    .slice(commandEnd + 1)
+    .trim()
+    .split(/\s+/)[19]
+  if (!startTimeTicks) throw new Error('missing test process start time')
+  return { startTimeTicks, executable: await readlink(`/proc/${process.pid}/exe`) }
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -214,6 +226,20 @@ describe('Gemma benchmark policy', () => {
         ],
       }),
     ).not.toThrow()
+    expect(() =>
+      enforceFallbackOrder(first, {
+        schema_version: 'fallback-history@2',
+        attempts: [
+          {
+            profile_id: primary.id,
+            report_sha256: 'd'.repeat(64),
+            overall_passed: false,
+            evaluation_reason: 'primary_locked',
+            failure_reasons: ['acceptance_failed'],
+          },
+        ],
+      }),
+    ).toThrow('primary report')
     const orderTwoHistory = {
       schema_version: 'fallback-history@2' as const,
       attempts: [
@@ -222,7 +248,7 @@ describe('Gemma benchmark policy', () => {
           report_sha256: 'a'.repeat(64),
           overall_passed: false as const,
           evaluation_reason: 'primary_locked' as const,
-          failure_reasons: ['acceptance_failed' as const],
+          failure_reasons: ['mature_content_refusal' as const],
         },
         {
           profile_id: first.id,
@@ -255,12 +281,15 @@ describe('Gemma benchmark policy', () => {
     expect(() =>
       enforceFallbackOrder(second, {
         ...orderTwoHistory,
-        attempts: [
-          { ...primaryAttempt, failure_reasons: ['mature_content_refusal'] },
-          firstAttempt,
-        ],
+        attempts: [{ ...primaryAttempt, failure_reasons: ['acceptance_failed'] }, firstAttempt],
       }),
-    ).toThrow('ordinary primary failure')
+    ).toThrow('primary report')
+    expect(() =>
+      enforceFallbackOrder(second, {
+        ...orderTwoHistory,
+        attempts: [primaryAttempt, { ...firstAttempt, failure_reasons: ['acceptance_failed'] }],
+      }),
+    ).toThrow('operational impracticality')
     expect(() =>
       enforceFallbackOrder(second, {
         ...orderTwoHistory,
@@ -448,6 +477,38 @@ describe('Gemma benchmark policy', () => {
     await owner
   })
 
+  it.each([
+    { name: 'dead PID', pid: 2_147_483_647, startTimeTicks: '1', useCurrentExecutable: false },
+    {
+      name: 'reused PID identity',
+      pid: process.pid,
+      startTimeTicks: '0',
+      useCurrentExecutable: true,
+    },
+  ])('reclaims a stale crash lock with $name without signaling any process', async (testCase) => {
+    const { root, inputs: validated } = await temporaryInput()
+    const identity = await currentLinuxIdentity()
+    const experimentId = `stale-lock-${testCase.pid}`
+    const experimentRoot = join(root, 'experiments', experimentId)
+    await mkdir(experimentRoot, { recursive: true, mode: 0o700 })
+    await writeCanonical(join(experimentRoot, '.experiment.lock'), {
+      schema_version: 'benchmark-experiment-lock@1',
+      pid: testCase.pid,
+      linux_start_time_ticks: testCase.startTimeTicks,
+      executable: testCase.useCurrentExecutable ? identity.executable : '/stale/benchmark',
+      owner_token: 'a'.repeat(64),
+    })
+    const kill = vi.spyOn(process, 'kill')
+    try {
+      const gateway = new PassingGateway(validated.corpus, validated.annotations)
+      const result = await runExactlyThree(optionsFor(validated, gateway, experimentId))
+      expect(result.operationalPassed).toBe(true)
+      expect(kill).not.toHaveBeenCalled()
+    } finally {
+      kill.mockRestore()
+    }
+  })
+
   it('rejects extra artifacts and stale plan, dataset, profile, model, binary, runtime, or request identity', async () => {
     const mutationCases: Array<{ name: string; mutate: (root: string) => Promise<void> }> = [
       {
@@ -496,6 +557,24 @@ describe('Gemma benchmark policy', () => {
           const path = join(root, 'experiment-plan.json')
           const value = JSON.parse(await readFile(path, 'utf8'))
           value.source_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'annotations plan',
+        mutate: async (root) => {
+          const path = join(root, 'experiment-plan.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.annotations_sha256 = 'a'.repeat(64)
+          await writeCanonical(path, value)
+        },
+      },
+      {
+        name: 'annotations run',
+        mutate: async (root) => {
+          const path = join(root, 'run-1.private.json')
+          const value = JSON.parse(await readFile(path, 'utf8'))
+          value.annotations_sha256 = 'a'.repeat(64)
           await writeCanonical(path, value)
         },
       },
@@ -553,6 +632,25 @@ describe('Gemma benchmark policy', () => {
       await mutation.mutate(result.experimentRoot)
       await expect(runExactlyThree(options), mutation.name).rejects.toThrow()
     }
+  })
+
+  it('rejects gold-annotation substitution when resuming an immutable experiment', async () => {
+    const { inputs: validated } = await temporaryInput()
+    const gateway = new PassingGateway(validated.corpus, validated.annotations)
+    const options = optionsFor(validated, gateway, 'annotation-substitution')
+    await runExactlyThree(options)
+    const substitutedAnnotations = {
+      ...validated.annotations,
+      annotation_version: 'substituted-gold@2',
+    }
+    const substitutedInputs: ValidatedInputs = {
+      ...validated,
+      annotations: substitutedAnnotations,
+      annotationsSha256: canonicalSha256(substitutedAnnotations as unknown as JsonValue),
+    }
+    await expect(
+      runExactlyThree(optionsFor(substitutedInputs, gateway, 'annotation-substitution')),
+    ).rejects.toThrow('plan is stale')
   })
 
   it('rehashes and reparses exact raw bytes and binds each manifest hash into the report', async () => {

@@ -121,15 +121,13 @@ export function enforceFallbackOrder(
     }
   }
   const primaryReasons = history.attempts[0]?.failure_reasons ?? []
-  if (profile.order === 1 && !primaryReasons.includes('mature_content_refusal')) {
-    throw new Error('The first fallback is reserved for mature-content obstruction')
+  if (!primaryReasons.includes('mature_content_refusal')) {
+    throw new Error('Fallback 1 requires mature-content refusal in the primary report')
   }
   if (
     profile.order >= 2 &&
-    !primaryReasons.some(
-      (reason) => reason === 'acceptance_failed' || reason === 'operational_impractical',
-    )
+    !history.attempts[1]?.failure_reasons.includes('operational_impractical')
   ) {
-    throw new Error('Later fallbacks require a documented ordinary primary failure')
+    throw new Error('Fallback 2 requires fallback-1 operational impracticality')
   }
 }

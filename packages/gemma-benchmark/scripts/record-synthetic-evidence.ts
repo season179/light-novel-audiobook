@@ -101,6 +101,7 @@ async function main(): Promise<void> {
       manifest_file_sha256: sha256(bytes),
       raw_response_sha256: manifest.raw_response_sha256,
       evaluation_run_sha256: canonicalSha256(manifest.evaluation_run as unknown as JsonValue),
+      annotations_sha256: manifest.annotations_sha256,
       result_state: manifest.result_state,
       failure_code: manifest.failure_code,
       provider_output_valid: manifest.provider_output_valid,
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
   }
 
   const preimage = {
-    schema_version: 'issue-6-synthetic-evidence@1' as const,
+    schema_version: 'issue-6-synthetic-evidence@2' as const,
     scope: 'synthetic-operational-only-not-representative-accuracy' as const,
     representative_accuracy_claim_permitted: false as const,
     implementation: {
@@ -139,11 +140,13 @@ async function main(): Promise<void> {
       plan,
       plan_canonical_sha256: canonicalSha256(plan as unknown as JsonValue),
       plan_file_sha256: sha256(planBytes),
+      annotations_sha256: inputs.annotationsSha256,
       runs,
       sanitized_report: report,
       sanitized_report_file_sha256: sha256(reportBytes),
     },
     cleanup: execution.cleanup,
+    runtime_lifecycle_passed: true as const,
   }
   const evidence = syntheticEvidenceSchema.parse({
     ...preimage,

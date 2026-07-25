@@ -3,6 +3,7 @@ export {
   type SyntheticEvidence,
   syntheticEvidenceSchema,
   verifyEvidenceInternalConsistency,
+  verifyPassingCleanupEvidence,
 } from './evidence.js'
 export {
   type GatewayCompletion,
@@ -32,6 +33,7 @@ export {
   profileById,
 } from './profiles.js'
 export {
+  assertSuccessfulRuntimeLifecycle,
   type HostManifest,
   hostManifestSchema,
   type PinnedRuntimeContext,
@@ -52,10 +54,11 @@ export {
   experimentPlanSchema,
   type FallbackHistory,
   fallbackHistorySchema,
+  isGracefulOwnedShutdown,
   modelOutputSchema,
   type ResourceCapture,
   type RuntimeCleanupEvidence,
   runtimeCleanupEvidenceSchema,
 } from './schemas.js'
 export { syntheticOperationalStatus } from './status.js'
-export { type ValidatedInputs, validateWorkspaceInputs } from './workspace.js'
+export { inputIdentity, type ValidatedInputs, validateWorkspaceInputs } from './workspace.js'
