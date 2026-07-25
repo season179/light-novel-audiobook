@@ -728,8 +728,11 @@ async function main() {
   }
   const buildProvenance = await validateBuildProvenance(harness.sourceIdentity)
   const baselineGpu = gpuSample()
-  if (baselineGpu.gpuUtilizationPercent > 5) {
-    throw new Error('GPU is not idle enough for lifecycle measurements')
+  if (
+    baselineGpu.gpuUtilizationPercent > 5 ||
+    baselineGpu.deviceVramMiB > lock.probe.maximumBaselineVramMiB
+  ) {
+    throw new Error('GPU is not idle and unloaded enough for isolated lifecycle measurements')
   }
   const cliEvidence = await runCli()
 

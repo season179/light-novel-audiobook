@@ -56,6 +56,7 @@
     "interruptAfterMilliseconds": 250,
     "lifecyclePollMilliseconds": 200,
     "lifecycleIdleSamples": 8,
-    "lifecycleMaximumSeconds": 60
+    "lifecycleMaximumSeconds": 60,
+    "maximumBaselineVramMiB": 1024
   }
 }

@@ -81,6 +81,7 @@ test('the lock pins immutable inputs and lifecycle settings', async () => {
   assert.equal(lock.server.port, 8081)
   assert.ok(lock.server.timeoutTestSeconds < lock.server.timeoutSeconds)
   assert.ok(lock.probe.longRequest.maxSteps >= 100)
+  assert.ok(lock.probe.maximumBaselineVramMiB <= 1024)
 })
 
 test('strict WAV validation accepts a complete canonical response', () => {
@@ -288,6 +289,7 @@ test('operational harness validates roots before creating them and uses immutabl
   assert.match(probe, /flag: 'wx'/u)
   assert.match(probe, /sourceIdentity/u)
   assert.match(probe, /validateBuildProvenance/u)
+  assert.match(probe, /maximumBaselineVramMiB/u)
   assert.match(probe, /failure-manifest\.json/u)
   assert.doesNotMatch(`${shell}\n${probe}`, /0\.0\.0\.0.*--host/u)
 })

@@ -45,6 +45,7 @@ export async function loadLock(path) {
     lock.probe.lifecyclePollMilliseconds,
     lock.probe.lifecycleIdleSamples,
     lock.probe.lifecycleMaximumSeconds,
+    lock.probe.maximumBaselineVramMiB,
   ]) {
     if (!Number.isInteger(value) || value <= 0) throw new Error('invalid probe numeric setting')
   }

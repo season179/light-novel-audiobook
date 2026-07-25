@@ -69,8 +69,10 @@ create model-generated audio.
 
 ## Measured gates
 
-The committed evidence contains the host-specific values. Evidence generation fails instead of
-publishing a stale conclusion if any pinned assumption changes.
+The committed evidence contains the host-specific values. Evidence generation requires an idle,
+unloaded GPU below the pinned baseline-memory ceiling and fails instead of mixing another model's
+resources into the measurements. It also fails rather than publishing a stale conclusion if any
+pinned assumption changes.
 
 ### Non-streaming persistence and parameters
 
