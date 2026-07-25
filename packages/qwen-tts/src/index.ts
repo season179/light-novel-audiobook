@@ -1,19 +1,41 @@
 export {
+  type ExclusiveGpuLeaseCoordinator,
+  FileGpuLeaseCoordinator,
+  type FileGpuLeaseCoordinatorConfig,
+  type GpuLease,
+  GpuLeaseError,
+  type GpuOwner,
+} from '@light-novel-audiobook/gpu-lease'
+export {
+  QwenApplicationSpeechEngine,
+  type QwenApplicationSpeechEngineOptions,
+} from './application-adapter.js'
+export {
   type LoadedProductionConfig,
   loadProductionConfig,
   type QwenProductionConfig,
   type VoiceProfile,
 } from './config.js'
-export { type QwenTtsEngineConfig, QwenTtsSpeechEngine } from './engine.js'
-export { FileGpuGate, type FileGpuGateConfig } from './gpu-gate.js'
-export { canonicalJson, deriveSeed, sha256 } from './manifest.js'
+export {
+  type QwenManagedBatch,
+  type QwenTtsEngineConfig,
+  QwenTtsSpeechEngine,
+} from './engine.js'
+export {
+  canonicalJson,
+  DEFAULT_DELIVERY,
+  deriveSeed,
+  effectiveInstruction,
+  sha256,
+} from './manifest.js'
+export { prepareEmptySmokeOutputRoot } from './smoke-output.js'
 export {
   type ExclusiveGpuGate,
-  type GpuLease,
-  type GpuOwner,
+  type FallbackApproval,
   SELECTED_VOICE_PROFILE_IDS,
   type SelectedVoiceProfileId,
   type SpeechBatchResult,
+  type SpeechDeliveryDirection,
   type SpeechEngine,
   SpeechEngineError,
   type SpeechEngineErrorCode,

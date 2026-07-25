@@ -98,18 +98,22 @@ def exact_object(value: Any, fields: set[str], name: str) -> dict[str, Any]:
     return value
 
 
-def read_request() -> dict[str, Any]:
+def read_message() -> dict[str, Any]:
     line = sys.stdin.buffer.readline(16 * 1024 * 1024)
     if not line or len(line) >= 16 * 1024 * 1024:
-        raise ValueError("one bounded batch request is required")
-    if sys.stdin.buffer.read(1):
-        raise ValueError("only one batch request is allowed")
+        raise ValueError("one bounded protocol message is required")
     try:
-        request = json.loads(line)
+        value = json.loads(line)
     except json.JSONDecodeError as error:
-        raise ValueError("batch request is not valid JSON") from error
+        raise ValueError("protocol message is not valid JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError("protocol message must be an object")
+    return value
+
+
+def read_begin_request() -> dict[str, Any]:
     request = exact_object(
-        request,
+        read_message(),
         {
             "protocolVersion",
             "command",
@@ -117,14 +121,16 @@ def read_request() -> dict[str, Any]:
             "productionConfigSha256",
             "modelLockPath",
             "runtimeManifestPath",
+            "runtimeManifestSha256",
             "uvLockPath",
             "snapshotPath",
             "outputDirectory",
-            "segments",
+            "workerSha256",
+            "allowOverwriteExisting",
         },
-        "request",
+        "begin request",
     )
-    if request["protocolVersion"] != PROTOCOL_VERSION or request["command"] != "render-batch":
+    if request["protocolVersion"] != PROTOCOL_VERSION or request["command"] != "begin-batch":
         raise ValueError("unsupported command or protocol")
     for key in [
         "productionConfigPath",
@@ -136,35 +142,73 @@ def read_request() -> dict[str, Any]:
     ]:
         if not isinstance(request[key], str) or not Path(request[key]).is_absolute():
             raise ValueError(f"{key} must be an absolute path")
-    if not isinstance(request["productionConfigSha256"], str) or not SHA256.fullmatch(request["productionConfigSha256"]):
-        raise ValueError("production configuration hash is invalid")
-    if not isinstance(request["segments"], list) or not request["segments"]:
-        raise ValueError("render batch must contain segments")
-    seen: set[str] = set()
-    previous_sequence = 0
-    for item in request["segments"]:
-        item = exact_object(
-            item,
-            {"sequence", "segmentId", "text", "voiceProfileId", "seed", "renderIdentitySha256"},
-            "segment",
-        )
-        if not isinstance(item["sequence"], int) or item["sequence"] <= previous_sequence:
-            raise ValueError("segment sequence must be strictly increasing")
-        previous_sequence = item["sequence"]
-        segment_id = item["segmentId"]
-        if not isinstance(segment_id, str) or not SEGMENT_ID.fullmatch(segment_id) or segment_id in seen:
-            raise ValueError("segment ID is unsafe or duplicated")
-        seen.add(segment_id)
-        if not isinstance(item["text"], str) or not item["text"].strip() or "\0" in item["text"]:
-            raise ValueError(f"segment text is invalid: {segment_id}")
-        if item["voiceProfileId"] not in EXPECTED_PROFILE_IDS:
-            raise ValueError(f"voice profile is not selected: {segment_id}")
-        if not isinstance(item["seed"], int) or not 1 <= item["seed"] <= 0x7FFFFFFF:
-            raise ValueError(f"seed is invalid: {segment_id}")
-        if not isinstance(item["renderIdentitySha256"], str) or not SHA256.fullmatch(item["renderIdentitySha256"]):
-            raise ValueError(f"render identity is invalid: {segment_id}")
+    for key in ["productionConfigSha256", "runtimeManifestSha256", "workerSha256"]:
+        if not isinstance(request[key], str) or not SHA256.fullmatch(request[key]):
+            raise ValueError(f"{key} is invalid")
+    if not isinstance(request["allowOverwriteExisting"], bool):
+        raise ValueError("allowOverwriteExisting must be boolean")
     return request
 
+
+def validate_segment(item: Any, seen: set[str], previous_sequence: int) -> dict[str, Any]:
+    item = exact_object(
+        item,
+        {
+            "sequence",
+            "segmentId",
+            "text",
+            "voiceProfileId",
+            "seed",
+            "renderIdentitySha256",
+            "applicationInputIdentity",
+            "delivery",
+            "effectiveInstruction",
+            "fallbackApproval",
+        },
+        "segment",
+    )
+    if not isinstance(item["sequence"], int) or item["sequence"] <= previous_sequence:
+        raise ValueError("segment sequence must be strictly increasing")
+    segment_id = item["segmentId"]
+    if not isinstance(segment_id, str) or not SEGMENT_ID.fullmatch(segment_id) or segment_id in seen:
+        raise ValueError("segment ID is unsafe or duplicated")
+    if not isinstance(item["text"], str) or not item["text"].strip() or "\0" in item["text"]:
+        raise ValueError(f"segment text is invalid: {segment_id}")
+    if item["voiceProfileId"] not in EXPECTED_PROFILE_IDS:
+        raise ValueError(f"voice profile is not selected: {segment_id}")
+    if not isinstance(item["seed"], int) or not 1 <= item["seed"] <= 0x7FFFFFFF:
+        raise ValueError(f"seed is invalid: {segment_id}")
+    if not isinstance(item["renderIdentitySha256"], str) or not SHA256.fullmatch(item["renderIdentitySha256"]):
+        raise ValueError(f"render identity is invalid: {segment_id}")
+    if item["applicationInputIdentity"] is not None and (
+        not isinstance(item["applicationInputIdentity"], str)
+        or not SHA256.fullmatch(item["applicationInputIdentity"])
+    ):
+        raise ValueError(f"application input identity is invalid: {segment_id}")
+    delivery = exact_object(item["delivery"], {"emotion", "pace", "volume", "pauseAfterMs"}, "delivery")
+    if (
+        not isinstance(delivery["emotion"], str)
+        or not delivery["emotion"]
+        or delivery["pace"] not in {"slow", "normal", "fast"}
+        or delivery["volume"] not in {"soft", "normal", "loud"}
+        or not isinstance(delivery["pauseAfterMs"], int)
+        or not 0 <= delivery["pauseAfterMs"] <= 10000
+    ):
+        raise ValueError(f"delivery is invalid: {segment_id}")
+    if not isinstance(item["effectiveInstruction"], str) or not item["effectiveInstruction"]:
+        raise ValueError(f"effective instruction is invalid: {segment_id}")
+    approval = item["fallbackApproval"]
+    if approval is not None:
+        approval = exact_object(approval, {"approvalId", "approvalSha256"}, "fallback approval")
+        if (
+            not isinstance(approval["approvalId"], str)
+            or not approval["approvalId"]
+            or not isinstance(approval["approvalSha256"], str)
+            or not SHA256.fullmatch(approval["approvalSha256"])
+        ):
+            raise ValueError(f"fallback approval is invalid: {segment_id}")
+    seen.add(segment_id)
+    return item
 
 def validate_runtime(config: dict[str, Any], manifest_path: Path, uv_lock_path: Path) -> None:
     runtime = config["runtime"]
@@ -358,7 +402,15 @@ def validate_wav(data: bytes, wav_config: dict[str, Any], text: str) -> dict[str
     return {"sha256": sha256_bytes(data), "bytes": len(data), "frames": frames, "durationSeconds": duration}
 
 
-def write_wav_atomic(output_directory: Path, segment_id: str, waveform: Any, sample_rate: int, wav_config: dict[str, Any], text: str) -> dict[str, Any]:
+def write_wav_atomic(
+    output_directory: Path,
+    segment_id: str,
+    waveform: Any,
+    sample_rate: int,
+    wav_config: dict[str, Any],
+    text: str,
+    allow_overwrite: bool,
+) -> dict[str, Any]:
     import numpy as np
 
     values = np.asarray(waveform, dtype=np.float32).reshape(-1)
@@ -377,7 +429,11 @@ def write_wav_atomic(output_directory: Path, segment_id: str, waveform: Any, sam
             raw.flush()
             os.fsync(raw.fileno())
         analysis = validate_wav(temporary.read_bytes(), wav_config, text)
-        os.replace(temporary, target)
+        if allow_overwrite:
+            os.replace(temporary, target)
+        else:
+            os.link(temporary, target)
+            temporary.unlink()
         directory_fd = os.open(output_directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory_fd)
@@ -409,10 +465,18 @@ def run() -> int:
     os.umask(0o077)
     tts = None
     torch = None
+    active_segment: str | None = None
     try:
-        request = read_request()
+        request = read_begin_request()
+        if os.environ.get("PYTHONHOME") or os.environ.get("PYTHONPATH"):
+            raise ValueError("ambient Python import paths are forbidden")
+        if sha256_file(Path(__file__).resolve()) != request["workerSha256"]:
+            raise ValueError("Python worker identity changed between parent and child")
+        runtime_manifest_path = Path(request["runtimeManifestPath"])
+        if sha256_file(runtime_manifest_path) != request["runtimeManifestSha256"]:
+            raise ValueError("runtime manifest identity changed between parent and child")
         config, profiles = validate_production_config(request)
-        validate_runtime(config, Path(request["runtimeManifestPath"]), Path(request["uvLockPath"]))
+        validate_runtime(config, runtime_manifest_path, Path(request["uvLockPath"]))
         model_lock_path = Path(request["modelLockPath"])
         if sha256_file(model_lock_path) != config["model"]["snapshotLockSha256"]:
             raise ValueError("model snapshot lock identity changed")
@@ -456,16 +520,44 @@ def run() -> int:
             raise ValueError("qwen-tts generation API cannot apply all locked settings")
         emit("model-loaded")
 
-        for item in request["segments"]:
+        seen: set[str] = set()
+        previous_sequence = 0
+        while True:
+            message = read_message()
+            command = message.get("command")
+            if command == "end-batch":
+                exact_object(message, {"protocolVersion", "command"}, "end request")
+                if message.get("protocolVersion") != PROTOCOL_VERSION:
+                    raise ValueError("end request protocol changed")
+                break
+            message = exact_object(
+                message,
+                {"protocolVersion", "command", "segment"},
+                "render request",
+            )
+            if message["protocolVersion"] != PROTOCOL_VERSION or command != "render-segment":
+                raise ValueError("unsupported render command or protocol")
+            item = validate_segment(message["segment"], seen, previous_sequence)
+            previous_sequence = item["sequence"]
             segment_id = item["segmentId"]
-            emit("segment-started", segmentId=segment_id, sequence=item["sequence"])
+            active_segment = segment_id
             profile = profiles[item["voiceProfileId"]]
+            expected_instruction = (
+                f"{profile['instruction']} For this segment, use {item['delivery']['emotion']} emotion, "
+                f"{item['delivery']['pace']} pacing, and {item['delivery']['volume']} volume while preserving the approved voice."
+            )
+            if item["effectiveInstruction"] != expected_instruction:
+                raise ValueError(f"effective instruction identity mismatch: {segment_id}")
+            is_fallback = item["fallbackApproval"] is not None
+            if is_fallback and item["voiceProfileId"] != config["fallbackVoiceProfileId"]:
+                raise ValueError(f"fallback did not use configured approved profile: {segment_id}")
+            emit("segment-started", segmentId=segment_id, sequence=item["sequence"])
             set_seed(torch, np, item["seed"])
             wavs, sample_rate = tts.generate_custom_voice(
                 text=item["text"],
                 language=config["generation"]["language"],
                 speaker=profile["speaker"],
-                instruct=profile["instruction"],
+                instruct=item["effectiveInstruction"],
                 non_streaming_mode=config["generation"]["nonStreamingMode"],
                 **generation_kwargs(config["generation"]),
             )
@@ -479,6 +571,7 @@ def run() -> int:
                 int(sample_rate),
                 config["wav"],
                 item["text"],
+                request["allowOverwriteExisting"],
             )
             emit(
                 "segment-rendered",
@@ -486,6 +579,7 @@ def run() -> int:
                 sequence=item["sequence"],
                 sha256=analysis["sha256"],
             )
+            active_segment = None
 
         del tts
         tts = None
@@ -503,6 +597,7 @@ def run() -> int:
             "fatal",
             stage="render-batch",
             message=f"{type(error).__name__}: {str(error)[:1000]}",
+            **({"segmentId": active_segment} if active_segment is not None else {}),
         )
         return 1
     finally:

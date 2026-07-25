@@ -6,18 +6,34 @@ export const SELECTED_VOICE_PROFILE_IDS = [
 
 export type SelectedVoiceProfileId = (typeof SELECTED_VOICE_PROFILE_IDS)[number]
 
+export interface SpeechDeliveryDirection {
+  readonly emotion: string
+  readonly pace: 'slow' | 'normal' | 'fast'
+  readonly volume: 'soft' | 'normal' | 'loud'
+  readonly pauseAfterMs: number
+}
+
+export interface FallbackApproval {
+  readonly approvalId: string
+  readonly approvalSha256: string
+}
+
 export interface SpeechSegmentRequest {
   /** Stable ID from the approved script. It also determines the canonical WAV filename. */
   readonly segmentId: string
   /** Exact approved render text. This adapter never normalizes or rewrites it. */
   readonly text: string
-  /** Omit only for an explicitly approved unresolved-speaker fallback. */
+  /** Omit only with fallbackApproval from the persisted human review decision. */
   readonly voiceProfileId?: SelectedVoiceProfileId
+  readonly fallbackApproval?: FallbackApproval
+  /** Finalized issue #29 content address, persisted in the render manifest when supplied. */
+  readonly applicationInputIdentity?: string
+  readonly delivery?: SpeechDeliveryDirection
 }
 
 export interface SpeechRenderOptions {
   readonly signal?: AbortSignal
-  readonly onProgress?: (event: SpeechProgressEvent) => void
+  readonly onProgress?: (event: SpeechProgressEvent) => void | Promise<void>
 }
 
 export type SpeechProgressEvent =
@@ -111,13 +127,8 @@ export class SpeechEngineError extends Error {
   }
 }
 
-export interface GpuLease {
-  release(): Promise<void>
-}
-
-/** Shared by the Gemma and Qwen composition roots to prevent simultaneous GPU residency. */
-export type GpuOwner = 'gemma' | 'qwen3-tts'
-
-export interface ExclusiveGpuGate {
-  acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease>
-}
+export type {
+  ExclusiveGpuLeaseCoordinator as ExclusiveGpuGate,
+  GpuLease,
+  GpuOwner,
+} from '@light-novel-audiobook/gpu-lease'

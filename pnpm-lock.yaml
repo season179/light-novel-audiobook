@@ -148,6 +148,16 @@ importers:
         version: 4.4.3
 
   packages/qwen-tts:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@light-novel-audiobook/gpu-lease':
+        specifier: workspace:*
+        version: link:../gpu-lease
     devDependencies:
       tsx:
         specifier: 4.21.0

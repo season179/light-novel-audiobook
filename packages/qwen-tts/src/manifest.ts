@@ -2,7 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { LoadedProductionConfig, VoiceProfile } from './config.js'
-import type { SpeechSegmentRequest, SpeechSegmentResult } from './types.js'
+import type {
+  FallbackApproval,
+  SpeechDeliveryDirection,
+  SpeechSegmentRequest,
+  SpeechSegmentResult,
+} from './types.js'
+import { SpeechEngineError } from './types.js'
 import { validateCanonicalWav } from './wav.js'
 
 export interface RenderIdentity {
@@ -10,7 +16,14 @@ export interface RenderIdentity {
   readonly model: LoadedProductionConfig['value']['model']
   readonly runtime: LoadedProductionConfig['value']['runtime']
   readonly text: { readonly value: string; readonly sha256: string }
-  readonly voice: VoiceProfile & { readonly usedFallback: boolean }
+  readonly applicationInputIdentity: string | null
+  readonly voice: VoiceProfile & {
+    readonly usedFallback: boolean
+    readonly fallbackApproval: FallbackApproval | null
+    readonly effectiveInstruction: string
+    readonly effectiveInstructionSha256: string
+  }
+  readonly delivery: SpeechDeliveryDirection
   readonly settings: LoadedProductionConfig['value']['generation'] & {
     readonly seed: number
     readonly seedStrategy: LoadedProductionConfig['value']['seedStrategy']
@@ -22,6 +35,8 @@ export interface SegmentPlan {
   readonly request: SpeechSegmentRequest
   readonly profile: VoiceProfile
   readonly usedFallback: boolean
+  readonly delivery: SpeechDeliveryDirection
+  readonly effectiveInstruction: string
   readonly seed: number
   readonly wavPath: string
   readonly manifestPath: string
@@ -53,6 +68,20 @@ export function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+export const DEFAULT_DELIVERY: SpeechDeliveryDirection = Object.freeze({
+  emotion: 'neutral',
+  pace: 'normal',
+  volume: 'normal',
+  pauseAfterMs: 0,
+})
+
+export function effectiveInstruction(
+  profile: VoiceProfile,
+  delivery: SpeechDeliveryDirection,
+): string {
+  return `${profile.instruction} For this segment, use ${delivery.emotion} emotion, ${delivery.pace} pacing, and ${delivery.volume} volume while preserving the approved voice.`
+}
+
 export function deriveSeed(profile: VoiceProfile, segmentId: string): number {
   const digest = createHash('sha256')
     .update(`${profile.id}\0${profile.seedSalt}\0${segmentId}`)
@@ -71,12 +100,22 @@ export function createSegmentPlan(
   const profile = config.profiles.get(profileId)
   if (!profile) throw new Error(`Missing configured voice profile: ${profileId}`)
   const seed = deriveSeed(profile, request.segmentId)
+  const delivery = request.delivery ?? DEFAULT_DELIVERY
+  const instruction = effectiveInstruction(profile, delivery)
   const identity: RenderIdentity = {
     adapter: config.value.adapter,
     model: config.value.model,
     runtime: config.value.runtime,
     text: { value: request.text, sha256: sha256(request.text) },
-    voice: { ...profile, usedFallback },
+    applicationInputIdentity: request.applicationInputIdentity ?? null,
+    voice: {
+      ...profile,
+      usedFallback,
+      fallbackApproval: request.fallbackApproval ?? null,
+      effectiveInstruction: instruction,
+      effectiveInstructionSha256: sha256(instruction),
+    },
+    delivery,
     settings: {
       ...config.value.generation,
       seed,
@@ -88,6 +127,8 @@ export function createSegmentPlan(
     request,
     profile,
     usedFallback,
+    delivery,
+    effectiveInstruction: instruction,
     seed,
     wavPath: join(outputDirectory, `${request.segmentId}.wav`),
     manifestPath: join(outputDirectory, `${request.segmentId}.render.json`),
@@ -196,8 +237,13 @@ export async function recordRendered(
     plan.request.text,
     plan.request.segmentId,
   )
-  if (validated.audio.sha256 !== reportedSha256)
-    throw new Error(`Worker WAV hash mismatch for ${plan.request.segmentId}`)
+  if (validated.audio.sha256 !== reportedSha256) {
+    throw new SpeechEngineError(
+      'protocol',
+      `Worker WAV hash mismatch for ${plan.request.segmentId}`,
+      { segmentId: plan.request.segmentId },
+    )
+  }
   const manifest: RenderManifest = {
     schemaVersion: 1,
     segmentId: plan.request.segmentId,

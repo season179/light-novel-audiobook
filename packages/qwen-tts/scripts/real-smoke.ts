@@ -1,9 +1,13 @@
 import { execFile } from 'node:child_process'
-import { mkdir, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { FileGpuGate, QwenTtsSpeechEngine } from '../src/index.js'
+import {
+  FileGpuLeaseCoordinator,
+  prepareEmptySmokeOutputRoot,
+  QwenTtsSpeechEngine,
+} from '../src/index.js'
 
 const execFileAsync = promisify(execFile)
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -38,7 +42,7 @@ async function main(): Promise<void> {
   if (contains(REPOSITORY_ROOT, outputDirectory) || contains(outputDirectory, REPOSITORY_ROOT)) {
     throw new Error('QWEN3_TTS_SMOKE_OUTPUT_ROOT must be outside Git')
   }
-  await mkdir(outputDirectory, { recursive: true, mode: 0o700 })
+  await prepareEmptySmokeOutputRoot(outputDirectory)
   const { stdout: filesystem } = await execFileAsync('findmnt', [
     '-n',
     '-o',
@@ -58,7 +62,8 @@ async function main(): Promise<void> {
     snapshotPath,
     outputDirectory,
     repositoryRoot: REPOSITORY_ROOT,
-    gpuGate: new FileGpuGate({ lockDirectory }),
+    gpuGate: new FileGpuLeaseCoordinator({ lockFilePath: lockDirectory }),
+    allowOverwriteExisting: false,
   } as const
   const requests = [
     {
@@ -80,7 +85,9 @@ async function main(): Promise<void> {
 
   const engine = await QwenTtsSpeechEngine.create(baseConfig)
   const first = await engine.renderBatch(requests, {
-    onProgress: (event) => process.stderr.write(`[qwen-smoke] ${JSON.stringify(event)}\n`),
+    onProgress: (event) => {
+      process.stderr.write(`[qwen-smoke] ${JSON.stringify(event)}\n`)
+    },
   })
   if (first.rendered !== 3) {
     throw new Error(
