@@ -10,31 +10,42 @@ export interface ValidatedWav {
   readonly activeFrameFraction: number
 }
 
+/** Shape of a canonical WAV, derived entirely from the file's own header and data chunk. */
+export interface CanonicalWavHeader {
+  readonly channels: number
+  readonly sampleRateHz: number
+  readonly bitsPerSample: number
+  readonly frames: number
+  readonly durationSeconds: number
+}
+
 function invalid(message: string, segmentId: string): never {
   throw new SpeechEngineError('audio-validation', `Invalid WAV for ${segmentId}: ${message}`, {
     segmentId,
   })
 }
 
-export function validateCanonicalWavBytes(
+/**
+ * Constant-cost canonical RIFF/WAVE gate. Returns the header, or the reason it is not canonical.
+ * `frames` is derived from the declared data chunk and cross-checked against the real file length,
+ * so a caller never has to take an external record's word for the audio's shape.
+ */
+export function readCanonicalWavHeader(
   bytes: Buffer,
   requirements: WavRequirements,
-  text: string,
-  segmentId: string,
-): ValidatedWav {
-  if (bytes.length < 46) invalid('file is empty or shorter than a PCM header', segmentId)
+): CanonicalWavHeader | string {
+  if (bytes.length < 46) return 'file is empty or shorter than a PCM header'
   if (
     bytes.toString('ascii', 0, 4) !== 'RIFF' ||
     bytes.toString('ascii', 8, 12) !== 'WAVE' ||
     bytes.toString('ascii', 12, 16) !== 'fmt ' ||
     bytes.toString('ascii', 36, 40) !== 'data'
   ) {
-    invalid('expected canonical RIFF/WAVE fmt/data layout', segmentId)
+    return 'expected canonical RIFF/WAVE fmt/data layout'
   }
-  if (bytes.readUInt32LE(4) + 8 !== bytes.length)
-    invalid('RIFF length does not match file length', segmentId)
+  if (bytes.readUInt32LE(4) + 8 !== bytes.length) return 'RIFF length does not match file length'
   if (bytes.readUInt32LE(16) !== 16 || bytes.readUInt16LE(20) !== 1)
-    invalid('expected canonical PCM fmt chunk', segmentId)
+    return 'expected canonical PCM fmt chunk'
 
   const channels = bytes.readUInt16LE(22)
   const sampleRateHz = bytes.readUInt32LE(24)
@@ -42,7 +53,7 @@ export function validateCanonicalWavBytes(
   const blockAlign = bytes.readUInt16LE(32)
   const bitsPerSample = bytes.readUInt16LE(34)
   const dataBytes = bytes.readUInt32LE(40)
-  if (44 + dataBytes !== bytes.length) invalid('data length does not match file length', segmentId)
+  if (44 + dataBytes !== bytes.length) return 'data length does not match file length'
   if (
     channels !== requirements.channels ||
     sampleRateHz !== requirements.sampleRateHz ||
@@ -52,11 +63,31 @@ export function validateCanonicalWavBytes(
     dataBytes === 0 ||
     dataBytes % blockAlign !== 0
   ) {
-    invalid('expected nonempty mono 24 kHz 16-bit PCM', segmentId)
+    return 'expected nonempty mono 24 kHz 16-bit PCM'
   }
 
   const frames = dataBytes / blockAlign
-  const durationSeconds = frames / sampleRateHz
+  return { channels, sampleRateHz, bitsPerSample, frames, durationSeconds: frames / sampleRateHz }
+}
+
+export function validateCanonicalWavHeader(
+  bytes: Buffer,
+  requirements: WavRequirements,
+  segmentId: string,
+): CanonicalWavHeader {
+  const header = readCanonicalWavHeader(bytes, requirements)
+  if (typeof header === 'string') invalid(header, segmentId)
+  return header
+}
+
+export function validateCanonicalWavBytes(
+  bytes: Buffer,
+  requirements: WavRequirements,
+  text: string,
+  segmentId: string,
+): ValidatedWav {
+  const { channels, sampleRateHz, bitsPerSample, frames, durationSeconds } =
+    validateCanonicalWavHeader(bytes, requirements, segmentId)
   const wordCount = text.trim().split(/\s+/u).filter(Boolean).length
   if (wordCount === 0) invalid('render text has no words', segmentId)
   const secondsPerWord = durationSeconds / wordCount

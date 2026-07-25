@@ -45,4 +45,10 @@ export {
   type SpeechSegmentRequest,
   type SpeechSegmentResult,
 } from './types.js'
-export { validateCanonicalWav, validateCanonicalWavBytes } from './wav.js'
+export {
+  type CanonicalWavHeader,
+  readCanonicalWavHeader,
+  validateCanonicalWav,
+  validateCanonicalWavBytes,
+  validateCanonicalWavHeader,
+} from './wav.js'

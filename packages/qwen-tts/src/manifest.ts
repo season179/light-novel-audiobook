@@ -11,7 +11,7 @@ import type {
   SpeechSegmentResult,
 } from './types.js'
 import { SpeechEngineError } from './types.js'
-import { validateCanonicalWav } from './wav.js'
+import { readCanonicalWavHeader, validateCanonicalWav } from './wav.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -148,18 +148,18 @@ export function createSegmentPlan(
   }
 }
 
-async function isRegularFile(path: string): Promise<boolean> {
-  try {
-    const info = await lstat(path)
-    return info.isFile() && !info.isSymbolicLink()
-  } catch {
-    return false
-  }
+function unreadable(label: string, path: string, segmentId: string, cause: unknown): never {
+  throw new SpeechEngineError(
+    'audio-validation',
+    `Cannot read cached ${label} for ${segmentId}: ${path}`,
+    { cause, segmentId },
+  )
 }
 
 /**
- * Reads a cached artifact. A vanished file simply invalidates reuse; any other error (EIO, EACCES)
- * is surfaced so a failing disk never masquerades as a stale segment and triggers a needless GPU
+ * Reads a cached artifact, rejecting anything that is not a plain regular file. A vanished file
+ * simply invalidates reuse; every other error (EIO, EACCES on the file *or* its directory) is
+ * surfaced so a failing disk never masquerades as a stale segment and triggers a needless GPU
  * re-render of the whole book.
  */
 async function readCached(
@@ -168,65 +168,59 @@ async function readCached(
   segmentId: string,
 ): Promise<Buffer | undefined> {
   try {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink()) return undefined
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    unreadable(label, path, segmentId, error)
+  }
+  try {
     return await readFile(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw new SpeechEngineError(
-      'audio-validation',
-      `Cannot read cached ${label} for ${segmentId}: ${path}`,
-      { cause: error, segmentId },
-    )
+    unreadable(label, path, segmentId, error)
   }
 }
 
 /**
- * Structural O(1) check of the recorded audio identity. The deep per-sample health gate already
- * ran on this exact byte sequence when it was rendered (both here and in the Python worker), so
- * reuse only has to prove the bytes on disk are still that sequence.
+ * The audio identity the manifest claims. Nothing here is trusted on its own: it is only usable
+ * once the bytes on disk hash to `sha256` and their own canonical header derives the same shape.
  */
-function recordedAudioIdentity(
+interface RecordedAudioClaim {
+  readonly sha256: string
+  readonly bytes: number
+  readonly frames: number
+  readonly durationSeconds: number
+}
+
+function recordedAudioClaim(
   manifest: RenderManifest,
   requirements: WavRequirements,
-): SpeechAudioIdentity | undefined {
+): RecordedAudioClaim | undefined {
   const audio = manifest.audio as Partial<SpeechAudioIdentity> | undefined
   if (audio === undefined) return undefined
-  const digest = audio.sha256
-  const frames = audio.frames
-  const bytes = audio.bytes
-  const sampleRateHz = requirements.sampleRateHz
-  const bytesPerFrame = requirements.channels * (requirements.bitsPerSample / 8)
+  const { sha256: digest, bytes, frames, durationSeconds } = audio
   if (
     typeof digest !== 'string' ||
     !SHA256.test(digest) ||
-    typeof frames !== 'number' ||
     typeof bytes !== 'number' ||
+    typeof frames !== 'number' ||
+    typeof durationSeconds !== 'number' ||
     !Number.isSafeInteger(frames) ||
     frames <= 0 ||
-    audio.sampleRateHz !== sampleRateHz ||
+    audio.sampleRateHz !== requirements.sampleRateHz ||
     audio.channels !== requirements.channels ||
-    audio.bitsPerSample !== requirements.bitsPerSample ||
-    bytes !== 44 + frames * bytesPerFrame ||
-    audio.durationSeconds !== frames / sampleRateHz
+    audio.bitsPerSample !== requirements.bitsPerSample
   ) {
     return undefined
   }
-  return {
-    sha256: digest,
-    bytes,
-    sampleRateHz,
-    channels: requirements.channels,
-    bitsPerSample: requirements.bitsPerSample,
-    frames,
-    durationSeconds: frames / sampleRateHz,
-  }
+  return { sha256: digest, bytes, frames, durationSeconds }
 }
 
 export async function tryReuse(
   plan: SegmentPlan,
   config: LoadedProductionConfig,
 ): Promise<SpeechSegmentResult | undefined> {
-  if (!(await isRegularFile(plan.manifestPath)) || !(await isRegularFile(plan.wavPath)))
-    return undefined
   const manifestBytes = await readCached(
     plan.manifestPath,
     'render manifest',
@@ -248,11 +242,19 @@ export async function tryReuse(
   ) {
     return undefined
   }
-  const audio = recordedAudioIdentity(manifest, config.value.wav)
-  if (audio === undefined) return undefined
+  const claim = recordedAudioClaim(manifest, config.value.wav)
+  if (claim === undefined) return undefined
   const bytes = await readCached(plan.wavPath, 'WAV', plan.request.segmentId)
   if (bytes === undefined) return undefined
-  if (bytes.length !== audio.bytes || sha256(bytes) !== audio.sha256) return undefined
+  if (bytes.length !== claim.bytes || sha256(bytes) !== claim.sha256) return undefined
+  // A matching content address only proves the bytes are unchanged, not that they are audio.
+  // Re-derive the shape from the file's own canonical header so a manifest written by anything
+  // other than recordRendered can never pass non-audio off as a finished clip. This is a constant
+  // number of buffer reads; the deep per-sample health gate stays on the render path only.
+  const header = readCanonicalWavHeader(bytes, config.value.wav)
+  if (typeof header === 'string') return undefined
+  if (header.frames !== claim.frames || header.durationSeconds !== claim.durationSeconds)
+    return undefined
   return {
     segmentId: plan.request.segmentId,
     status: 'reused',
@@ -261,7 +263,15 @@ export async function tryReuse(
     wavPath: plan.wavPath,
     manifestPath: plan.manifestPath,
     renderIdentitySha256: plan.identitySha256,
-    audio,
+    audio: {
+      sha256: claim.sha256,
+      bytes: bytes.length,
+      sampleRateHz: header.sampleRateHz,
+      channels: header.channels,
+      bitsPerSample: header.bitsPerSample,
+      frames: header.frames,
+      durationSeconds: header.durationSeconds,
+    },
   }
 }
 

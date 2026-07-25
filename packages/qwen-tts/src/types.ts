@@ -61,6 +61,12 @@ export type SpeechProgressEvent =
       readonly total: number
     }
   | { readonly type: 'gpu-cleanup-complete' }
+  /**
+   * The batch finished but the cross-process GPU lease could not be released cleanly. Never fatal
+   * — the kernel flock is freed by the holder's death — but a lease that repeatedly needs SIGKILL
+   * is worth surfacing.
+   */
+  | { readonly type: 'lease-release-failed'; readonly message: string }
   | { readonly type: 'batch-completed'; readonly rendered: number; readonly reused: number }
 
 export interface SpeechAudioIdentity {

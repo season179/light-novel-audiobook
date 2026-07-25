@@ -1,9 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 import { appendFile, link, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 const mode = process.env.FAKE_QWEN_MODE ?? 'normal'
+
+// Stands in for GPU residency: this process exists between these two markers, so a lease acquired
+// before the first and released after the second can never overlap a resident worker.
+const lifecycleLog = process.env.FAKE_QWEN_LIFECYCLE_LOG
+if (lifecycleLog) {
+  appendFileSync(lifecycleLog, 'worker-spawned\n')
+  process.on('exit', () => appendFileSync(lifecycleLog, 'worker-exited\n'))
+}
 let terminating = false
 process.on('SIGTERM', async () => {
   if (terminating) return

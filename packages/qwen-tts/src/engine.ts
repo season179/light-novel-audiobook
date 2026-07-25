@@ -1,5 +1,5 @@
-import { lstat, mkdir, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { lstat, mkdir, readdir, realpath, stat, unlink } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { LoadedProductionConfig } from './config.js'
 import { loadProductionConfig } from './config.js'
 import type { SegmentPlan } from './manifest.js'
@@ -26,6 +26,9 @@ const BOOK_SCOPED_SEGMENT_ID = /^book-[0-9a-f]{24}-ch[0-9]{4}-p[0-9]{6}-s[0-9]{4
 const UNSCOPED_SEGMENT_ID = /^ch[0-9]+-[0-9]+$/
 const SHA256 = /^[0-9a-f]{64}$/
 const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
+/** Staging names used by the Python worker's WAV writer and this package's manifest writer. */
+const TEMPORARY_FILE = /^\..+\.tmp$/
+const DEFAULT_STALE_TEMPORARY_AGE_MS = 3_600_000
 const FORBIDDEN_PYTHON_ENVIRONMENT = new Set(['PYTHONHOME', 'PYTHONPATH', 'PYTHONSTARTUP'])
 
 export interface QwenTtsEngineConfig {
@@ -48,6 +51,11 @@ export interface QwenTtsEngineConfig {
    * collide across books in the flat output root. Production callers must use issue #29 stable IDs.
    */
   readonly allowUnscopedSegmentIds?: boolean
+  /**
+   * Age above which a leftover `.<name>.tmp` staging file in the output root is swept at
+   * construction. Defaults to one hour, far beyond the seconds a live staging file exists.
+   */
+  readonly staleTemporaryFileAgeMs?: number
 }
 
 interface NormalizedPaths {
@@ -188,6 +196,37 @@ async function progress(options: SpeechRenderOptions, event: SpeechProgressEvent
   await options.onProgress?.(event)
 }
 
+/**
+ * Clears WAV/manifest staging litter left by a previous run. `write_wav_atomic`'s cleanup cannot
+ * run under SIGKILL, which `PR_SET_PDEATHSIG` now guarantees when the orchestrator is killed, so
+ * these accumulate forever otherwise and would trip `prepareEmptySmokeOutputRoot`'s dotfile check
+ * on a reused root. Only files older than the threshold are removed, so a concurrently
+ * constructed engine can never delete an in-flight temporary (one segment's staging file lives
+ * for seconds; the batch it belongs to may run for hours).
+ */
+async function sweepStaleTemporaries(directory: string, maximumAgeMs: number): Promise<void> {
+  let entries: Array<string>
+  try {
+    entries = await readdir(directory)
+  } catch {
+    return
+  }
+  const cutoff = Date.now() - maximumAgeMs
+  await Promise.all(
+    entries
+      .filter((entry) => TEMPORARY_FILE.test(entry))
+      .map(async (entry) => {
+        const path = join(directory, entry)
+        try {
+          const info = await lstat(path)
+          if (info.isFile() && !info.isSymbolicLink() && info.mtimeMs < cutoff) await unlink(path)
+        } catch {
+          // Best-effort litter collection; never block startup on it.
+        }
+      }),
+  )
+}
+
 function asError(value: unknown): Error {
   if (value instanceof Error) return value
   return new SpeechEngineError('gpu-busy', `GPU lease release failed: ${String(value)}`)
@@ -197,6 +236,13 @@ function asError(value: unknown): Error {
  * Releases the cross-process GPU lease without ever becoming the primary failure. A release error
  * is attached to the causative error when there is one, and otherwise returned so a batch that
  * actually rendered still hands its results back to the caller.
+ *
+ * Attachment convention, chosen deliberately: the release failure becomes a single `suppressed`
+ * property on the causative error, mirroring ECMAScript `SuppressedError`'s field name and its
+ * one-error (not array) shape. We do not throw a real `SuppressedError`, because callers
+ * discriminate on `SpeechEngineError.code` and wrapping would hide the actual cause. Only one
+ * release can fail per lease, so a single value is never lossy. A thrown primitive cannot carry a
+ * property; in that case the release error is returned instead of being dropped.
  */
 async function releaseLease(lease: GpuLease, primaryError?: unknown): Promise<Error | undefined> {
   try {
@@ -204,17 +250,24 @@ async function releaseLease(lease: GpuLease, primaryError?: unknown): Promise<Er
     return undefined
   } catch (error) {
     if (primaryError === undefined) return asError(error)
-    if (primaryError instanceof Error) {
-      const holder = primaryError as Error & { suppressed?: unknown[] }
-      holder.suppressed = [...(holder.suppressed ?? []), asError(error)]
+    if (typeof primaryError === 'object' && primaryError !== null) {
+      ;(primaryError as { suppressed?: unknown }).suppressed = asError(error)
+      return undefined
     }
-    return undefined
+    return asError(error)
   }
 }
 
 export interface QwenManagedBatch {
   render(request: SpeechSegmentRequest): Promise<SpeechSegmentResult>
   end(): Promise<void>
+  /**
+   * Set once the batch has ended if the cross-process GPU lease could not be released cleanly.
+   * Never thrown — the batch's audio is complete and the kernel flock is freed by the holder's
+   * death — but a lease that always needs SIGKILL is a real signal. Also emitted as a
+   * `lease-release-failed` progress event.
+   */
+  leaseReleaseError: Error | undefined
 }
 
 export class QwenTtsSpeechEngine implements SpeechEngine {
@@ -318,6 +371,10 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
         'Qwen output directory and model snapshot must not overlap',
       )
     }
+    await sweepStaleTemporaries(
+      outputDirectory,
+      config.staleTemporaryFileAgeMs ?? DEFAULT_STALE_TEMPORARY_AGE_MS,
+    )
     return new QwenTtsSpeechEngine(
       { ...config, repositoryRoot, outputDirectory, snapshotPath },
       production,
@@ -469,22 +526,28 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
       const activeSession = session
       let sequence = 0
       let ended = false
-      const end = async (): Promise<void> => {
-        if (ended) return
-        ended = true
-        let failure: unknown
-        try {
-          await activeSession.finish()
-        } catch (error) {
-          failure = error
-          throw error
-        } finally {
-          // A release failure after a clean finish is intentionally dropped: the holder's death
-          // already frees the kernel flock, and failing a completed batch here would be worse.
-          await releaseLease(lease, failure)
-        }
-      }
-      return {
+      const batch: QwenManagedBatch = {
+        leaseReleaseError: undefined,
+        end: async (): Promise<void> => {
+          if (ended) return
+          ended = true
+          let failure: unknown
+          try {
+            await activeSession.finish()
+          } catch (error) {
+            failure = error
+            throw error
+          } finally {
+            // A release failure after a clean finish never fails the batch: the holder's death
+            // already frees the kernel flock, and failing a completed batch here would be worse.
+            // It is reported instead, so a lease that always needs SIGKILL stays visible.
+            const released = await releaseLease(lease, failure)
+            batch.leaseReleaseError = released
+            if (released !== undefined && failure === undefined) {
+              await progress(options, { type: 'lease-release-failed', message: released.message })
+            }
+          }
+        },
         render: async (request) => {
           if (ended) throw new SpeechEngineError('configuration', 'Qwen batch has already ended')
           validateRequest(request, this.#allowUnscopedSegmentIds)
@@ -518,12 +581,12 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
           } catch (error) {
             ended = true
             await activeSession.abort()
-            await releaseLease(lease, error)
+            batch.leaseReleaseError = await releaseLease(lease, error)
             throw error
           }
         },
-        end,
       }
+      return batch
     } catch (error) {
       if (session !== undefined) await session.abort()
       await releaseLease(lease, error)

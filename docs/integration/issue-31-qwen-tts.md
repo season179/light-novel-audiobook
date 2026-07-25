@@ -19,13 +19,23 @@ its PCM scaling, seeding order, and generation-kwargs mapping all change the wav
 manifest also records the observed production-config hash for audit, but only relevant scoped
 fields participate in reuse so an unrelated voice-profile edit cannot stale every clip.
 
-Reuse independently reopens the WAV and recomputes its SHA-256 against the recorded content
-address, and structurally rechecks the recorded audio identity against the pinned WAV
-requirements. The deep per-sample clipping/silence gate runs when audio is produced (in both the
-Python worker and this adapter) rather than on every resume, since a matching SHA-256 proves the
-bytes are the ones that already passed it. A missing, forged, stale, malformed, or
-hash-mismatched pair is rendered again without invalidating any other segment; an unreadable
-cached file is surfaced as an error instead of being re-rendered blindly.
+Reuse independently reopens the WAV, recomputes its SHA-256 against the recorded content address,
+and then re-derives the audio's shape from the file's own canonical RIFF/WAVE header rather than
+trusting the manifest: magic, RIFF length, PCM `fmt` chunk, pinned rate/channels/bit-depth, and
+`frames` from the declared data chunk, cross-checked against the recorded values. Nothing a
+manifest asserts about the audio is taken on faith, so a record written by anything other than
+`recordRendered` cannot pass non-audio off as a finished clip. Only the deep per-sample
+clipping/silence and text-relative duration gate is render-time only (in both the Python worker
+and this adapter), since a matching SHA-256 proves the bytes are the ones that already passed it.
+A missing, forged, stale, malformed, or hash-mismatched pair is rendered again without
+invalidating any other segment; an unreadable cached file or directory is surfaced as an error
+instead of being re-rendered blindly.
+
+Leftover `.<name>.tmp` staging files from a run that was SIGKILLed mid-write (which
+`PR_SET_PDEATHSIG` makes routine on orchestrator death) are swept from the output root at engine
+construction once they are older than `staleTemporaryFileAgeMs`, default one hour. Atomicity never
+depended on that cleanup — a canonical WAV is never partial — so this is litter collection only,
+and the age floor means a concurrently constructed engine cannot delete a live staging file.
 
 Segment IDs must be issue #29's book-scoped `book-<24hex>-chNNNN-pNNNNNN-sNNNN` form. The flat
 output root is shared across books, so short unscoped `chNN-NNNN` IDs would collide; they are
@@ -54,19 +64,39 @@ The composition mapper then has these mechanical responsibilities:
 - validate/map `VoiceProfile.syntheticSpeaker`, instruction, and seed to one selected profile
 - `VoiceProfile.role === 'fallback'` -> configured low/weary profile plus the per-segment approval
   record supplied in `fallbackApprovals`; a different approved profile is a configuration error
-- adapter `identity` -> #29's engine identity input, including the approval catalog identity
+- adapter `identity` -> #29's engine identity input. It covers the model, runtime and generation
+  settings only. The approval catalog is deliberately excluded: approvals arrive incrementally, and
+  #29 folds this identity into every segment's `inputIdentity` and into the job command identity,
+  so hashing a growing catalog would re-render the whole book and stale the running job on each
+  approval. Each approval invalidates its own segment through the render manifest instead. The
+  accepted consequence is audit staleness — an already-rendered segment keeps the approval id it
+  was rendered with until it re-renders for some other reason — never audio staleness.
 - the supplied #29 `inputIdentity` -> manifest and returned repository record
 - `Segment.delivery` -> a deterministic effective Qwen instruction and render identity
-- progress events -> ordered durable job progress without a web-request lifetime
+- progress events -> ordered durable job progress without a web-request lifetime. `endBatch()`
+  never fails a batch whose audio is complete; a GPU lease that will not release cleanly is
+  reported as a `lease-release-failed` progress event and on `QwenManagedBatch.leaseReleaseError`
+  (`renderBatch` reports the same condition as `SpeechBatchResult.leaseReleaseError`).
 
 `@light-novel-audiobook/gpu-lease` is the shared Gemma/Qwen/final-composition contract. Both
 owners must receive the same configured stable lock-file path. Its held Linux kernel `flock`, not
 an `nvidia-smi` check, guarantees cross-process exclusion and releases automatically on process
 crash. `nvidia-smi` remains a fail-closed diagnostic for uncoordinated pre-existing GPU users.
 
+The adapter is strictly lease-before-spawn and release-after-exit on every path. `renderBatch`
+acquires only when at least one segment is stale, and always before `QwenWorkerSession.start`;
+`beginManagedBatch` acquires as its first statement. Every release is preceded by `finish()` or
+`abort()`, both of which await the child's `close`. No Qwen worker is therefore ever GPU-resident
+at the moment `acquire()` is called, which is what keeps the coordinator's
+`residentGpuMemoryThresholdMiB` ceiling from rejecting this consumer even though the worker is
+spawned detached and may not be attributable through the `nvidia-smi` compute-app table.
+
 Because the worker runs in its own process group so cancellation can reach the whole tree, it arms
 `prctl(PR_SET_PDEATHSIG, SIGKILL)` before reading its first request. A SIGKILLed orchestrator
-therefore cannot leave a CUDA-resident worker running after the lease it protected is gone.
+therefore cannot leave a CUDA-resident worker running after the lease it protected is gone. Note
+that the kernel ties that signal to the *thread* that spawned the worker, not to the parent
+process: the composition root must keep spawning from its main thread, or a future background
+worker would kill the batch the moment its spawning thread finished.
 
 ## Opt-in real smoke
 

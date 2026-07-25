@@ -15,6 +15,7 @@ import {
 } from '../src/manifest.js'
 import type { QwenWorkerRuntimeIdentity } from '../src/runtime-identity.js'
 import type { SpeechEngineError, SpeechSegmentRequest } from '../src/types.js'
+import { readCanonicalWavHeader } from '../src/wav.js'
 
 const deepGate = vi.hoisted(() => ({ calls: 0 }))
 
@@ -148,6 +149,79 @@ describe('render manifest reuse', () => {
     await writeFile(plan.manifestPath, `${canonicalJson(manifest)}\n`)
 
     expect(await tryReuse(plan, config)).toBeUndefined()
+  })
+
+  it('refuses cached bytes that are not canonical audio even when the manifest agrees with them', async () => {
+    const { config, plan } = await renderOnce()
+    // Everything a manifest can assert about these bytes is made true: they are exactly the file
+    // on disk, the length matches, and frames/duration are self-consistent for 16-bit mono PCM.
+    // Only the bytes themselves are not a WAV. Reuse must still refuse them.
+    const forged = Buffer.alloc(2_000, 0x58)
+    await writeFile(plan.wavPath, forged)
+    const frames = (forged.length - 44) / 2
+    const manifest = JSON.parse(await readFile(plan.manifestPath, 'utf8')) as {
+      audio: Record<string, unknown>
+    }
+    manifest.audio = {
+      ...manifest.audio,
+      sha256: sha256(forged),
+      bytes: forged.length,
+      frames,
+      durationSeconds: frames / 24_000,
+    }
+    await writeFile(plan.manifestPath, `${canonicalJson(manifest)}\n`)
+
+    expect(await tryReuse(plan, config)).toBeUndefined()
+  })
+
+  it('refuses a truncated WAV whose manifest was rewritten to match it', async () => {
+    const { config, plan } = await renderOnce()
+    // Header intact, payload cut: the RIFF/data length fields no longer describe the file.
+    const truncated = canonicalWav(REQUEST.text).subarray(0, 1_044)
+    await writeFile(plan.wavPath, truncated)
+    const frames = (truncated.length - 44) / 2
+    const manifest = JSON.parse(await readFile(plan.manifestPath, 'utf8')) as {
+      audio: Record<string, unknown>
+    }
+    manifest.audio = {
+      ...manifest.audio,
+      sha256: sha256(truncated),
+      bytes: truncated.length,
+      frames,
+      durationSeconds: frames / 24_000,
+    }
+    await writeFile(plan.manifestPath, `${canonicalJson(manifest)}\n`)
+
+    expect(await tryReuse(plan, config)).toBeUndefined()
+  })
+
+  it('derives the returned audio shape from the file header rather than the manifest', async () => {
+    const { config, plan } = await renderOnce()
+    const reused = await tryReuse(plan, config)
+    const header = readCanonicalWavHeader(canonicalWav(REQUEST.text), config.value.wav)
+    if (typeof header === 'string') throw new Error(header)
+
+    expect(reused?.audio.frames).toBe(header.frames)
+    expect(reused?.audio.durationSeconds).toBe(header.durationSeconds)
+    expect(reused?.audio.sampleRateHz).toBe(header.sampleRateHz)
+  })
+
+  it('surfaces an unreadable cache directory instead of silently rerendering', async () => {
+    const { config, plan, directory } = await renderOnce()
+    const output = join(directory, 'audio')
+    // lstat needs traverse permission on the directory, so this is the path a file-level chmod
+    // cannot reach: without ENOENT-only handling it degrades to "stale, rerender everything".
+    await chmod(output, 0o000)
+    try {
+      const error = (await tryReuse(plan, config).then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      )) as SpeechEngineError | undefined
+      expect(error?.code).toBe('audio-validation')
+      expect(error?.message).toContain('Cannot read cached render manifest')
+    } finally {
+      await chmod(output, 0o700)
+    }
   })
 
   it('surfaces an unreadable cached WAV instead of silently rerendering it', async () => {

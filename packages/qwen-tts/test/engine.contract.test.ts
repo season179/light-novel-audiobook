@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto'
-import { appendFile, copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFileSync } from 'node:fs'
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -47,10 +57,16 @@ class RecordingGpuGate implements ExclusiveGpuGate {
   acquisitions = 0
   releases = 0
   onRelease: (() => void | Promise<void>) | undefined
+  lifecycleLog: string | undefined
+
+  #mark(event: string): void {
+    if (this.lifecycleLog !== undefined) appendFileSync(this.lifecycleLog, `${event}\n`)
+  }
 
   async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
     if (signal?.aborted) throw new Error('aborted')
     this.acquisitions += 1
+    this.#mark('lease-acquired')
     let released = false
     return {
       owner,
@@ -59,6 +75,7 @@ class RecordingGpuGate implements ExclusiveGpuGate {
         if (!released) {
           await this.onRelease?.()
           this.releases += 1
+          this.#mark('lease-released')
         }
         released = true
       },
@@ -84,6 +101,7 @@ async function makeEngine(
   output: string
   log: string
   workerScriptPath: string
+  lifecycleLog: string
   gate: RecordingGpuGate
 }> {
   const { reuseRoot, ...overrides } = engineOptions
@@ -113,7 +131,10 @@ async function makeEngine(
       })}\n`,
     )
   }
+  // Shared by every engine over this root, so a restart appends to one ordered timeline.
+  const lifecycleLog = join(root, 'lifecycle.log')
   const gate = new RecordingGpuGate()
+  gate.lifecycleLog = lifecycleLog
   const engine = await QwenTtsSpeechEngine.create({
     pythonExecutable: process.execPath,
     workerScriptPath,
@@ -125,12 +146,30 @@ async function makeEngine(
     outputDirectory: output,
     repositoryRoot: REPOSITORY_ROOT,
     gpuGate: gate,
-    processEnvironment: { FAKE_QWEN_MODE: mode, FAKE_QWEN_LOG: log, ...extraEnvironment },
+    processEnvironment: {
+      FAKE_QWEN_MODE: mode,
+      FAKE_QWEN_LOG: log,
+      FAKE_QWEN_LIFECYCLE_LOG: lifecycleLog,
+      ...extraEnvironment,
+    },
     cancellationGraceMs: 500,
     allowUnscopedSegmentIds: true,
     ...overrides,
   })
-  return { engine, root, output, log, workerScriptPath, gate }
+  return { engine, root, output, log, workerScriptPath, lifecycleLog, gate }
+}
+
+async function lifecycle(path: string): Promise<Array<string>> {
+  return (await readFile(path, 'utf8').catch(() => '')).split('\n').filter(Boolean)
+}
+
+async function pathPresent(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function invocations(path: string): Promise<Array<Record<string, unknown>>> {
@@ -689,8 +728,119 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
       'protocol',
     )
 
-    const suppressed = (error as Error & { suppressed?: ReadonlyArray<Error> }).suppressed
-    expect(suppressed?.[0]?.message).toContain('holder required SIGKILL')
+    const suppressed = (error as Error & { suppressed?: Error }).suppressed
+    expect(suppressed?.message).toContain('holder required SIGKILL')
+  })
+
+  it('never holds the GPU lease across a worker that is already resident, batch after batch', async () => {
+    // The canonical gpu-lease enforces a total-residency ceiling when nvidia-smi cannot attribute
+    // a compute process to our own tree, and our worker is spawned detached. That can only reject
+    // us spuriously if a Qwen worker is ever GPU-resident at the moment acquire() is called, so
+    // this pins the ordering: the lease is taken before the process exists and released only
+    // after it is gone, on the renderBatch path and across a second batch that reacquires.
+    const fixture = await makeEngine()
+    await fixture.engine.renderBatch([
+      {
+        segmentId: 'ch21-0001',
+        text: 'First batch takes the lease.',
+        voiceProfileId: 'aiden-calm-narrator',
+      },
+    ])
+    await fixture.engine.renderBatch([
+      {
+        segmentId: 'ch21-0002',
+        text: 'Second batch reacquires cleanly.',
+        voiceProfileId: 'ryan-low-weary',
+      },
+    ])
+
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+  })
+
+  it('holds the same ordering on the application begin/render/end path', async () => {
+    const fixture = await makeEngine()
+    const narrator = approvedVoice('narrator-aiden', 'narrator', 'narrator')
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine)
+
+    await adapter.beginBatch()
+    await adapter.render({
+      segment: applicationSegment(
+        `${BOOK}-ch0001-p000013-s0001`,
+        'The managed batch holds one lease.',
+        narrator,
+      ),
+      voice: narrator,
+      inputIdentity: 'b'.repeat(64),
+    })
+    await adapter.endBatch()
+
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+  })
+
+  it('releases only after a cancelled worker has exited, never while it could still be resident', async () => {
+    const fixture = await makeEngine('slow-terminate')
+    const controller = new AbortController()
+
+    await expectCode(
+      fixture.engine.renderBatch(
+        [
+          {
+            segmentId: 'ch21-0003',
+            text: 'Cancellation must not free the lease early.',
+            voiceProfileId: 'ryan-low-weary',
+          },
+        ],
+        {
+          signal: controller.signal,
+          onProgress: (event) => {
+            if (event.type === 'model-loaded') controller.abort()
+          },
+        },
+      ),
+      'cancelled',
+    )
+
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+  })
+
+  it('sweeps stale staging litter a SIGKILLed worker left behind, keeping live temporaries', async () => {
+    const fixture = await makeEngine()
+    const stale = join(fixture.output, '.book-x-ch0001-p000001-s0001.deadbeef.tmp')
+    const fresh = join(fixture.output, '.book-x-ch0001-p000002-s0001.cafebabe.tmp')
+    const keep = join(fixture.output, 'ch20-0001.wav')
+    await Promise.all([
+      writeFile(stale, 'abandoned staging bytes'),
+      writeFile(fresh, 'in-flight staging bytes'),
+      writeFile(keep, 'a real canonical output'),
+    ])
+    const old = Date.now() / 1_000 - 7_200
+    await utimes(stale, old, old)
+
+    // A second engine over the same root, as a restart after the kill would build.
+    await makeEngine('normal', {}, { reuseRoot: fixture.root })
+
+    expect(await pathPresent(stale)).toBe(false)
+    expect(await pathPresent(fresh), 'a live staging file must survive').toBe(true)
+    expect(await pathPresent(keep)).toBe(true)
   })
 })
 
@@ -940,19 +1090,26 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
     await adapter.endBatch()
   })
 
-  it('binds each approval separately into the adapter identity and the segment manifest', async () => {
+  it('binds each approval into its own segment manifest without moving the adapter identity', async () => {
     const fixture = await makeEngine()
     const segmentId = `${BOOK}-ch0001-p000009-s0001`
     const base = new QwenApplicationSpeechEngine(fixture.engine, {
       fallbackApprovals: [segmentApproval(segmentId)],
     })
-    const revoked = new QwenApplicationSpeechEngine(fixture.engine, {
+    // Approvals arrive incrementally as the reviewer works through chapters. A growing catalog
+    // must not move the adapter identity: issue #29 folds it into every segment's inputIdentity
+    // and into the job command identity, so that would re-render the whole book per approval
+    // click and stale the running job. Per-approval invalidation lives in the segment manifest.
+    const grown = new QwenApplicationSpeechEngine(fixture.engine, {
       fallbackApprovals: [
-        segmentApproval(segmentId, { approvalId: 'review-fallback-0002' }),
-        segmentApproval(`${BOOK}-ch0001-p000010-s0001`),
+        segmentApproval(segmentId),
+        segmentApproval(`${BOOK}-ch0001-p000010-s0001`, { approvalId: 'review-fallback-0002' }),
+        segmentApproval(`${BOOK}-ch0001-p000011-s0001`, { approvalId: 'review-fallback-0003' }),
       ],
     })
-    expect(base.identity).not.toBe(revoked.identity)
+    const none = new QwenApplicationSpeechEngine(fixture.engine)
+    expect(grown.identity).toBe(base.identity)
+    expect(none.identity).toBe(base.identity)
 
     const fallback = approvedVoice('fallback-ryan', 'fallback', 'weary')
     await base.beginBatch()
@@ -963,10 +1120,69 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
     })
     await base.endBatch()
 
-    const manifest = JSON.parse(
-      await readFile(completed.wavPath.replace(/\.wav$/u, '.render.json'), 'utf8'),
-    ) as { renderIdentity: { voice: { fallbackApproval: unknown } } }
+    const manifestPath = completed.wavPath.replace(/\.wav$/u, '.render.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      renderIdentity: { voice: { fallbackApproval: unknown } }
+    }
     expect(manifest.renderIdentity.voice.fallbackApproval).toEqual(FALLBACK_APPROVAL)
+
+    // Narrow invalidation still works: revising this segment's own decision restales this
+    // segment. That is the granularity the global catalog hash was redundantly duplicating.
+    const revised = segmentApproval(segmentId, { approvalId: 'review-fallback-0009' })
+    const reapproved = new QwenApplicationSpeechEngine(fixture.engine, {
+      fallbackApprovals: [revised],
+    })
+    await reapproved.beginBatch()
+    await reapproved.render({
+      segment: applicationSegment(segmentId, 'One approved unresolved speaker.', fallback, true),
+      voice: fallback,
+      inputIdentity: '9'.repeat(64),
+    })
+    await reapproved.endBatch()
+
+    const calls = await invocations(fixture.log)
+    expect(
+      invocationSegmentIds(calls, 1),
+      'a revised approval must restale its own segment',
+    ).toEqual([segmentId])
+    const rerendered = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      renderIdentity: { voice: { fallbackApproval: { approvalId: string } } }
+    }
+    expect(rerendered.renderIdentity.voice.fallbackApproval.approvalId).toBe(revised.approvalId)
+  })
+
+  it('completes endBatch and reports the failure when releasing the GPU lease fails', async () => {
+    const fixture = await makeEngine()
+    const events: SpeechProgressEvent[] = []
+    fixture.gate.onRelease = () => {
+      throw new Error('holder required SIGKILL')
+    }
+    const narrator = approvedVoice('narrator-aiden', 'narrator', 'narrator')
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
+      onProgress: (event) => {
+        events.push(event)
+      },
+    })
+
+    await adapter.beginBatch()
+    const completed = await adapter.render({
+      segment: applicationSegment(
+        `${BOOK}-ch0001-p000012-s0001`,
+        'This audio is finished and saved.',
+        narrator,
+      ),
+      voice: narrator,
+      inputIdentity: 'a'.repeat(64),
+    })
+    // The audio all rendered, so a lease that would not release must not fail the job.
+    await expect(adapter.endBatch()).resolves.toBeUndefined()
+
+    expect(completed.byteLength).toBeGreaterThan(44)
+    const reported = events.filter((event) => event.type === 'lease-release-failed')
+    expect(reported).toHaveLength(1)
+    expect(reported[0]).toMatchObject({
+      message: expect.stringContaining('holder required SIGKILL'),
+    })
   })
 
   it('reports a cancelled batch as cancelled rather than a worker crash', async () => {

@@ -51,19 +51,16 @@ export class QwenApplicationSpeechEngine implements ApplicationSpeechEngine {
       approvals.set(record.segmentId, record)
     }
     this.#approvals = approvals
+    // The approval catalog is deliberately NOT hashed here. Approvals arrive incrementally as the
+    // reviewer works through chapters, and issue #29 folds this identity into every segment's
+    // inputIdentity and into the job command identity, so a growing catalog would re-render the
+    // whole book and stale the running job on each approval click. Each approval is already bound
+    // at the right granularity, into that segment's RenderIdentity.voice.fallbackApproval, so a
+    // changed decision invalidates its own segment and nothing else.
     this.identity = sha256(
       canonicalJson({
         bridge: { id: 'qwen-issue-29-speech-engine', version: 2 },
         engine: engine.identity,
-        fallbackApprovals: [...approvals.values()]
-          .map((record) => ({
-            segmentId: record.segmentId,
-            speakerId: record.speakerId,
-            fallbackReason: record.fallbackReason,
-            approvalId: record.approvalId,
-            approvalSha256: record.approvalSha256,
-          }))
-          .sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1)),
       }),
     )
   }

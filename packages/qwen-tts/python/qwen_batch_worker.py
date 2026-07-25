@@ -87,6 +87,13 @@ def bind_to_parent_lifetime() -> None:
     still CUDA-resident and the next owner would load its weights on top of ours. PR_SET_PDEATHSIG
     makes the kernel kill us the moment the parent goes away. It is a hard exclusivity guarantee,
     so a platform that cannot arm it must fail rather than render.
+
+    CAUTION for future callers: per prctl(2) the parent-death signal fires when the *thread* that
+    created this process terminates, not when the parent process exits. Today the orchestrator
+    always spawns from its main thread, so the two coincide. If the planned background worker
+    (docs/PLAN.md) ever spawns this process from a Node `worker_thread`, this worker is SIGKILLed
+    the moment that thread finishes -- mid-batch. Spawn from the main thread, or keep the spawning
+    thread alive for the whole batch.
     """
     if sys.platform != "linux":
         raise ValueError("the pinned Qwen worker requires Linux parent-death signalling")
