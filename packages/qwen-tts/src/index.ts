@@ -30,6 +30,7 @@ export {
   sha256,
 } from './manifest.js'
 export { prepareEmptySmokeOutputRoot } from './smoke-output.js'
+export { createQwenSpeechEngineFactory } from './speech-engine-factory.js'
 export {
   type ExclusiveGpuGate,
   type FallbackApproval,

@@ -36,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   layoutFor,
   openWorkspace,
+  SCHEMA_VERSION,
   SqliteJobRepository,
   sha256OfFile,
   type WorkspaceLayout,
@@ -874,7 +875,7 @@ describe('SqliteJobRepository contract (issue #27)', () => {
 
     const failures = results.filter((result) => !result.ok).map((result) => result.message)
     expect(failures).toEqual([])
-    expect(results.every((result) => result.schemaVersion === 1)).toBe(true)
+    expect(results.every((result) => result.schemaVersion === SCHEMA_VERSION)).toBe(true)
   }, 60_000)
 
   // F3: containment was purely lexical. layoutFor realpaths only the root, so a symlink at a

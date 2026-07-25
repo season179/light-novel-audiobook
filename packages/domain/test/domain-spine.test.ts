@@ -324,6 +324,11 @@ describe('audiobook job and numbered output lifecycle', () => {
       'running->abandoned',
       'running->failed',
       'running->completed',
+      // Issue #45. Direction rests at awaiting_review until every unresolved speaker has a
+      // persisted decision, and a completed book returns there when one is revoked or changed.
+      'running->awaiting_review',
+      'awaiting_review->running',
+      'completed->awaiting_review',
       'abandoned->running',
       'failed->running',
     ])

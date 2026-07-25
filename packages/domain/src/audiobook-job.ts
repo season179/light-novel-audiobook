@@ -5,11 +5,19 @@ import type { FallbackReason } from './segment.js'
 export const AUDIOBOOK_JOB_STATES = [
   'pending',
   'running',
+  'awaiting_review',
   'abandoned',
   'failed',
   'completed',
 ] as const
 export type AudiobookJobState = (typeof AUDIOBOOK_JOB_STATES)[number]
+
+/**
+ * The one message an awaiting-review job may carry. Pinned so the state is unambiguous in a
+ * snapshot: `awaiting_review` is a resting state that no worker owns, and it must not be
+ * reachable by writing arbitrary progress onto a directing job.
+ */
+const AWAITING_REVIEW_MESSAGE = 'Awaiting fallback approval review'
 
 export const AUDIOBOOK_JOB_STAGES = [
   'extracting',
@@ -29,10 +37,14 @@ const nextStage: Readonly<Partial<Record<AudiobookJobStage, AudiobookJobStage>>>
 
 const allowedStateTransitions: Readonly<Record<AudiobookJobState, readonly AudiobookJobState[]>> = {
   pending: ['running'],
-  running: ['abandoned', 'failed', 'completed'],
+  running: ['awaiting_review', 'abandoned', 'failed', 'completed'],
+  awaiting_review: ['running'],
   abandoned: ['running'],
   failed: ['running'],
-  completed: [],
+  // PLAN.md:132 — "Any later upstream change invalidates approval and marks dependent audio as
+  // stale." Revoking or changing a fallback approval on a finished book is exactly that change, so
+  // a completed job must be able to return to review without discarding its directed script.
+  completed: ['awaiting_review'],
 }
 
 const stableBookIdPattern = /^book-[a-f\d]{24}$/i
@@ -198,6 +210,58 @@ export class AudiobookJob {
       throw new DomainError('A book must be attached before direction')
     }
     this.advance('directing', 'Directing chapters')
+  }
+
+  /**
+   * Direction is finished and every unresolved speaker is known. The job now rests until each one
+   * has a persisted human decision: PLAN.md:129 and :166 make the fallback voice usable only on an
+   * explicit approval, and warnings can only be added while directing, so the complete set needing
+   * a decision exists at exactly this point and never grows later.
+   */
+  awaitReview(): void {
+    if (this.currentState !== 'running' || this.currentStage !== 'directing') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'awaiting_review')
+    }
+    if (this.attachedBookId === null) {
+      throw new DomainError('A reviewed job must have an attached book')
+    }
+    this.currentState = 'awaiting_review'
+    this.currentProgress = Object.freeze({
+      ...this.currentProgress,
+      currentChapterId: null,
+      latestMessage: AWAITING_REVIEW_MESSAGE,
+    })
+  }
+
+  /** Approvals are persisted; rendering may begin from the already-directed script. */
+  resumeApprovedRender(): void {
+    if (this.currentState !== 'awaiting_review') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
+    }
+    this.currentState = 'running'
+    this.report(null, 'Rendering approved script')
+  }
+
+  /**
+   * Returns a completed job to review **without discarding its directed script**, which is what a
+   * revoked or changed fallback approval does. Deliberately does not touch the reuse ledger: audio
+   * whose approval did not change keeps its content address and is reused, so only the segments
+   * whose decision actually moved are re-rendered.
+   */
+  reopenForReview(): void {
+    if (this.currentState !== 'completed') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'awaiting_review')
+    }
+    this.currentState = 'awaiting_review'
+    this.currentStage = 'directing'
+    this.completedOutput = null
+    this.failureMessage = null
+    this.currentProgress = Object.freeze({
+      currentChapterId: null,
+      completedSegments: 0,
+      totalSegments: 0,
+      latestMessage: AWAITING_REVIEW_MESSAGE,
+    })
   }
 
   beginRendering(totalSegments: number): void {
@@ -427,6 +491,23 @@ export class AudiobookJob {
         snapshot.warnings.length !== 0
       ) {
         throw new DomainError('Pending audiobook job snapshot is unreachable')
+      }
+      return
+    }
+
+    // Validated in full here and returned early, so `awaiting_review` never has to be folded into
+    // `activeOrInterrupted` below — which would also have made it reachable at stages where no
+    // review is possible, such as `extracting` or `assembling`.
+    if (snapshot.state === 'awaiting_review') {
+      if (
+        snapshot.stage !== 'directing' ||
+        snapshot.bookId === null ||
+        progress.completedSegments !== 0 ||
+        progress.totalSegments !== 0 ||
+        progress.currentChapterId !== null ||
+        progress.latestMessage !== AWAITING_REVIEW_MESSAGE
+      ) {
+        throw new DomainError('Awaiting-review audiobook job snapshot is unreachable')
       }
       return
     }

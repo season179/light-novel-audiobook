@@ -18,6 +18,7 @@
     "@light-novel-audiobook/gpu-lease": "workspace:*"
   },
   "devDependencies": {
+    "@light-novel-audiobook/persistence": "workspace:*",
     "tsx": "4.21.0"
   }
 }

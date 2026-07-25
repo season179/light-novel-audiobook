@@ -5,6 +5,7 @@ import {
   Chapter,
   type DirectedSegment,
   OutputVersion,
+  Segment,
   SourceCoverageError,
   SourcePassage,
   StableIds,
@@ -21,11 +22,15 @@ import {
   type DirectorModel,
   type EpubExtractionRequest,
   type EpubExtractor,
+  type FallbackApprovalRepository,
   GenerateAudiobook,
   type JobRepository,
   type OutputReservation,
+  type PersistedFallbackApproval,
   type ReusableSegmentQuery,
   type SpeechEngine,
+  type SpeechEngineContext,
+  type SpeechEngineFactory,
   type SpeechRenderRequest,
 } from '../src/index.js'
 
@@ -195,6 +200,12 @@ class FakeDirector implements DirectorModel {
   }
 }
 
+/**
+ * Faithful to `QwenApplicationSpeechEngine` on the one point this issue is about: a fallback segment
+ * is refused unless the catalog this engine was constructed with contains a matching decision. There
+ * is deliberately no policy option that would let one through — a permissive fake is exactly what
+ * hid #45 in the first place.
+ */
 class FakeSpeechEngine implements SpeechEngine {
   readonly identity: string
   readonly events: string[]
@@ -203,10 +214,16 @@ class FakeSpeechEngine implements SpeechEngine {
   endCalls = 0
   failOnceAtRenderCall: number | null = null
   returnWrongIdentity = false
+  private approvals = new Map<string, PersistedFallbackApproval>()
 
   constructor(events: string[], identity = 'fake-qwen:model-revision-1:settings-1') {
     this.events = events
     this.identity = identity
+  }
+
+  /** Called by the factory, once per render stage, with the complete catalog for that book. */
+  useApprovals(records: readonly PersistedFallbackApproval[]): void {
+    this.approvals = new Map(records.map((record) => [record.segmentId, record]))
   }
 
   async beginBatch(): Promise<void> {
@@ -217,6 +234,22 @@ class FakeSpeechEngine implements SpeechEngine {
   async render(request: SpeechRenderRequest): Promise<CompletedSegmentAudio> {
     this.renderCalls.push(request)
     this.events.push(`speech:${request.segment.id}`)
+    const assignment = request.segment.voiceAssignment
+    if (assignment?.usesFallback === true) {
+      const record = this.approvals.get(request.segment.id)
+      if (record === undefined) {
+        throw new Error(`Fallback segment ${request.segment.id} has no explicit human approval`)
+      }
+      if (
+        record.speakerId !== request.segment.speakerId ||
+        record.fallbackReason !== assignment.fallbackReason ||
+        record.voiceProfileId !== request.voice.id
+      ) {
+        throw new Error(
+          `Fallback approval for ${request.segment.id} does not match its unresolved speaker decision`,
+        )
+      }
+    }
     if (this.failOnceAtRenderCall === this.renderCalls.length) {
       this.failOnceAtRenderCall = null
       throw new Error('synthetic speech failure')
@@ -235,6 +268,112 @@ class FakeSpeechEngine implements SpeechEngine {
     this.events.push('speech:end')
   }
 }
+
+/**
+ * Shares one engine instance across render stages so per-run counters accumulate, and records every
+ * catalog it was handed. `contexts` is what proves construction happened after review rather than
+ * alongside the extractor and director.
+ */
+class FakeSpeechEngineFactory implements SpeechEngineFactory {
+  readonly identity: string
+  readonly engine: FakeSpeechEngine
+  readonly contexts: SpeechEngineContext[] = []
+  /** Simulates an adapter that wrongly folds its approval catalog into its own identity. */
+  identityMovesWithCatalog = false
+
+  constructor(engine: FakeSpeechEngine) {
+    this.engine = engine
+    this.identity = engine.identity
+  }
+
+  create(context: SpeechEngineContext): SpeechEngine {
+    this.contexts.push(context)
+    this.engine.useApprovals(context.fallbackApprovals)
+    if (!this.identityMovesWithCatalog) return this.engine
+    return new Proxy(this.engine, {
+      get: (target, property, receiver) =>
+        property === 'identity'
+          ? `${target.identity}:${context.fallbackApprovals.length}`
+          : Reflect.get(target, property, receiver),
+    })
+  }
+}
+
+class InMemoryFallbackApprovalRepository implements FallbackApprovalRepository {
+  readonly records = new Map<string, PersistedFallbackApproval>()
+  revokeCalls: string[] = []
+
+  async listForBook(bookId: string): Promise<readonly PersistedFallbackApproval[]> {
+    return [...this.records.values()]
+      .filter((record) => record.bookId === bookId)
+      .sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1))
+  }
+
+  async save(record: PersistedFallbackApproval): Promise<void> {
+    this.records.set(this.key(record.bookId, record.segmentId), record)
+  }
+
+  async revoke(bookId: string, segmentId: string): Promise<boolean> {
+    this.revokeCalls.push(segmentId)
+    return this.records.delete(this.key(bookId, segmentId))
+  }
+
+  private key(bookId: string, segmentId: string): string {
+    return `${bookId}:${segmentId}`
+  }
+}
+
+/**
+ * Rebuilds a book through the domain constructors, exactly as `SqliteJobRepository.findBook` does:
+ * the approved script comes back and chapter *render* state does not. Storing the object by
+ * reference instead would let `findBook` hand back chapters still marked `rendered`, which cannot
+ * begin rendering again — so the fake would diverge from the adapter on the path #45 depends on.
+ */
+const rebuildApprovedBook = (book: Book): Book =>
+  new Book({
+    id: book.id,
+    title: book.title,
+    author: book.author,
+    coverPath: book.coverPath,
+    source: { epubPath: book.source.epubPath, sha256: book.source.sha256 },
+    chapters: book.chapters.map((chapter) => {
+      const rebuilt = new Chapter({
+        id: chapter.id,
+        bookId: book.id,
+        position: chapter.position,
+        title: chapter.title,
+        sourcePassages: chapter.sourcePassages.map(
+          (passage) =>
+            new SourcePassage({
+              id: passage.id,
+              chapterId: chapter.id,
+              sourceText: passage.sourceText,
+            }),
+        ),
+      })
+      if (chapter.segments.length === 0) return rebuilt
+      rebuilt.submitForReview(
+        chapter.segments.map((segment, index) => {
+          const copy = new Segment({
+            id: segment.id,
+            chapterId: chapter.id,
+            sourcePassageId: segment.sourcePassageId,
+            order: index + 1,
+            sourceText: segment.sourceText,
+            kind: segment.kind,
+            speakerId: segment.speakerId,
+            confidence: segment.confidence,
+            delivery: segment.delivery,
+          })
+          const assignment = segment.voiceAssignment
+          if (assignment !== null) copy.assignVoice(assignment)
+          return copy
+        }),
+      )
+      rebuilt.approve()
+      return rebuilt
+    }),
+  })
 
 class FakeAssembler implements AudioAssembler {
   readonly identity: string
@@ -278,7 +417,12 @@ class InMemoryJobRepository implements JobRepository {
   }
 
   async saveBook(book: Book): Promise<void> {
-    this.books.set(book.id, book)
+    this.books.set(book.id, rebuildApprovedBook(book))
+  }
+
+  async findBook(bookId: string): Promise<Book | undefined> {
+    const stored = this.books.get(bookId)
+    return stored === undefined ? undefined : rebuildApprovedBook(stored)
   }
 
   async findReusableSegment(
@@ -333,10 +477,15 @@ interface Harness {
   readonly extractor: FakeExtractor
   readonly director: FakeDirector
   readonly speech: FakeSpeechEngine
+  readonly speechFactory: FakeSpeechEngineFactory
   readonly assembler: FakeAssembler
   readonly repository: InMemoryJobRepository
+  readonly approvals: InMemoryFallbackApprovalRepository
   readonly useCase: GenerateAudiobook
 }
+
+/** Fixed so a recorded decision time is reproducible and identities are stable across runs. */
+const DECIDED_AT = new Date('2026-07-25T09:00:00.000Z')
 
 const harness = (
   options: {
@@ -345,27 +494,34 @@ const harness = (
     directorIdentity?: string
     speechIdentity?: string
     assemblerIdentity?: string
+    now?: () => Date
   } = {},
 ): Harness => {
   const events: string[] = []
   const extractor = new FakeExtractor(options.extractorIdentity)
   const director = new FakeDirector(events, options.corruptDirection, options.directorIdentity)
   const speech = new FakeSpeechEngine(events, options.speechIdentity)
+  const speechFactory = new FakeSpeechEngineFactory(speech)
   const assembler = new FakeAssembler(events, options.assemblerIdentity)
   const repository = new InMemoryJobRepository()
+  const approvals = new InMemoryFallbackApprovalRepository()
   return {
     events,
     extractor,
     director,
     speech,
+    speechFactory,
     assembler,
     repository,
+    approvals,
     useCase: new GenerateAudiobook({
       epubExtractor: extractor,
       directorModel: director,
-      speechEngine: speech,
+      speechEngineFactory: speechFactory,
       audioAssembler: assembler,
       jobs: repository,
+      approvals,
+      now: options.now ?? ((): Date => DECIDED_AT),
     }),
   }
 }
@@ -520,9 +676,10 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const changedExtractorUseCase = new GenerateAudiobook({
       epubExtractor: changedExtractor,
       directorModel: app.director,
-      speechEngine: app.speech,
+      speechEngineFactory: app.speechFactory,
       audioAssembler: app.assembler,
       jobs: app.repository,
+      approvals: app.approvals,
     })
     await expect(
       changedExtractorUseCase.execute({
@@ -538,9 +695,10 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const changedUseCase = new GenerateAudiobook({
       epubExtractor: app.extractor,
       directorModel: app.director,
-      speechEngine: changedSpeech,
+      speechEngineFactory: new FakeSpeechEngineFactory(changedSpeech),
       audioAssembler: app.assembler,
       jobs: app.repository,
+      approvals: app.approvals,
     })
     await expect(
       changedUseCase.execute({

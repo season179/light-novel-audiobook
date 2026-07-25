@@ -1,3 +1,4 @@
+export { SqliteFallbackApprovalRepository } from './fallback-approvals.js'
 export { SqliteJobRepository } from './repo.js'
 export { migrateSchema, SCHEMA_VERSION } from './schema.js'
 export {
