@@ -1,0 +1,24 @@
+{
+  "name": "@light-novel-audiobook/gemma-director",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Focused Gemma 4 DirectorModel adapter for local llama.cpp",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/gemma-director/test",
+    "smoke:real": "tsx scripts/real-smoke.ts"
+  },
+  "dependencies": {
+    "@light-novel-audiobook/application": "workspace:*",
+    "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/gpu-lease": "workspace:*",
+    "@tanstack/ai": "0.42.0",
+    "@tanstack/ai-openai": "0.17.1",
+    "zod": "4.4.3"
+  }
+}

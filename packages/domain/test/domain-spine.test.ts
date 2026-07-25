@@ -263,6 +263,32 @@ describe('chapter lifecycle and stable casting', () => {
     expect(chapter.state).toBe('rendered')
   })
 
+  it('reads narrator-owned sound cues in the narrator voice, never the fallback', () => {
+    const chapter = makeChapter()
+    const cue = new Segment({
+      id: 'sound-cue-segment',
+      chapterId: chapter.id,
+      sourcePassageId: required(chapter.sourcePassages[0]).id,
+      order: 1,
+      sourceText: 'A door slammed.',
+      kind: 'sound_cue',
+      speakerId: null,
+      confidence: 0.99,
+      delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 0 },
+    })
+    const cast = new VoiceCast(
+      profile('narrator', 'narrator', null),
+      profile('fallback', 'fallback', null),
+      [],
+    )
+
+    expect(cast.resolve(cue).assignment).toEqual({
+      voiceProfileId: 'narrator',
+      usesFallback: false,
+      fallbackReason: null,
+    })
+  })
+
   it('uses one narrator, stable character voices, and an explicit fallback with warnings', () => {
     const chapter = makeChapter()
     const segments = ExactSourceCoverage.createSegments(chapter, directed(chapter))

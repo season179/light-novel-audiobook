@@ -173,6 +173,7 @@ export class GenerateAudiobook {
   }
 
   private async directBook(book: Book, voices: VoiceCast, job: AudiobookJob): Promise<void> {
+    let failure: unknown
     try {
       for (const chapter of book.chapters) {
         job.report(chapter.id, `Directing ${chapter.title}`)
@@ -203,9 +204,16 @@ export class GenerateAudiobook {
         await this.jobs.saveBook(book)
         await this.jobs.saveJob(job)
       }
-    } finally {
-      await this.directorModel.release()
+    } catch (error: unknown) {
+      failure = error
     }
+    // The director is always released, but a failing release must not mask why direction failed.
+    try {
+      await this.directorModel.release()
+    } catch (error: unknown) {
+      failure ??= error
+    }
+    if (failure !== undefined) throw failure
   }
 
   private async planRendering(book: Book, voices: VoiceCast): Promise<readonly PlannedSegment[]> {

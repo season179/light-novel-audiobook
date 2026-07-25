@@ -165,6 +165,7 @@ class FakeDirector implements DirectorModel {
   readonly events: string[]
   readonly corrupt: boolean
   releaseCalls = 0
+  failRelease = false
 
   constructor(
     events: string[],
@@ -190,6 +191,7 @@ class FakeDirector implements DirectorModel {
   async release(): Promise<void> {
     this.releaseCalls += 1
     this.events.push('director:release')
+    if (this.failRelease) throw new Error('director release failed')
   }
 }
 
@@ -756,6 +758,24 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.assembler.calls).toHaveLength(0)
     expect(app.repository.jobs.get('job-bad-source')?.state).toBe('failed')
     expect(app.repository.jobs.get('job-bad-source')?.error).toContain(
+      'rewritten, omitted, or duplicated',
+    )
+  })
+
+  it('keeps the causative direction failure when releasing the director also fails', async () => {
+    app = harness({ corruptDirection: true })
+    app.director.failRelease = true
+    await expect(
+      app.useCase.execute({
+        jobId: 'job-release-failure',
+        epubPath: '/uploads/story.epub',
+        epubSha256: sourceHash,
+        voices: makeCast(),
+      }),
+    ).rejects.toBeInstanceOf(SourceCoverageError)
+
+    expect(app.director.releaseCalls).toBe(1)
+    expect(app.repository.jobs.get('job-release-failure')?.error).toContain(
       'rewritten, omitted, or duplicated',
     )
   })
