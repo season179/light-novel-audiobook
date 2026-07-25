@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -229,6 +230,19 @@ const writeArtifact = (
   }
 }
 
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms)
+  })
+
+const waitForFile = async (path: string, timeoutMs: number): Promise<void> => {
+  const deadline = Date.now() + timeoutMs
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for file: ${path}`)
+    await delay(10)
+  }
+}
+
 interface Harness {
   readonly layout: WorkspaceLayout
   readonly repo: SqliteJobRepository
@@ -270,6 +284,31 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     }
     for (const root of createdRoots) rmSync(root, { recursive: true, force: true })
     createdRoots.length = 0
+  })
+
+  it('retries saveJob with a fresh transaction when another process holds the writer lock', async () => {
+    const ready = join(harness.layout.root, 'writer-locked')
+    const child = join(dirname(fileURLToPath(import.meta.url)), 'hold-write-lock-child.ts')
+    const run = promisify(execFile)
+    const locker = run(
+      process.execPath,
+      ['--import', 'tsx', child, harness.layout.dbPath, ready, '500'],
+      { maxBuffer: 1 << 20 },
+    )
+
+    await waitForFile(ready, 5000)
+    // Make the first BEGIN IMMEDIATE lose quickly, so the repository's outer retry -- rather
+    // than SQLite's own five-second timeout -- is what lets this save survive contention.
+    harness.db.exec('PRAGMA busy_timeout = 50')
+    const job = new AudiobookJob('job-busy-retry')
+
+    try {
+      await harness.repo.saveJob(job)
+    } finally {
+      await locker
+    }
+
+    expect(await harness.repo.findJob(job.id)).toBeDefined()
   })
 
   it('resumes a restarted job by reusing its previously completed segment audio', async () => {
