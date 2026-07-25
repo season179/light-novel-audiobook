@@ -20,6 +20,7 @@ import {
   deriveBookId,
   EpubIngestionAdapter,
   extractEpubDeterministically,
+  INGESTION_SCHEMA_VERSION,
   type StoredEpubIngestion,
 } from '../src/index.js'
 
@@ -310,7 +311,9 @@ describe('EPUB ingestion crash recovery', () => {
       code: 'STORAGE_CONFLICT',
       message: expect.stringContaining('epub-ingestion@1'),
     })
-    await expect(adapter.ingest({ bytes })).rejects.toThrow(/this build reads epub-ingestion@2/)
+    await expect(adapter.ingest({ bytes })).rejects.toThrow(
+      new RegExp(`this build reads ${INGESTION_SCHEMA_VERSION}`),
+    )
   })
 
   it('confines an interrupted discard to .quarantine, never to books/', async () => {

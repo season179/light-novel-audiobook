@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { StableIds } from '@light-novel-audiobook/domain'
 import {
   type BookLockCoordinator,
   BookLockError,
@@ -18,7 +19,18 @@ import {
   type SourceAnnotation,
 } from './extractor.js'
 
-export const INGESTION_SCHEMA_VERSION = 'epub-ingestion@2' as const
+/**
+ * Bumped to `@3` by issue #52: book/chapter/passage IDs moved to the `StableIds` dialect, so every
+ * manifest written before that carries different identities for the same publication. The values
+ * changed, not just the wording of a rule, so a stored record genuinely is stale and
+ * `#verifyExisting` reports the mismatch with the remedy rather than comparing incomparable IDs.
+ *
+ * No data migration is provided and none is needed. `bookId` changed shape too, so an old record
+ * lives under a different `books/<id>` directory and is never consulted; a re-ingest simply writes
+ * the new one. Schema v1 of the app is unreleased and workspaces are disposable, so orphaned
+ * directories are the operator's to delete.
+ */
+export const INGESTION_SCHEMA_VERSION = 'epub-ingestion@3' as const
 
 export type EpubIngestionErrorCode =
   | 'INVALID_EPUB'
@@ -205,20 +217,48 @@ function deepFreeze<T>(value: T): T {
   return value
 }
 
+/**
+ * Book/chapter/passage IDs are `StableIds`, because that is the dialect every downstream consumer
+ * encodes: the Qwen engine's book-scoped segment-ID gate, `AudiobookJob.validateOutputContext` in
+ * `complete()`, and `validateWarning` in `addFallbackWarning`. A bare content hash is rejected by all
+ * three, so a real book could not render, could not complete, and crashed direction on its first
+ * unresolved speaker (issue #52).
+ *
+ * Content-addressing is preserved where it is load-bearing. `StableIds.book` takes a full SHA-256 and
+ * keeps its leading 24 hex characters, so passing `publication_content_sha256` yields an ID that is
+ * both dialect-conformant and still derived from publication content. That is what keeps re-upload
+ * idempotency, `#recoverTarget`'s identity check, and `#verifyExisting` working: the same bytes
+ * produce the same ID, and the workspace directory is still content-addressed.
+ *
+ * Chapter and passage IDs are necessarily positional, because the dialect encodes position
+ * (`chNNNN`, `pNNNNNN`). They remain deterministic -- spine order and document order are fixed by the
+ * extraction -- and provenance is not lost: `sourceArchivePath`, `spineLocator`, `locator` and
+ * `sourceTextSha256` all still identify what the text is, independently of where it sits.
+ */
 export function deriveBookId(extraction: DeterministicEpubExtraction): string {
-  return taggedId('source-book-id@1', [
-    `archive_parser=${extraction.identity.archive_parser}`,
-    `xml_parser=${extraction.identity.xml_parser}`,
-    `extraction_rules=${extraction.identity.extraction_rules}`,
-    `publication_content_sha256=${extraction.publication_content_sha256}`,
-  ])
+  return StableIds.book(extraction.publication_content_sha256)
 }
 
-export function deriveChapterId(
+/** One-based over spine documents that carry source passages, matching `IngestedChapter.position`. */
+export function deriveChapterId(bookId: string, chapterPosition: number): string {
+  return StableIds.chapter(bookId, chapterPosition)
+}
+
+/** One-based within its chapter, matching `IngestedSourcePassage.position`. */
+export function derivePassageId(chapterId: string, passagePosition: number): string {
+  return StableIds.passage(chapterId, passagePosition)
+}
+
+/**
+ * Audit-only identity for a spine document with no source passages. These never become domain
+ * chapters, so they take no chapter position and must not look like a chapter ID; they stay
+ * content-addressed because their purpose is provenance rather than addressing.
+ */
+function deriveNonStoryDocumentId(
   extraction: DeterministicEpubExtraction,
   document: ExtractedSpineDocument,
 ): string {
-  return taggedId('source-chapter-id@1', [
+  return taggedId('non-story-spine-document-id@1', [
     `archive_parser=${extraction.identity.archive_parser}`,
     `xml_parser=${extraction.identity.xml_parser}`,
     `extraction_rules=${extraction.identity.extraction_rules}`,
@@ -259,13 +299,12 @@ function mapExtraction(
   const chapters: IngestedChapter[] = []
   const nonStoryDocuments: NonStorySpineDocument[] = []
   for (const document of extraction.documents) {
-    const chapterId = deriveChapterId(extraction, document)
     const spinePosition = document.spine_index + 1
     const spineLocator = `spine[${document.spine_index.toString().padStart(4, '0')}]::${document.path}`
     if (document.passages.length === 0) {
       const hasDocumentTitle = document.title !== null && document.title.length > 0
       nonStoryDocuments.push({
-        id: chapterId,
+        id: deriveNonStoryDocumentId(extraction, document),
         spinePosition,
         spineLocator,
         manifestId: document.idref,
@@ -283,9 +322,11 @@ function mapExtraction(
       continue
     }
 
+    const chapterPosition = chapters.length + 1
+    const chapterId = deriveChapterId(bookId, chapterPosition)
     const passages = document.passages.map(
       (passage, passageIndex): IngestedSourcePassage => ({
-        id: passage.id,
+        id: derivePassageId(chapterId, passageIndex + 1),
         chapterId,
         position: passageIndex + 1,
         locator: passage.locator,
@@ -307,7 +348,7 @@ function mapExtraction(
     const hasDocumentTitle = document.title !== null && document.title.length > 0
     chapters.push({
       id: chapterId,
-      position: chapters.length + 1,
+      position: chapterPosition,
       spinePosition,
       spineLocator,
       manifestId: document.idref,
@@ -315,8 +356,7 @@ function mapExtraction(
       linear: document.linear,
       documentTitle: document.title,
       title:
-        headingTitle ??
-        (hasDocumentTitle ? document.title : `Untitled chapter ${chapters.length + 1}`),
+        headingTitle ?? (hasDocumentTitle ? document.title : `Untitled chapter ${chapterPosition}`),
       titleSource: headingTitle ? 'heading' : hasDocumentTitle ? 'document-title' : 'generated',
       headings,
       semanticHints: document.semantic_hints,
