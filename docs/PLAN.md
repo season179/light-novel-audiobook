@@ -1,12 +1,12 @@
 # Light Novel Audiobook Plan
 
-Updated: 2026-07-24
+Updated: 2026-07-25
 
 ## Confirmed requirements
 
 - Input: English EPUB
 - Output: chapter audio and final audiobook (preferably M4B with chapters, cover, and metadata)
-- TTS: VoxCPM2 through `llama.cpp-omni`
+- TTS/voice-bootstrap direction: official 2026 Qwen3-TTS 1.7B CustomVoice through the pinned local `qwen-tts` Python runtime with PyTorch SDPA; production adapter validation is deferred
 - Performance target: local RTX 5070 Ti 16 GB, 64 GB system RAM
 - Director brain: official Google Gemma 4 26B-A4B IT QAT Q4_0 GGUF
 - Casting target: narrator plus persistent character voices
@@ -43,7 +43,7 @@ Planned domain areas (bounded contexts):
 
 Use entities and value objects for concepts such as `Book`, `Chapter`, `SourcePassage`, `Segment`, `Character`, `VoiceProfile`, and `RenderJob`. Domain services will enforce cross-object rules, especially exact source-text coverage, stable character voices, and resumable rendering. Repository interfaces will keep SQLite and filesystem details out of the domain.
 
-Infrastructure will connect through explicit adapters for EPUB parsing, director LLMs, TTS engines, the filesystem, and FFmpeg. Gemma and VoxCPM2 are the initial implementations, not hard dependencies of the domain or application layers. Application services will coordinate use cases such as importing a book, directing a chapter, approving a script, rendering pending segments, and assembling an audiobook.
+Infrastructure will connect through explicit adapters for EPUB parsing, director LLMs, TTS engines, the filesystem, and FFmpeg. Gemma and Qwen3-TTS are the selected model directions, not hard dependencies of the domain or application layers. The rejected VoxCPM2/eSpeak runtimes were deleted while their historical evidence was retained. Application services will coordinate use cases such as importing a book, directing a chapter, approving a script, rendering pending segments, and assembling an audiobook.
 
 ### Replaceable model providers
 
@@ -68,9 +68,9 @@ Use the **TanStack ecosystem** at the application boundaries while keeping the c
 - **Biome** as the standard formatter, linter, and import organizer, enforced locally and in CI
 - **pnpm 11** with a committed lockfile and pinned `packageManager` version for reproducible installs
 - A dedicated CLI/background worker for long-running processing and rendering; these jobs must not depend on a web-request lifetime
-- One launcher CLI with `start`, `stop`, and `status` actions for the web app, worker, llama.cpp router, and llama.cpp-omni TTS server
-- A custom HTTP adapter for VoxCPM2 because its llama.cpp-omni TTS API is separate from the director model API
-- Direct unprivileged HTTP loopback endpoints for the current milestone: review app `127.0.0.1:3000`, brain `127.0.0.1:8080`, and TTS `127.0.0.1:8081`
+- One launcher CLI with `start`, `stop`, and `status` actions for the web app, worker, llama.cpp router, and the selected TTS service after its production adapter is accepted
+- A replaceable `SpeechEngine` adapter for the pinned local Qwen3-TTS runtime; server lifecycle, streaming, cancellation, concurrency, and deadline validation are deferred
+- Direct unprivileged HTTP loopback endpoints for the current milestone: review app `127.0.0.1:3000`, brain `127.0.0.1:8080`, and reserved TTS endpoint `127.0.0.1:8081` after adapter acceptance
 
 The launcher binds only to `127.0.0.1`, fails closed if a configured port is occupied, and atomically records the effective endpoints in its runtime manifest. It displays `http://localhost:3000` for the Windows browser while service-to-service configuration uses explicit `127.0.0.1` URLs. Ports remain configurable, but their stable defaults are not silently replaced with dynamic ports. The review server accepts only the exact configured `Host` and `Origin` values, uses restrictive non-wildcard CORS, and requires an anti-CSRF token for every state-changing request. Model endpoints reject browser `Origin`/fetch metadata and emit no browser CORS permission. Portless is deferred and may be reconsidered after the core runtime and launcher work reliably; it is not a current dependency or acceptance requirement.
 
@@ -149,18 +149,19 @@ Example segment:
 
 ### Stage B: Reviewed script to audiobook
 
-6. **VoxCPM2 runtime**
-   - Build `llama.cpp-omni` with CUDA in WSL2.
-   - Download `VoxCPM2-BaseLM-Q8_0.gguf` and `VoxCPM2-Acoustic-F16.gguf` (~3.6 GB total).
-   - Build both `voxcpm2-cli` for testing and persistent `llama-tts-server` for production rendering.
-   - Keep this installation isolated from the standard llama.cpp router used by the brain.
+6. **Qwen3-TTS runtime**
+   - Use only the official `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` revision and pinned `qwen-tts==0.1.1` uv/Python 3.12 environment.
+   - Keep the complete model snapshot and isolated PyTorch SDPA runtime on WSL ext4 outside Git, separate from the standard llama.cpp brain router.
+   - Load the verified local snapshot rather than a remote model ID; do not install FlashAttention or use reference audio.
+   - Treat current evidence as local batch/bootstrap approval only. Validate a production server adapter, lifecycle, streaming, cancellation, concurrency, and deadlines separately.
+   - Keep the rejected/deleted VoxCPM2 and eSpeak installations retired; preserve their historical code, audio, manifests, and evidence.
 
 7. **Voice creation and consistency**
    - Require no user-provided recordings.
-   - Generate local synthetic voice candidates for the narrator and recurring characters from the approved cast/story-bible information.
-   - Let the user preview the recommended candidates and approve or regenerate them before bulk rendering.
-   - Save one stable reference clip and exact transcript for every approved voice.
-   - Reuse the same reference assets for every line by that character.
+   - Use approved built-in speaker/instruction profiles as local synthetic voice candidates for the narrator and recurring characters.
+   - Begin with narrator Aiden calm, character one Ryan energetic, and character two Ryan low/weary restrained; retain all accepted Aiden/Ryan audition variants as candidates and exclude Serena from English casting.
+   - Let the user preview recommended candidates and approve or regenerate instruction variants before bulk rendering.
+   - Save each approved speaker, instruction, seed/profile, transcript, model revision, and audition-output hash as a stable voice profile; no reference clip is required.
    - Use a generic fallback voice only when the user explicitly approves an unresolved speaker.
 
 8. **Generation preflight and segment rendering**
@@ -169,7 +170,7 @@ Example segment:
    - Block generation when the estimate cannot fit while preserving a safety reserve.
    - Warn and require confirmation when generation is expected to consume over 20% of currently free space or leave less than 20 GB or 10% of the volume free, whichever reserve is larger.
    - Split at natural sentence/paragraph boundaries into short clips.
-   - Keep the TTS server loaded across all requests.
+   - Keep the accepted TTS runtime/model loaded across requests once the production adapter is validated.
    - Store each WAV by stable segment ID.
    - Record model, voice, seed, parameters, and source hash for reproducibility.
    - Support safe resume without regenerating completed segments.
@@ -191,11 +192,11 @@ Example segment:
 
 ## Runtime separation
 
-- The standard `llama.cpp` director router and `llama.cpp-omni` VoxCPM2 TTS server use separate configured loopback ports, defaulting to 8080 and 8081.
-- Application code uses the configured direct `127.0.0.1` URLs, and the launcher records the effective endpoints.
-- The launcher manages both runtimes, but they remain isolated by directory, process, and port.
+- Keep the standard `llama.cpp` director router and pinned Qwen3-TTS Python runtime isolated by directory, environment, process, model path, and GPU lifecycle.
+- The current Qwen approval is local batch/bootstrap use, not a server. Port `127.0.0.1:8081` remains reserved until a production `SpeechEngine` adapter and its protocol/lifecycle pass validation.
+- After adapter acceptance, application code will use configured direct `127.0.0.1` URLs and the launcher will record effective endpoints without silently selecting another port.
 - Run brain preprocessing first, unload it, and then perform TTS rendering. This avoids VRAM contention and makes the workflow reproducible.
-- Bind the web app, worker control endpoints, and model servers to `127.0.0.1` only. Refuse startup rather than selecting another port when a configured port is occupied.
+- Bind the web app, worker control endpoints, and any accepted model servers to `127.0.0.1` only. Refuse startup rather than selecting another port when a configured port is occupied.
 - Enforce exact Host/Origin allowlists and anti-CSRF checks at the review HTTP boundary. Do not grant model endpoints CORS access; reject requests carrying browser Origin or fetch-metadata headers.
 
 ## Director-brain model decision (locked 2026-07-24)
@@ -259,8 +260,8 @@ Use llama.cpp JSON-schema/grammar enforcement for syntax, then deterministic val
 3. Build EPUB extraction and normalization behind infrastructure adapters.
 4. Build story-bible, speaker attribution, and review workflow as application/domain services.
 5. Process and approve one representative chapter.
-6. Build/test `llama.cpp-omni` and VoxCPM2 adapters.
-7. Create narrator and character voice references.
+6. Build and validate the production `SpeechEngine` adapter and lifecycle around the pinned local Qwen3-TTS runtime.
+7. Apply the approved Aiden/Ryan speaker and instruction profiles to the reviewed sample cast.
 8. Render and master the approved sample chapter.
 9. Adjust based on listening review.
 10. Process the full book with resumable generation.
@@ -268,4 +269,5 @@ Use llama.cpp JSON-schema/grammar enforcement for syntax, then deterministic val
 ## Decisions still needed
 
 - Maximum practical director context and GPU-offload settings after benchmarking
+- Qwen3-TTS production server protocol, lifecycle, streaming, cancellation, concurrency, and deadline behavior after adapter validation
 - Exact visual layout of the local TanStack Start review UI

@@ -102,3 +102,34 @@ and it keeps the TTS runtime separate from the standard llama.cpp brain runtime.
 about 3.55 GB of checksum-pinned public GGUF assets. See
 [`spikes/voxcpm2-runtime.md`](spikes/voxcpm2-runtime.md) before using it; the pinned server has a
 known streaming crash and is not approved for a production adapter.
+
+## Synthetic voice bootstrap spike
+
+Issue #8's eSpeak NG plus VoxCPM2 experiment is historical and retired. Human review judged all
+nine primary outputs “unacceptable / extremely bad quality,” with no numeric per-clip scores
+supplied. The orchestrator removed the installed eSpeak NG source/build/install and VoxCPM2
+weights/runtime; do **not** run `voices:setup`, `voices:probe`, or reinstall those engines.
+
+The 12 historical WAVs, manifests, review bundle, repository code, and sanitized evidence remain
+preserved. The technical experiment record is retained rather than rewritten, while its human
+listening decision is NO-GO. See
+[`spikes/synthetic-voice-bootstrap.md`](spikes/synthetic-voice-bootstrap.md) and
+[`evidence/issue-8-human-listening-2026-07-25.json`](evidence/issue-8-human-listening-2026-07-25.json).
+
+## Qwen3-TTS issue #8 extension
+
+The independent replacement experiment is opt-in and restricted to the pinned
+`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` snapshot:
+
+```sh
+pnpm qwen3-tts:verify
+pnpm qwen3-tts:setup
+pnpm qwen3-tts:probe -- --output docs/evidence/issue-8-qwen3-tts-custom-voice-wsl2.json
+```
+
+Setup installs a complete locked uv/CPython 3.12 environment and 4.52 GB model snapshot on WSL
+ext4 outside Git. Inference is offline from that local path, uses PyTorch SDPA, and supplies no
+reference audio. The harness fails if the retired eSpeak/VoxCPM2 paths reappear. Normal setup and
+CI run only portable adversarial tests and do not install the environment, download weights, or
+create audio. Read [`spikes/qwen3-tts-custom-voice.md`](spikes/qwen3-tts-custom-voice.md) before
+running it.

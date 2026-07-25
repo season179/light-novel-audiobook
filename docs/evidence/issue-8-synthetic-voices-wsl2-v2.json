@@ -1,0 +1,1074 @@
+{
+  "evidenceSchemaVersion": 1,
+  "capturedAt": "2026-07-25T03:24:03.975Z",
+  "issue": 8,
+  "run": {
+    "runId": "bootstrap-49efa4389cf591f0-20260725T032403974Z-41cc78b61352",
+    "sourceIdentity": "49efa4389cf591f07784b8a5c714016c4caf53617376cfd0d76dac433b500a9a",
+    "immutableExternalAssetsAndManifests": true,
+    "artifactManifestSha256": "6953562f637189c0cd41518aff16bb561436f5900abca62b685c3d56b0e906c7",
+    "rawManifestSha256": "becb4dfdefd7217e44f0081a754c8cd251c1a42c3a1332812f95c66dcdea1606"
+  },
+  "provenance": {
+    "generatedFromCommit": "f6a445ac9bd422a60d3b74f66ad96a1a2da9b84d",
+    "sourceHashes": {
+      "config": "0345465a35c4174b357511c70977f3be6bdbbe91653597745925629cc3efbbb3",
+      "core": "0cfc1288596fef3510edb5ec44313a87228cb6bd55de0c9241bdf2a9876df1fe",
+      "issue7Evidence": "119529018e96dc247c8cc6ffb6a3cf19f52be45654d8bb51fd519f9e77e2df17",
+      "probe": "44a800265a53dfac1bc65e62109bb641b1f069fb3d4dddecf85ec2c2d43f8039",
+      "shell": "a6fda65702c706bac32738ff1a8650c567aa93b88889dabb101c8d1538ccd329",
+      "voxConfig": "6b431f34008736a1f808037946915bb0d00bc8d38a790805c6bcd4b607f08650",
+      "voxCore": "88bc5e4391d26304bd5e414b411d89f53c5e23b7442c03e71d3476ae11b1cc17"
+    },
+    "sourceIdentity": "49efa4389cf591f07784b8a5c714016c4caf53617376cfd0d76dac433b500a9a",
+    "configurationSha256": "0345465a35c4174b357511c70977f3be6bdbbe91653597745925629cc3efbbb3",
+    "projectAuthoredTranscriptsOnly": true,
+    "humanOrCopyrightedReferenceAudioUsed": false,
+    "espeakNg": {
+      "repository": "https://github.com/espeak-ng/espeak-ng.git",
+      "tag": "1.52.0",
+      "revision": "4870adfa25b1a32b4361592f1be8a40337c58d6c",
+      "sourceTree": "45e4d63726666fbde7616168e8872762470c46d1",
+      "license": "GPL-3.0-or-later",
+      "licenseSha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "readmeSha256": "765e894f83a47e2d003bd2256e86d1ae412e6e0078c3092d66ece293b051e278",
+      "voiceDocumentationSha256": "7c599eeda2771a90e4e33fbeeb8f54bfbb5d41dd9fe91226bc3ce2066e10973b",
+      "selectedVoiceSources": [
+        {
+          "path": "espeak-ng-data/lang/gmw/en-US",
+          "sha256": "41534c2a22df5dd4f1052ff9e1a33a3ea7bff5a26b5c02bdad5ba8ddb7524704"
+        },
+        {
+          "path": "espeak-ng-data/voices/!v/m3",
+          "sha256": "7a4ac872387439814ddd65f5e1ff73017122975911df6b5dc62c5709e6fdb611"
+        },
+        {
+          "path": "espeak-ng-data/voices/!v/f4",
+          "sha256": "ff9e2907a818920e3b976232c90eabaf270fff0de0b8a479af9a3633e9b7921f"
+        }
+      ],
+      "buildConfiguration": {
+        "type": "Release",
+        "sharedLibraries": false,
+        "mbrola": false,
+        "libsonic": false,
+        "libpcaudio": false,
+        "klatt": true,
+        "speechPlayer": false,
+        "async": false,
+        "testing": false,
+        "relocatableInstall": false
+      },
+      "buildConfigurationSha256": "aa7a8488c6d7e8262cce47d4247012a77620cb7a48764fced6dcb4076ebda8d1",
+      "cmakeCacheSha256": "ed076998e8dd4a830a574182a250558b057a4fd6fd3b2ca7c4d3b14a10103f5e",
+      "configureArguments": [
+        "CMAKE_BUILD_TYPE=Release",
+        "BUILD_SHARED_LIBS=OFF",
+        "BUILD_TESTING=OFF",
+        "USE_MBROLA=OFF",
+        "USE_LIBSONIC=OFF",
+        "USE_LIBPCAUDIO=OFF",
+        "USE_KLATT=ON",
+        "USE_SPEECHPLAYER=OFF",
+        "USE_ASYNC=OFF"
+      ],
+      "toolchain": {
+        "cmake": "cmake version 4.3.1",
+        "cxx": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+      },
+      "binarySha256": "36925debdef847f953863b68cf2c2452acaf1446309ab4b33f25e6c2626b7a36",
+      "installManifestSha256": "29d9d027035ead276e84763414c307ed7d09d84fa2e070c15e88b601af2bb88d",
+      "installedVoiceDataTreeSha256": "a482069234b61866eb784e6adc32fa1280eba341954e50e32a5c4f41eead250a",
+      "selectedVoiceSourcesSha256": "13a4d25df87bfc42b14d82213b07826c711d8c32b748d14ebd249b2fbd8eb5e0",
+      "version": "eSpeak NG text-to-speech: 1.52.0",
+      "stochasticSeed": null,
+      "seedExplanation": "eSpeak NG formant synthesis is deterministic and exposes no seed parameter",
+      "mbrolaOrSampledVoiceUsed": false
+    },
+    "voxcpm2": {
+      "issue7LockSha256": "6b431f34008736a1f808037946915bb0d00bc8d38a790805c6bcd4b607f08650",
+      "runtimeRevision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+      "runtimeApproval": {
+        "issue7EvidenceSha256": "119529018e96dc247c8cc6ffb6a3cf19f52be45654d8bb51fd519f9e77e2df17",
+        "issue7GeneratedFromCommit": "de1b76e3e92ce9146936701bd40a915e0860e016",
+        "sourceIdentity": "ac1659bee8aafe41da3c016c4b600a0ab4c4bb4f37cd26115ca6738efc1c65ca",
+        "buildRunId": "build-ac1659bee8aafe41-20260725T015406.080352772Z-8dd107d21d20",
+        "buildManifestSha256": "1a2d4eb0394312fdf1c8f00bf09ad5a093d013873db474c8b1af74ee5f1f32f6",
+        "runtimeRevision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+        "runtimeTree": "bde392d3a4d92035a67988f57095665c4f5f8c86",
+        "cmakeCacheSha256": "bee4e5d43d69247436578e1bae0b5c13a2d83b803844e28db39035eb7beebfd3",
+        "buildMetadataSha256": "0187a020250b74efcd90326f7632badb64e64ba7074389e1f0b486609147371e",
+        "serverBinarySha256": "89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac",
+        "independentlyMatchedIssue7EvidenceAndExternalBuild": true
+      },
+      "serverBinarySha256": "89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac",
+      "ggufRepository": "DennisHuang648/VoxCPM2-GGUF",
+      "ggufRevision": "169f64d8b98bbaab1761e4ca3a83e6af653456cc",
+      "modelAssets": [
+        {
+          "name": "VoxCPM2-BaseLM-Q8_0.gguf",
+          "size": 1727309920,
+          "sha256": "0113177abd11303503bf0b705e1613ec5f0a8508cc74a7dfd0f99312b962a962"
+        },
+        {
+          "name": "VoxCPM2-Acoustic-F16.gguf",
+          "size": 1825096352,
+          "sha256": "5bde898488ad635ff55d24da53543768fa33d5e5cdc538ce190e5ef831038e85"
+        }
+      ],
+      "mode": "serialized-non-streaming-experimental-only",
+      "endpointPath": "/v1/audio/speech"
+    }
+  },
+  "isolation": {
+    "environment": "WSL2",
+    "externalArtifactsOnExt4": true,
+    "artifactsOutsideGit": true,
+    "endpoint": "127.0.0.1:8081",
+    "exactListenerCount": 1,
+    "listeners": [
+      {
+        "state": "LISTEN",
+        "localEndpoint": "127.0.0.1:8081",
+        "peerEndpoint": "0.0.0.0:*"
+      }
+    ],
+    "maximumInFlightRequests": 1,
+    "requestCount": 12,
+    "allRequestsNonStreaming": true,
+    "gracefulServerExit": {
+      "code": 0,
+      "signal": null
+    },
+    "portFreeAfterCleanup": true,
+    "baselineGpu": {
+      "memoryUsedMiB": 187,
+      "utilizationPercent": 0
+    }
+  },
+  "candidates": [
+    {
+      "candidateId": "narrator",
+      "role": "narrator",
+      "voice": "en-us",
+      "transcript": "At sunrise, the brass observatory opened its quiet shutters, while three clockwork swallows traced circles above the garden.",
+      "transcriptSha256": "a3e84c0fe1ccb982b0a83fb27610e05add6894bb9f8b2692b6223a83628af78e",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 155,
+        "pitch": 45,
+        "amplitude": 120
+      },
+      "invocation": [
+        "espeak-ng",
+        "--path=<external-espeak-data-parent>",
+        "-v",
+        "en-us",
+        "-s",
+        "155",
+        "-p",
+        "45",
+        "-a",
+        "120",
+        "-w",
+        "<new-output>",
+        "<exact-transcript>"
+      ],
+      "repeatMethod": "two process-isolated, candidate-separated generation passes",
+      "file": "references/narrator/reference.wav",
+      "repeatFile": "references/narrator/reference-repeat.wav",
+      "sha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "repeatSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 353100,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 22050,
+          "byteRate": 44100,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 176532,
+          "durationSeconds": 8.005986394557823,
+          "bytes": 353108,
+          "dataOffset": 44,
+          "dataDeclaredSize": 353064,
+          "sha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92"
+        },
+        "objective": {
+          "peakDbfs": -1.214539985743726,
+          "rmsDbfs": -20.141733465594427,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.85785536159601,
+          "zeroCrossingsPerSecond": 3009.7478077628984,
+          "estimatedMedianPitchHz": 94.23076923076923
+        }
+      }
+    },
+    {
+      "candidateId": "character-one",
+      "role": "character",
+      "voice": "en-us+m3",
+      "transcript": "I packed the blue compass, checked every latch, and left a bright chalk arrow beside the northern gate.",
+      "transcriptSha256": "ae8f772d1a02dc8e42f20808273aa463df9fef0b5eb1398988db88b31aae1b2c",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 175,
+        "pitch": 15,
+        "amplitude": 120
+      },
+      "invocation": [
+        "espeak-ng",
+        "--path=<external-espeak-data-parent>",
+        "-v",
+        "en-us+m3",
+        "-s",
+        "175",
+        "-p",
+        "15",
+        "-a",
+        "120",
+        "-w",
+        "<new-output>",
+        "<exact-transcript>"
+      ],
+      "repeatMethod": "two process-isolated, candidate-separated generation passes",
+      "file": "references/character-one/reference.wav",
+      "repeatFile": "references/character-one/reference-repeat.wav",
+      "sha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "repeatSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 243754,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 22050,
+          "byteRate": 44100,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 121859,
+          "durationSeconds": 5.526485260770975,
+          "bytes": 243762,
+          "dataOffset": 44,
+          "dataDeclaredSize": 243718,
+          "sha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc"
+        },
+        "objective": {
+          "peakDbfs": -0.05077694224596994,
+          "rmsDbfs": -21.183150437508544,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.8122743682310469,
+          "zeroCrossingsPerSecond": 2852.2649127270042,
+          "estimatedMedianPitchHz": 76.5625
+        }
+      }
+    },
+    {
+      "candidateId": "character-two",
+      "role": "character",
+      "voice": "en-us+f4",
+      "transcript": "Wait for the second bell; the river path is safer then, and our little lantern will stay hidden beneath my coat.",
+      "transcriptSha256": "6d3136c7bca3b4f8d09ec38ad81357424cb26c5138eacb6112c5431ba34f5bc8",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 185,
+        "pitch": 65,
+        "amplitude": 120
+      },
+      "invocation": [
+        "espeak-ng",
+        "--path=<external-espeak-data-parent>",
+        "-v",
+        "en-us+f4",
+        "-s",
+        "185",
+        "-p",
+        "65",
+        "-a",
+        "120",
+        "-w",
+        "<new-output>",
+        "<exact-transcript>"
+      ],
+      "repeatMethod": "two process-isolated, candidate-separated generation passes",
+      "file": "references/character-two/reference.wav",
+      "repeatFile": "references/character-two/reference-repeat.wav",
+      "sha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "repeatSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 260620,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 22050,
+          "byteRate": 44100,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 130292,
+          "durationSeconds": 5.908934240362812,
+          "bytes": 260628,
+          "dataOffset": 44,
+          "dataDeclaredSize": 260584,
+          "sha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5"
+        },
+        "objective": {
+          "peakDbfs": -1.4641081422353146,
+          "rmsDbfs": -17.32403773260279,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.9324324324324325,
+          "zeroCrossingsPerSecond": 3377.42800785927,
+          "estimatedMedianPitchHz": 210
+        }
+      }
+    }
+  ],
+  "voxcpm2Outputs": [
+    {
+      "sequence": 1,
+      "candidateId": "narrator",
+      "lineId": "line-01",
+      "repetition": 0,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "file": "outputs/narrator/line-01.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 1.4066965040000015,
+      "sha256": "61fd722dbc686684c988903131ca8fef761846bcfdb5813e709d8e47da3ec9e3",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 276516,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 138240,
+          "durationSeconds": 2.88,
+          "bytes": 276524,
+          "dataOffset": 44,
+          "dataDeclaredSize": 276480,
+          "sha256": "61fd722dbc686684c988903131ca8fef761846bcfdb5813e709d8e47da3ec9e3"
+        },
+        "objective": {
+          "peakDbfs": -0.47364311112047425,
+          "rmsDbfs": -18.586904341113076,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7847222222222222,
+          "zeroCrossingsPerSecond": 4658.680555555556,
+          "estimatedMedianPitchHz": 89.88764044943821
+        }
+      }
+    },
+    {
+      "sequence": 2,
+      "candidateId": "narrator",
+      "lineId": "line-02",
+      "repetition": 0,
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "file": "outputs/narrator/line-02.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 1.1129821869999996,
+      "sha256": "f65fa3d0588d8937e92aa07b640d33432b23d01734f38ef5bcd9cd483f292dbb",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 337956,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 168960,
+          "durationSeconds": 3.52,
+          "bytes": 337964,
+          "dataOffset": 44,
+          "dataDeclaredSize": 337920,
+          "sha256": "f65fa3d0588d8937e92aa07b640d33432b23d01734f38ef5bcd9cd483f292dbb"
+        },
+        "objective": {
+          "peakDbfs": -4.526588337835395,
+          "rmsDbfs": -25.60333839167274,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.8920454545454546,
+          "zeroCrossingsPerSecond": 5673.011363636364,
+          "estimatedMedianPitchHz": 102.56410256410257
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "candidateId": "narrator",
+      "lineId": "line-03",
+      "repetition": 0,
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "file": "outputs/narrator/line-03.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.8777148889999989,
+      "sha256": "463a6c50772d1ac543efc00938c2d3cd529eef7f98755304676a49bf96d07fae",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 291876,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 145920,
+          "durationSeconds": 3.04,
+          "bytes": 291884,
+          "dataOffset": 44,
+          "dataDeclaredSize": 291840,
+          "sha256": "463a6c50772d1ac543efc00938c2d3cd529eef7f98755304676a49bf96d07fae"
+        },
+        "objective": {
+          "peakDbfs": -0.06598796075374741,
+          "rmsDbfs": -16.20853762705392,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.8092105263157895,
+          "zeroCrossingsPerSecond": 3425.657894736842,
+          "estimatedMedianPitchHz": 97.5609756097561
+        }
+      }
+    },
+    {
+      "sequence": 4,
+      "candidateId": "narrator",
+      "lineId": "line-01",
+      "repetition": 1,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+      "file": "outputs/narrator/line-01-repeat.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.8135614000000005,
+      "sha256": "61fd722dbc686684c988903131ca8fef761846bcfdb5813e709d8e47da3ec9e3",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 276516,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 138240,
+          "durationSeconds": 2.88,
+          "bytes": 276524,
+          "dataOffset": 44,
+          "dataDeclaredSize": 276480,
+          "sha256": "61fd722dbc686684c988903131ca8fef761846bcfdb5813e709d8e47da3ec9e3"
+        },
+        "objective": {
+          "peakDbfs": -0.47364311112047425,
+          "rmsDbfs": -18.586904341113076,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7847222222222222,
+          "zeroCrossingsPerSecond": 4658.680555555556,
+          "estimatedMedianPitchHz": 89.88764044943821
+        }
+      }
+    },
+    {
+      "sequence": 5,
+      "candidateId": "character-one",
+      "lineId": "line-01",
+      "repetition": 0,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "file": "outputs/character-one/line-01.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.7567313240000003,
+      "sha256": "4c205d978653a9c82e0fde832f536852d4006c2992f0ad3937b27349e726ae6d",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 291876,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 145920,
+          "durationSeconds": 3.04,
+          "bytes": 291884,
+          "dataOffset": 44,
+          "dataDeclaredSize": 291840,
+          "sha256": "4c205d978653a9c82e0fde832f536852d4006c2992f0ad3937b27349e726ae6d"
+        },
+        "objective": {
+          "peakDbfs": -0.06411850550750499,
+          "rmsDbfs": -17.04521865009665,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7894736842105263,
+          "zeroCrossingsPerSecond": 4658.5526315789475,
+          "estimatedMedianPitchHz": 78.43137254901961
+        }
+      }
+    },
+    {
+      "sequence": 6,
+      "candidateId": "character-one",
+      "lineId": "line-02",
+      "repetition": 0,
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "file": "outputs/character-one/line-02.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.8228173369999986,
+      "sha256": "dabf99a7385f81e0328d800bb964b69a4c8f557fd4a3d6763f2b7813512d2ed7",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 337956,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 168960,
+          "durationSeconds": 3.52,
+          "bytes": 337964,
+          "dataOffset": 44,
+          "dataDeclaredSize": 337920,
+          "sha256": "dabf99a7385f81e0328d800bb964b69a4c8f557fd4a3d6763f2b7813512d2ed7"
+        },
+        "objective": {
+          "peakDbfs": -0.9219854755374282,
+          "rmsDbfs": -21.772909635515205,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7897727272727273,
+          "zeroCrossingsPerSecond": 4388.920454545455,
+          "estimatedMedianPitchHz": 86.95652173913044
+        }
+      }
+    },
+    {
+      "sequence": 7,
+      "candidateId": "character-one",
+      "lineId": "line-03",
+      "repetition": 0,
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "file": "outputs/character-one/line-03.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.789477472999999,
+      "sha256": "e0347c79fb6063a2a67ed67f408e69f99c2c8c94551776026991f83ac2d6b5da",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 307236,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 153600,
+          "durationSeconds": 3.2,
+          "bytes": 307244,
+          "dataOffset": 44,
+          "dataDeclaredSize": 307200,
+          "sha256": "e0347c79fb6063a2a67ed67f408e69f99c2c8c94551776026991f83ac2d6b5da"
+        },
+        "objective": {
+          "peakDbfs": -0.07266787313255675,
+          "rmsDbfs": -16.609617544041967,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7375,
+          "zeroCrossingsPerSecond": 2867.5,
+          "estimatedMedianPitchHz": 101.28205128205128
+        }
+      }
+    },
+    {
+      "sequence": 8,
+      "candidateId": "character-one",
+      "lineId": "line-01",
+      "repetition": 1,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+      "file": "outputs/character-one/line-01-repeat.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.8046627819999994,
+      "sha256": "4c205d978653a9c82e0fde832f536852d4006c2992f0ad3937b27349e726ae6d",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 291876,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 145920,
+          "durationSeconds": 3.04,
+          "bytes": 291884,
+          "dataOffset": 44,
+          "dataDeclaredSize": 291840,
+          "sha256": "4c205d978653a9c82e0fde832f536852d4006c2992f0ad3937b27349e726ae6d"
+        },
+        "objective": {
+          "peakDbfs": -0.06411850550750499,
+          "rmsDbfs": -17.04521865009665,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7894736842105263,
+          "zeroCrossingsPerSecond": 4658.5526315789475,
+          "estimatedMedianPitchHz": 78.43137254901961
+        }
+      }
+    },
+    {
+      "sequence": 9,
+      "candidateId": "character-two",
+      "lineId": "line-01",
+      "repetition": 0,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "file": "outputs/character-two/line-01.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.6882287360000009,
+      "sha256": "0d62fc67a4f8f05b7ae928403d210a59e1476a0e720dfc295b33fd9f367f68b6",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 245796,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 122880,
+          "durationSeconds": 2.56,
+          "bytes": 245804,
+          "dataOffset": 44,
+          "dataDeclaredSize": 245760,
+          "sha256": "0d62fc67a4f8f05b7ae928403d210a59e1476a0e720dfc295b33fd9f367f68b6"
+        },
+        "objective": {
+          "peakDbfs": -0.2651009412296126,
+          "rmsDbfs": -16.493760892815274,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.84375,
+          "zeroCrossingsPerSecond": 4306.640625,
+          "estimatedMedianPitchHz": 195.1219512195122
+        }
+      }
+    },
+    {
+      "sequence": 10,
+      "candidateId": "character-two",
+      "lineId": "line-02",
+      "repetition": 0,
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "file": "outputs/character-two/line-02.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.7714556530000009,
+      "sha256": "aa386035910901f088034bca9ff1758dcff50985b35dad644b83330d56a96026",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 291876,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 145920,
+          "durationSeconds": 3.04,
+          "bytes": 291884,
+          "dataOffset": 44,
+          "dataDeclaredSize": 291840,
+          "sha256": "aa386035910901f088034bca9ff1758dcff50985b35dad644b83330d56a96026"
+        },
+        "objective": {
+          "peakDbfs": -1.2172841018435168,
+          "rmsDbfs": -14.72211110695769,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.881578947368421,
+          "zeroCrossingsPerSecond": 5157.894736842105,
+          "estimatedMedianPitchHz": 205.12820512820514
+        }
+      }
+    },
+    {
+      "sequence": 11,
+      "candidateId": "character-two",
+      "lineId": "line-03",
+      "repetition": 0,
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "file": "outputs/character-two/line-03.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.7620654939999986,
+      "sha256": "5833e805fa359e53d97112965a3c962f6ea2d61f7ddb569d0b5d17dc489b5094",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 291876,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 145920,
+          "durationSeconds": 3.04,
+          "bytes": 291884,
+          "dataOffset": 44,
+          "dataDeclaredSize": 291840,
+          "sha256": "5833e805fa359e53d97112965a3c962f6ea2d61f7ddb569d0b5d17dc489b5094"
+        },
+        "objective": {
+          "peakDbfs": -0.4423476087277977,
+          "rmsDbfs": -15.184871160961514,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.7368421052631579,
+          "zeroCrossingsPerSecond": 4917.105263157895,
+          "estimatedMedianPitchHz": 222.22222222222223
+        }
+      }
+    },
+    {
+      "sequence": 12,
+      "candidateId": "character-two",
+      "lineId": "line-01",
+      "repetition": 1,
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101,
+      "parameters": {
+        "model": "voxcpm2",
+        "responseFormat": "wav",
+        "cfgValue": 2,
+        "temperature": 1,
+        "inferenceTimesteps": 10,
+        "maxSteps": 60
+      },
+      "referenceSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+      "file": "outputs/character-two/line-01-repeat.wav",
+      "status": 200,
+      "contentType": "audio/wav",
+      "elapsedSeconds": 0.6996683750000011,
+      "sha256": "0d62fc67a4f8f05b7ae928403d210a59e1476a0e720dfc295b33fd9f367f68b6",
+      "processIdentityPreserved": true,
+      "analysis": {
+        "audio": {
+          "container": "RIFF/WAVE",
+          "declaredRiffSize": 245796,
+          "encoding": "PCM",
+          "channels": 1,
+          "sampleRateHz": 48000,
+          "byteRate": 96000,
+          "blockAlign": 2,
+          "bitsPerSample": 16,
+          "frames": 122880,
+          "durationSeconds": 2.56,
+          "bytes": 245804,
+          "dataOffset": 44,
+          "dataDeclaredSize": 245760,
+          "sha256": "0d62fc67a4f8f05b7ae928403d210a59e1476a0e720dfc295b33fd9f367f68b6"
+        },
+        "objective": {
+          "peakDbfs": -0.2651009412296126,
+          "rmsDbfs": -16.493760892815274,
+          "clippedSampleFraction": 0,
+          "activeFrameFraction": 0.84375,
+          "zeroCrossingsPerSecond": 4306.640625,
+          "estimatedMedianPitchHz": 195.1219512195122
+        }
+      }
+    }
+  ],
+  "review": {
+    "objective": {
+      "checks": {
+        "referenceCandidateMatrix": true,
+        "referenceIdentity": true,
+        "referenceRepeatable": true,
+        "referenceHashesDistinct": true,
+        "referenceAudioHealthy": true,
+        "referencesDistinguishable": true,
+        "primaryMatrixExact": true,
+        "repeatMatrixExact": true,
+        "outputExactMatrix": true,
+        "outputIdentity": true,
+        "fileIdentitiesUnique": true,
+        "fixedReferenceReused": true,
+        "conditionedPrimaryHashesDistinct": true,
+        "outputAudioHealthy": true,
+        "voxcpmRepeatable": true,
+        "crossLinePitchStable": true
+      },
+      "gates": {
+        "minimumReferencePitchRatio": 1.12,
+        "maximumClippedSampleFraction": 0.01,
+        "minimumActiveFrameFraction": 0.15,
+        "minimumOutputSecondsPerWord": 0.12,
+        "maximumOutputSecondsPerWord": 1.5,
+        "maximumCrossLinePitchCoefficientOfVariation": 0.15
+      },
+      "pairwiseReferencePitchRatios": [
+        {
+          "candidates": [
+            "narrator",
+            "character-one"
+          ],
+          "ratio": 1.2307692307692306
+        },
+        {
+          "candidates": [
+            "narrator",
+            "character-two"
+          ],
+          "ratio": 2.2285714285714286
+        },
+        {
+          "candidates": [
+            "character-one",
+            "character-two"
+          ],
+          "ratio": 2.742857142857143
+        }
+      ],
+      "crossLineConsistency": [
+        {
+          "candidateId": "narrator",
+          "validLineCount": 3,
+          "referenceSha256": "3091ec3e6d28ff40a623eb65f12dc335eec6e8ddf3cf3cb7c8d0ce5a5fbb3a92",
+          "durationSeconds": [
+            2.88,
+            3.52,
+            3.04
+          ],
+          "pitchCoefficientOfVariation": 0.05392805680148586,
+          "rmsDbfsRange": [
+            -25.60333839167274,
+            -16.20853762705392
+          ]
+        },
+        {
+          "candidateId": "character-one",
+          "validLineCount": 3,
+          "referenceSha256": "6c116e87a6dce91b05fad5ba801c0ac807eca598c745e0603964896ff8223cbc",
+          "durationSeconds": [
+            3.04,
+            3.52,
+            3.2
+          ],
+          "pitchCoefficientOfVariation": 0.10606819214609096,
+          "rmsDbfsRange": [
+            -21.772909635515205,
+            -16.609617544041967
+          ]
+        },
+        {
+          "candidateId": "character-two",
+          "validLineCount": 3,
+          "referenceSha256": "c7026660c91b188e5c75625f2ee5eb9f81a7515b5c27bbae88740c9c0eee71b5",
+          "durationSeconds": [
+            2.56,
+            3.04,
+            3.04
+          ],
+          "pitchCoefficientOfVariation": 0.053925565191883046,
+          "rmsDbfsRange": [
+            -16.493760892815274,
+            -14.72211110695769
+          ]
+        }
+      ],
+      "intelligibilityProxy": {
+        "method": "valid PCM, active-speech fraction, clipping, and duration-per-word bounds",
+        "passed": true,
+        "limitation": "These objective bounds do not establish word accuracy; transcript-aligned listening review remains required."
+      },
+      "decision": {
+        "result": "GO for synthetic bootstrap technical feasibility",
+        "productionReadiness": "NOT ASSESSED; issue #7 remains NO-GO for production SpeechEngine/M2",
+        "listeningApproval": "PENDING manual review",
+        "requiredLocalEngine": "Pinned eSpeak NG 1.52.0 formant synthesis with MBROLA disabled"
+      }
+    },
+    "manualReady": {
+      "status": "pending",
+      "sha256": "b49af2cbe36150abb1ee062dfca598128e1b440a7d273f00f143c6cbd49d9caa",
+      "reviewHtmlSha256": "b51c0f81a2a910053fd5602161e9c90ec686a853d114e5f28fd061a53b6c32a4",
+      "reviewInstructionsSha256": "80cf83e8d323dceb58aaf381b7156f0b37822abcf3bc2de5858db4922813181d",
+      "audioAndTranscriptEntries": 9,
+      "closureGate": "REQUIRED human listening; not completed",
+      "relativeReviewForm": "manual-review.json",
+      "relativeReviewPage": "review.html",
+      "relativeAudioRoot": "outputs/",
+      "playback": "cd <external-run-root> && python3 -m http.server 8098 --bind 127.0.0.1; open http://localhost:8098/review.html",
+      "absolutePath": "omitted from committed evidence; printed by the local probe"
+    }
+  },
+  "decision": {
+    "result": "GO for synthetic bootstrap technical feasibility",
+    "productionReadiness": "NOT ASSESSED; issue #7 remains NO-GO for production SpeechEngine/M2",
+    "listeningApproval": "PENDING manual review",
+    "requiredLocalEngine": "Pinned eSpeak NG 1.52.0 formant synthesis with MBROLA disabled"
+  },
+  "limitations": [
+    "Objective speech-activity, clipping, duration, pitch, and byte-repeatability checks do not establish word-level intelligibility.",
+    "Transcript-aligned manual listening approval remains pending.",
+    "The experiment is serialized and non-streaming only because issue #7 remains NO-GO for production SpeechEngine/M2.",
+    "Synthetic formant references demonstrate technical bootstrapping, not production voice quality."
+  ],
+  "redaction": {
+    "absolutePaths": "omitted",
+    "processIds": "omitted",
+    "logs": "external only",
+    "audio": "external only",
+    "privateOrCopyrightedText": "not used",
+    "humanReferenceAudio": "not used"
+  }
+}

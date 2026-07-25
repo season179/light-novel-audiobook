@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "issue": 8,
+  "espeakNg": {
+    "repository": "https://github.com/espeak-ng/espeak-ng.git",
+    "tag": "1.52.0",
+    "revision": "4870adfa25b1a32b4361592f1be8a40337c58d6c",
+    "sourceTree": "45e4d63726666fbde7616168e8872762470c46d1",
+    "license": "GPL-3.0-or-later",
+    "licenseUrl": "https://raw.githubusercontent.com/espeak-ng/espeak-ng/4870adfa25b1a32b4361592f1be8a40337c58d6c/COPYING",
+    "licenseSha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "readmeSha256": "765e894f83a47e2d003bd2256e86d1ae412e6e0078c3092d66ece293b051e278",
+    "voiceDocumentationSha256": "7c599eeda2771a90e4e33fbeeb8f54bfbb5d41dd9fe91226bc3ce2066e10973b",
+    "build": {
+      "type": "Release",
+      "sharedLibraries": false,
+      "mbrola": false,
+      "libsonic": false,
+      "libpcaudio": false,
+      "klatt": true,
+      "speechPlayer": false,
+      "async": false,
+      "testing": false,
+      "relocatableInstall": false
+    },
+    "voiceSources": [
+      {
+        "path": "espeak-ng-data/lang/gmw/en-US",
+        "sha256": "41534c2a22df5dd4f1052ff9e1a33a3ea7bff5a26b5c02bdad5ba8ddb7524704"
+      },
+      {
+        "path": "espeak-ng-data/voices/!v/m3",
+        "sha256": "7a4ac872387439814ddd65f5e1ff73017122975911df6b5dc62c5709e6fdb611"
+      },
+      {
+        "path": "espeak-ng-data/voices/!v/f4",
+        "sha256": "ff9e2907a818920e3b976232c90eabaf270fff0de0b8a479af9a3633e9b7921f"
+      }
+    ]
+  },
+  "voxcpm2": {
+    "lockPath": "config/voxcpm2-spike.lock.json",
+    "lockSha256": "6b431f34008736a1f808037946915bb0d00bc8d38a790805c6bcd4b607f08650",
+    "issue7EvidencePath": "docs/evidence/issue-7-voxcpm2-wsl2.json",
+    "issue7EvidenceSha256": "119529018e96dc247c8cc6ffb6a3cf19f52be45654d8bb51fd519f9e77e2df17",
+    "requiredIssue7GeneratedFromCommit": "de1b76e3e92ce9146936701bd40a915e0860e016",
+    "requiredIssue7Decision": "NO-GO for production SpeechEngine/M2",
+    "mode": "serialized-non-streaming-experimental-only",
+    "endpointPath": "/v1/audio/speech",
+    "approvedBuild": {
+      "sourceIdentity": "ac1659bee8aafe41da3c016c4b600a0ab4c4bb4f37cd26115ca6738efc1c65ca",
+      "runId": "build-ac1659bee8aafe41-20260725T015406.080352772Z-8dd107d21d20",
+      "manifestSha256": "1a2d4eb0394312fdf1c8f00bf09ad5a093d013873db474c8b1af74ee5f1f32f6",
+      "runtimeRevision": "74699a53df6ca0f4947ff37066f851532c20b12d",
+      "runtimeTree": "bde392d3a4d92035a67988f57095665c4f5f8c86",
+      "cmakeCacheSha256": "bee4e5d43d69247436578e1bae0b5c13a2d83b803844e28db39035eb7beebfd3",
+      "buildMetadataSha256": "0187a020250b74efcd90326f7632badb64e64ba7074389e1f0b486609147371e",
+      "serverBinarySha256": "89e89900c8fb8a03438218c1fc5130c719b82738bf1cc91b3039e4684b28e6ac"
+    }
+  },
+  "candidates": [
+    {
+      "id": "narrator",
+      "role": "narrator",
+      "voice": "en-us",
+      "transcript": "At sunrise, the brass observatory opened its quiet shutters, while three clockwork swallows traced circles above the garden.",
+      "transcriptSha256": "a3e84c0fe1ccb982b0a83fb27610e05add6894bb9f8b2692b6223a83628af78e",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 155,
+        "pitch": 45,
+        "amplitude": 120
+      }
+    },
+    {
+      "id": "character-one",
+      "role": "character",
+      "voice": "en-us+m3",
+      "transcript": "I packed the blue compass, checked every latch, and left a bright chalk arrow beside the northern gate.",
+      "transcriptSha256": "ae8f772d1a02dc8e42f20808273aa463df9fef0b5eb1398988db88b31aae1b2c",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 175,
+        "pitch": 15,
+        "amplitude": 120
+      }
+    },
+    {
+      "id": "character-two",
+      "role": "character",
+      "voice": "en-us+f4",
+      "transcript": "Wait for the second bell; the river path is safer then, and our little lantern will stay hidden beneath my coat.",
+      "transcriptSha256": "6d3136c7bca3b4f8d09ec38ad81357424cb26c5138eacb6112c5431ba34f5bc8",
+      "seed": null,
+      "parameters": {
+        "rateWordsPerMinute": 185,
+        "pitch": 65,
+        "amplitude": 120
+      }
+    }
+  ],
+  "lines": [
+    {
+      "id": "line-01",
+      "text": "The silver map rests on the cedar table.",
+      "textSha256": "2725f2b54b7337ad9da076d0ed809f9c8619d090310e42b0bb8cfc6f72a17277",
+      "seed": 8101
+    },
+    {
+      "id": "line-02",
+      "text": "Please meet me beside the old fountain after sunset.",
+      "textSha256": "c5ddb6eefb485c1186bb243487b071509d9ebd8e6d71e1a7b8beb3fedda6a477",
+      "seed": 8102
+    },
+    {
+      "id": "line-03",
+      "text": "Tomorrow, we will carry the small telescope home.",
+      "textSha256": "305cd01fc2203e32cc806202d4853dd7469eb8e21295fc6706059f8ee63ccebb",
+      "seed": 8103
+    }
+  ],
+  "generation": {
+    "model": "voxcpm2",
+    "responseFormat": "wav",
+    "cfgValue": 2,
+    "temperature": 1,
+    "inferenceTimesteps": 10,
+    "maxSteps": 60,
+    "repeatLineId": "line-01"
+  },
+  "reviewGates": {
+    "minimumReferencePitchRatio": 1.12,
+    "maximumClippedSampleFraction": 0.01,
+    "minimumActiveFrameFraction": 0.15,
+    "minimumOutputSecondsPerWord": 0.12,
+    "maximumOutputSecondsPerWord": 1.5,
+    "maximumCrossLinePitchCoefficientOfVariation": 0.15
+  }
+}
