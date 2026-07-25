@@ -90,7 +90,6 @@ function publicMessage(context: ErrorContext, fallback: string): string {
 }
 
 export function classifyError(error: unknown, context: ErrorContext = {}): SpikeError {
-  if (error instanceof SpikeError) return error
   if (context.timedOut) {
     return new SpikeError('timeout', publicMessage(context, 'timed out'), {
       cause: error,
@@ -100,6 +99,7 @@ export function classifyError(error: unknown, context: ErrorContext = {}): Spike
   if (context.abortedByCaller) {
     return new SpikeError('cancelled', publicMessage(context, 'was cancelled'), { cause: error })
   }
+  if (error instanceof SpikeError) return error
 
   const facts = collectErrorFacts(error)
   const text = [...facts.names, ...facts.codes, ...facts.messages].join(' ').toLowerCase()

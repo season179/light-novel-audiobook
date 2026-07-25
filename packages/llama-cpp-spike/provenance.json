@@ -1,22 +1,51 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "decision": "go",
-  "decisionScope": "TanStack AI can be used for a future llama.cpp DirectorModel adapter, subject to production-model acceptance testing.",
+  "decisionScope": "TanStack AI can be used from a server-only boundary for a future llama.cpp DirectorModel adapter, subject to production-model acceptance testing.",
   "reviewedAt": "2026-07-25",
   "tanstackAi": {
     "upstream": "https://github.com/TanStack/ai",
     "apiReviewRevision": "cc88874ecb0639daa1f8a8c32be5dcc9b2749371",
-    "core": {
-      "package": "@tanstack/ai",
-      "version": "0.42.0",
-      "tarball": "https://registry.npmjs.org/@tanstack/ai/-/ai-0.42.0.tgz",
-      "integrity": "sha512-OyUA1tl6Oj93jjdyDofMb53tf3GhHgLWJ376h/5qjdwtUG1YOr6134khd1Aq2lfIZbmj2HR+y3XqD9UMXSjk1A=="
+    "license": {
+      "spdx": "MIT",
+      "url": "https://raw.githubusercontent.com/TanStack/ai/cc88874ecb0639daa1f8a8c32be5dcc9b2749371/LICENSE",
+      "sha256": "9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f"
     },
-    "openAiAdapter": {
-      "package": "@tanstack/ai-openai",
-      "version": "0.17.1",
-      "tarball": "https://registry.npmjs.org/@tanstack/ai-openai/-/ai-openai-0.17.1.tgz",
-      "integrity": "sha512-gXv/D2CKBVjJxdJOawJ00wFCwKDuO3Br1y/nfgOqNKsH75cq+wVc9nBsxTEPZIK5N1zb+TDLQqUy1OfMvaQCpg==",
+    "packages": [
+      {
+        "name": "@tanstack/ai",
+        "version": "0.42.0",
+        "tarball": "https://registry.npmjs.org/@tanstack/ai/-/ai-0.42.0.tgz",
+        "integrity": "sha512-OyUA1tl6Oj93jjdyDofMb53tf3GhHgLWJ376h/5qjdwtUG1YOr6134khd1Aq2lfIZbmj2HR+y3XqD9UMXSjk1A==",
+        "license": "MIT",
+        "licenseFileSha256": "9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f"
+      },
+      {
+        "name": "@tanstack/ai-openai",
+        "version": "0.17.1",
+        "tarball": "https://registry.npmjs.org/@tanstack/ai-openai/-/ai-openai-0.17.1.tgz",
+        "integrity": "sha512-gXv/D2CKBVjJxdJOawJ00wFCwKDuO3Br1y/nfgOqNKsH75cq+wVc9nBsxTEPZIK5N1zb+TDLQqUy1OfMvaQCpg==",
+        "license": "MIT",
+        "licenseFileSha256": "9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f"
+      },
+      {
+        "name": "@tanstack/ai-utils",
+        "version": "0.3.1",
+        "tarball": "https://registry.npmjs.org/@tanstack/ai-utils/-/ai-utils-0.3.1.tgz",
+        "integrity": "sha512-fgbjd5DohL3k5rTWr/KInauLVYMiHVm0cnmTsNrzL3cr4wWhEld5vmFSrjiwUWACAuONjZa+uBXuS+ZSO8fwDQ==",
+        "license": "MIT",
+        "licenseFileSha256": "9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f"
+      },
+      {
+        "name": "@tanstack/openai-base",
+        "version": "0.9.9",
+        "tarball": "https://registry.npmjs.org/@tanstack/openai-base/-/openai-base-0.9.9.tgz",
+        "integrity": "sha512-7vphMGJEGQCxaDLnxqNU6uxSv1NN5FFBnn0P/dfd28uh7kIcjbP1fF+rpqvcHNvMCmiATw9SFAlaa6bWrNBTgQ==",
+        "license": "MIT",
+        "licenseFileSha256": "9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f"
+      }
+    ],
+    "adapter": {
       "entrypoint": "@tanstack/ai-openai/compatible",
       "api": "chat-completions"
     },
@@ -34,7 +63,13 @@
     "repository": "https://github.com/ggml-org/llama.cpp.git",
     "commit": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
     "commitUrl": "https://github.com/ggml-org/llama.cpp/commit/555881ebc8b0fc0402b30e09258a32a7bfd13c52",
+    "license": {
+      "spdx": "MIT",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/555881ebc8b0fc0402b30e09258a32a7bfd13c52/LICENSE",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
     "build": {
+      "cleanRebuild": true,
       "cmake": [
         "CMAKE_BUILD_TYPE=Release",
         "GGML_CUDA=OFF",
@@ -44,7 +79,7 @@
         "LLAMA_BUILD_SERVER=ON"
       ],
       "target": "llama-server",
-      "locationPolicy": "WSL ext4 outside Git"
+      "locationPolicy": "WSL ext4 outside and non-overlapping with Git"
     },
     "runtime": {
       "hostDefault": "127.0.0.1",
@@ -55,28 +90,60 @@
       "gpuLayers": 0,
       "slotsEndpoint": true,
       "metricsEndpoint": true,
-      "webUi": false
+      "webUi": false,
+      "randomApiKeyFile": true,
+      "corsOrigins": "localhost",
+      "corsCredentials": false,
+      "logsDisabled": true
+    },
+    "corsSecurityBoundary": {
+      "upstreamLimitation": "The upstream default wildcard origin with credentials reflects an arbitrary Origin, and OPTIONS bypasses API-key validation.",
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/blob/555881ebc8b0fc0402b30e09258a32a7bfd13c52/tools/server/server-http.cpp#L279-L305",
+      "harnessMitigation": "Use --cors-origins localhost, --no-cors-credentials, a random per-run API-key file, and a server-side-only client.",
+      "secretBoundary": "The API key must never enter browser code, committed evidence, request captures, or logs. CORS is not authentication."
     },
     "verifiedEndpoints": ["/health", "/v1/models", "/props", "/slots", "/v1/chat/completions"]
   },
   "model": {
     "purpose": "Small public compatibility fixture; not the production director model",
-    "repository": "bartowski/SmolLM2-135M-Instruct-GGUF",
-    "repositoryUrl": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF",
-    "revision": "09816acd5d99df7be770d85ea30822623dab342c",
-    "file": "SmolLM2-135M-Instruct-Q4_K_M.gguf",
-    "downloadUrl": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/09816acd5d99df7be770d85ea30822623dab342c/SmolLM2-135M-Instruct-Q4_K_M.gguf?download=true",
-    "sha256": "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
-    "sizeBytes": 105454432,
-    "quantization": "Q4_K_M",
-    "license": "Apache-2.0",
-    "baseModel": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "quantization": {
+      "repository": "bartowski/SmolLM2-135M-Instruct-GGUF",
+      "revision": "09816acd5d99df7be770d85ea30822623dab342c",
+      "cardUrl": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/blob/09816acd5d99df7be770d85ea30822623dab342c/README.md",
+      "cardSha256": "09b1f05942d11f5c47aac9789dde6fa8e431cdd541028532a7fb6f1c0e63d939",
+      "declaredLicense": "Apache-2.0",
+      "file": "SmolLM2-135M-Instruct-Q4_K_M.gguf",
+      "downloadUrl": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/09816acd5d99df7be770d85ea30822623dab342c/SmolLM2-135M-Instruct-Q4_K_M.gguf?download=true",
+      "sha256": "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
+      "sizeBytes": 105454432,
+      "format": "Q4_K_M"
+    },
+    "instructModel": {
+      "repository": "HuggingFaceTB/SmolLM2-135M-Instruct",
+      "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+      "cardUrl": "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/blob/12fd25f77366fa6b3b4b768ec3050bf629380bac/README.md",
+      "cardSha256": "4f97533ad95b1b2fea15fbc075c01b94578ebdd7c8138888fa43fa3abd530dc4",
+      "declaredLicense": "Apache-2.0",
+      "baseModel": "HuggingFaceTB/SmolLM2-135M"
+    },
+    "baseModel": {
+      "repository": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "cardUrl": "https://huggingface.co/HuggingFaceTB/SmolLM2-135M/blob/93efa2f097d58c2a74874c7e644dbc9b0cee75a2/README.md",
+      "cardSha256": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "declaredLicense": "Apache-2.0"
+    },
     "storedOutsideGit": true
+  },
+  "evidenceBinding": {
+    "canonicalSourceSet": "Git ls-tree entries for the complete spike package (excluding generated evidence), root package/lock/workspace/compiler/test/formatter files, and CI workflow",
+    "binaryHashRecordedAtHostRun": true,
+    "implementationCommitAndTreeRecorded": true
   },
   "limitations": [
     "This spike does not test audiobook text, business rules, or source fidelity.",
     "This small CPU model does not predict Gemma 4 quality, memory use, or throughput.",
     "The harness is not the production DirectorModel adapter.",
-    "The measured host used a loopback port override because an unrelated managed service already owned the production default port; the application default remains 127.0.0.1:8080."
+    "The measured host uses an explicit loopback port override when the unrelated managed service owns the production default; the application default remains 127.0.0.1:8080."
   ]
 }

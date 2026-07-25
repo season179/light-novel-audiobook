@@ -12,6 +12,15 @@ export {
 } from './config'
 export { classifyError, SpikeError, type SpikeErrorCode } from './errors'
 export {
+  type ImplementationIdentity,
+  readImplementationIdentity,
+} from './implementation-identity'
+export {
+  LoopbackRecordingFetch,
+  type LoopbackRecordingFetchOptions,
+  type SanitizedRequestCapture,
+} from './recording-fetch'
+export {
   type SyntheticStructuredOutput,
   SyntheticStructuredOutputSchema,
 } from './schema'

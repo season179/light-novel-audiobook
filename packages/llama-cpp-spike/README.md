@@ -4,15 +4,15 @@ Issue: [#5](https://github.com/season179/light-novel-audiobook/issues/5)
 
 This private package is a disposable compatibility harness. It proves the boundary needed by a
 future `DirectorModel`; it is **not** that production adapter and contains no audiobook rules,
-book text, prompts, weights, or generated media.
+book text, private prompts, weights, or generated media.
 
 ## Decision
 
 **GO**, with a narrow scope: TanStack AI 0.42.0 and its OpenAI-compatible adapter 0.17.1 preserve
-the llama.cpp request fields, JSON Schema, model identity, streaming behavior, and cancellation
-needed to build a production adapter later. The selected 105 MB public model is only a protocol
-fixture. Gemma 4 quality, memory, context, and throughput still require their separate acceptance
-test from `docs/PLAN.md`.
+the llama.cpp request fields, JSON Schema, model identity, streaming behavior, authentication,
+and cancellation needed to build a production server-side adapter later. The selected 105 MB
+public model is only a protocol fixture. Gemma 4 quality, memory, context, and throughput still
+require their separate acceptance test from `docs/PLAN.md`.
 
 ## Verified current API
 
@@ -28,8 +28,24 @@ The pinned current packages and upstream sources were independently checked befo
 
 The adapter sends streaming Chat Completions with `response_format.type = "json_schema"`, strict
 schema content, `stream_options.include_usage`, and the requested model. Exact artifacts,
-revisions, integrity values, build flags, model license, and SHA-256 are in
-[`provenance.json`](provenance.json).
+revisions, package integrity values, MIT license URLs/hashes, model license chain, build flags,
+and model SHA-256 are in [`provenance.json`](provenance.json).
+
+## Security boundary
+
+`LlamaCppSpikeClient` requires an API key and is server-side only. The real smoke generates 32
+random bytes for every run, writes them to an external mode-`0600` file, passes only that filename
+to llama.cpp, disables llama.cpp logging, redacts Authorization at the recording boundary, and
+removes the key file after the owned child exits. The key is never passed in argv/environment,
+committed, printed, or retained in evidence.
+
+CORS is not authentication. At the pinned llama.cpp revision, the default wildcard origin plus
+credentials reflects an arbitrary browser `Origin`; additionally, `OPTIONS` intentionally skips
+API-key validation. The harness therefore uses `--cors-origins localhost` and
+`--no-cors-credentials`, but this does not make the key browser-safe. The key must remain behind a
+server-side application boundary. The real probe sends repeated attacker-origin, no-key OPTIONS
+and inference POST requests, samples `/slots` while they run, requires all POSTs to return 401,
+requires no attacker CORS permission, and proves no inference slot becomes busy.
 
 ## Portable checks
 
@@ -40,23 +56,27 @@ export PATH="$HOME/.local/share/light-novel-audiobook/toolchain/current/bin:$PAT
 pnpm --filter @light-novel-audiobook/llama-cpp-spike check
 ```
 
-The network-free fixture server binds to an ephemeral `127.0.0.1` port and captures what the
-llama.cpp-compatible endpoint actually receives. Tests cover:
+The network-free fixture server binds to an ephemeral `127.0.0.1` port. A transparent recording
+`fetch` boundary clones the body for hashing/sanitized inspection and forwards the same `Request`
+object. Tests compare its body SHA-256 with the bytes received by the fixture. They cover:
 
-- exact model/messages/sampling/schema/stream request shape;
+- exact model/messages/temperature/seed/max-token/schema/stream request shape;
+- Authorization presence with the value redacted from captures;
 - valid structured output and independent Zod validation;
 - malformed JSON and schema-invalid JSON;
 - HTTP, model, stream, connection, timeout, and caller-cancellation failures;
 - health, model identity, `/props`, and slot capability discovery;
-- cancellation reaching the server, queued/active slot release, and successful reuse;
-- rejection of `0.0.0.0`, LAN hosts, `localhost`, TLS, credentials, and URL paths.
+- cancellation and timeout reaching the server, queued/active slot release, and successful reuse;
+- a deadline expiring while queued classifying as `timeout`, not `cancelled`;
+- rejection of `0.0.0.0`, LAN hosts, `localhost`, TLS, credentials, and URL paths;
+- recomputation of committed evidence's canonical Git source-set identity.
 
 Stable public error codes are:
 
 | Code | Meaning | Retry default |
 | --- | --- | --- |
 | `cancelled` | caller aborted | no |
-| `timeout` | bounded client timeout elapsed | yes |
+| `timeout` | bounded deadline elapsed, including while queued | yes |
 | `unavailable` | connection/DNS failure | yes |
 | `http` | non-model HTTP/API failure | 429/5xx only |
 | `model` | model identity/context/model rejection | no |
@@ -70,9 +90,12 @@ when upstream provides them. Raw responses are never written by the package.
 
 ## Real host run
 
-The setup script refuses non-ext4 storage, checks out an exact standard llama.cpp commit, builds
-`llama-server` without CUDA, downloads the pinned Apache-2.0 GGUF, and verifies its SHA-256. All
-source, binaries, weights, metadata, and raw runtime logs stay under
+Before any mutation, the setup script canonicalizes the proposed external root, verifies its
+nearest existing ancestor is ext4, rejects overlap with the Git worktree, and rejects runtime
+symlinks. It then recreates a clean exact standard llama.cpp checkout and build, verifies the
+pinned Apache-2.0 model and complete model-card chain, and writes an external build manifest with
+the binary SHA-256. Interrupted download/build temporary files are removed. All source, binaries,
+weights, metadata, and license evidence stay under
 `${XDG_CACHE_HOME:-$HOME/.cache}/light-novel-audiobook/issue-5`, outside Git and isolated from
 llama.cpp-omni.
 
@@ -89,24 +112,31 @@ LLAMA_CPP_SPIKE_PORT=18080 \
   pnpm --filter @light-novel-audiobook/llama-cpp-spike host:smoke
 ```
 
-This measured worktree used that override because an unrelated, user-managed loopback
-`llama-server` already owned and automatically reclaimed port 8080. The committed application
-and harness default remains `127.0.0.1:8080`; the evidence records the override openly.
+This measured worktree uses that explicit override because an unrelated, user-managed loopback
+`llama-server` already owns and automatically reclaims port 8080. The committed application and
+harness default remains `127.0.0.1:8080`; evidence records port 18080 openly.
 
 The real smoke:
 
-1. verifies source/model pins and ext4 placement;
-2. refuses an occupied configured port;
-3. starts only the pinned process on explicit `127.0.0.1`;
-4. checks the real listener using `ss` and rejects any non-loopback shape;
-5. probes health, models, properties, and slots;
-6. sends schema-constrained structured output through TanStack AI;
-7. observes a cancellation request in a real llama.cpp slot, aborts it, and proves both the
-   server slot and client semaphore are released;
-8. proves reuse with another successful request;
-9. stops only its own child in `finally`, escalating to `SIGKILL` only if that same child misses
-   the grace period;
+1. requires a clean Git implementation commit and clean exact external checkout/build;
+2. verifies ext4, source/model/build pins, binary hash, and a loopback-only listener;
+3. starts llama.cpp with a random key file, restricted CORS, no credentials, and logging disabled;
+4. proves attacker-origin/no-key OPTIONS and POST traffic cannot infer or occupy a slot;
+5. probes health, models, properties, and slots with the server-side client;
+6. records and forwards the exact real structured-request bytes, retaining only body/schema hashes,
+   sanitized asserted fields, redacted Authorization metadata, and backend status;
+7. proves real cancellation and a real deadline both abort/release llama.cpp and client slots;
+8. proves a follow-up structured request succeeds after each terminal path;
+9. handles already-emitted, exit-code, and signal-code child exits without hanging, closing all
+   owned process/socket/file resources and deleting the key;
 10. proves the configured port is free before atomically replacing sanitized evidence.
 
-Only [`evidence/real-host-run.json`](evidence/real-host-run.json) is committed. The external raw
-log can help local debugging but must never be added to Git.
+## Evidence commit protocol
+
+Evidence is deliberately a second commit. First commit all implementation/provenance/lockfile/CI
+changes. Run the host smoke from that clean commit. It records that implementation commit and full
+tree, the binary hash, and a canonical SHA-256 over Git `ls-tree` entries for the complete package
+(excluding generated evidence) plus root lock/workspace/compiler/test/formatter/package and CI
+files. Then commit only `evidence/real-host-run.json`. CI fetches history, recomputes both the
+recorded implementation source set and the current source set, and fails if implementation changed
+without regenerated evidence.

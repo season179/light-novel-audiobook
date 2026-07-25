@@ -3,10 +3,13 @@ import {
   DEFAULT_BRAIN_ENDPOINT,
   LlamaCppSpikeClient,
   LoopbackEndpoint,
+  LoopbackRecordingFetch,
   SpikeError,
   type SpikeErrorCode,
 } from '../src'
 import { LlamaFixtureServer } from './llama-fixture-server'
+
+const FIXTURE_API_KEY = 'fixture-server-side-key-00000001'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -34,20 +37,32 @@ describe('LoopbackEndpoint', () => {
     expect(() => new LoopbackEndpoint('http://192.168.1.2:8080')).toThrow(/loopback/)
     expect(() => new LoopbackEndpoint('https://127.0.0.1:8080')).toThrow(/loopback/)
     expect(() => new LoopbackEndpoint('http://localhost:8080')).toThrow(/loopback/)
+    expect(() => new LlamaCppSpikeClient({ model: 'fixture', apiKey: 'short' })).toThrow(
+      /server-side/,
+    )
   })
 })
 
 describe('LlamaCppSpikeClient', () => {
   let fixture: LlamaFixtureServer
   let client: LlamaCppSpikeClient
+  let recordingFetch: LoopbackRecordingFetch
 
   beforeEach(async () => {
     fixture = new LlamaFixtureServer()
     await fixture.start()
+    recordingFetch = new LoopbackRecordingFetch({
+      inspectBody: (body) => {
+        const parsed = JSON.parse(Buffer.from(body).toString('utf8')) as Record<string, unknown>
+        return { model: parsed.model }
+      },
+    })
     client = new LlamaCppSpikeClient({
       endpoint: fixture.origin,
       model: 'fixture-smollm',
+      apiKey: FIXTURE_API_KEY,
       maxConcurrency: 1,
+      fetch: recordingFetch.fetch,
     })
   })
 
@@ -102,6 +117,17 @@ describe('LlamaCppSpikeClient', () => {
         },
       },
     })
+    const boundaryCapture = recordingFetch.captures.at(-1)
+    expect(boundaryCapture).toMatchObject({
+      method: 'POST',
+      path: '/v1/chat/completions',
+      authorization: { present: true, scheme: 'Bearer', redacted: true },
+      assertedFields: { model: 'fixture-smollm' },
+      backendStatus: 200,
+    })
+    expect(boundaryCapture?.bodySha256).toBe(fixture.requests.at(-1)?.rawBodySha256)
+    expect(boundaryCapture?.forwardedBodySha256).toBe(boundaryCapture?.bodySha256)
+    expect(fixture.requests.at(-1)?.headers.authorization).toBe(`Bearer ${FIXTURE_API_KEY}`)
     expect(client.slotSnapshot()).toEqual({ capacity: 1, active: 0, queued: 0 })
   })
 
@@ -162,12 +188,30 @@ describe('LlamaCppSpikeClient', () => {
     expect(client.slotSnapshot()).toEqual({ capacity: 1, active: 0, queued: 0 })
   })
 
+  it('classifies a deadline that expires while queued as timeout and releases the queue', async () => {
+    fixture.setMode('delay')
+    const activeController = new AbortController()
+    const active = client.runCancellationProbe(activeController.signal, 2_000)
+    await waitFor(() => fixture.activeRequests === 1)
+
+    await expectCode(client.generateStructured({ timeoutMs: 30 }), 'timeout')
+    expect(client.slotSnapshot()).toEqual({ capacity: 1, active: 1, queued: 0 })
+    activeController.abort()
+    await expectCode(active, 'cancelled')
+    await waitFor(() => fixture.activeRequests === 0)
+
+    fixture.setMode('success')
+    await expect(client.generateStructured()).resolves.toMatchObject({ verdict: 'pass' })
+    expect(client.slotSnapshot()).toEqual({ capacity: 1, active: 0, queued: 0 })
+  })
+
   it('classifies connection failures as unavailable', async () => {
     const unusedOrigin = fixture.origin
     await fixture.stop()
     const unavailableClient = new LlamaCppSpikeClient({
       endpoint: unusedOrigin,
       model: 'fixture-smollm',
+      apiKey: FIXTURE_API_KEY,
     })
     await expectCode(unavailableClient.generateStructured({ timeoutMs: 500 }), 'unavailable')
   })

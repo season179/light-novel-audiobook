@@ -14,6 +14,8 @@ import { SlotPool, type SlotPoolSnapshot } from './slot-pool'
 export interface LlamaCppSpikeClientOptions {
   readonly endpoint?: string
   readonly model: string
+  /** Server-side credential. Never expose this client or value to browser code. */
+  readonly apiKey: string
   readonly maxConcurrency?: number
   readonly fetch?: typeof globalThis.fetch
 }
@@ -41,6 +43,7 @@ export interface LlamaCppCapabilities {
 export class LlamaCppSpikeClient {
   readonly endpoint: LoopbackEndpoint
   readonly model: string
+  private readonly apiKey: string
   private readonly fetchImplementation: typeof globalThis.fetch
   private readonly slots: SlotPool
 
@@ -49,6 +52,12 @@ export class LlamaCppSpikeClient {
     if (options.model.trim() === '')
       throw new Error('A non-empty llama.cpp model identity is required')
     this.model = options.model
+    if (options.apiKey.trim().length < 16) {
+      throw new Error(
+        'A random server-side llama.cpp API key of at least 16 characters is required',
+      )
+    }
+    this.apiKey = options.apiKey
     this.fetchImplementation = options.fetch ?? globalThis.fetch
     this.slots = new SlotPool(options.maxConcurrency ?? 1)
   }
@@ -122,7 +131,7 @@ export class LlamaCppSpikeClient {
         const adapter = openaiCompatibleText(this.model, {
           name: 'llama.cpp',
           baseURL: this.endpoint.openAiBaseUrl,
-          apiKey: 'local-loopback-no-secret',
+          apiKey: this.apiKey,
           maxRetries: 0,
           fetch: this.fetchImplementation,
         })
@@ -211,7 +220,7 @@ export class LlamaCppSpikeClient {
         const adapter = openaiCompatibleText(this.model, {
           name: 'llama.cpp',
           baseURL: this.endpoint.openAiBaseUrl,
-          apiKey: 'local-loopback-no-secret',
+          apiKey: this.apiKey,
           maxRetries: 0,
           fetch: this.fetchImplementation,
         })
@@ -253,7 +262,10 @@ export class LlamaCppSpikeClient {
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const response = await this.fetchImplementation(`${this.endpoint.origin}${path}`, {
-        headers: { accept: 'application/json' },
+        headers: {
+          accept: 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
+        },
         signal: controller.signal,
       })
       if (!response.ok) {

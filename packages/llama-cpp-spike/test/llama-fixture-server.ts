@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 export type FixtureMode =
@@ -12,14 +13,22 @@ export type FixtureMode =
 export interface CapturedRequest {
   readonly headers: Record<string, string | Array<string> | undefined>
   readonly body: Record<string, unknown>
+  readonly rawBodySha256: string
 }
 
 const FIXTURE_MODEL = 'fixture-smollm'
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(request: IncomingMessage): Promise<{
+  body: Record<string, unknown>
+  rawBodySha256: string
+}> {
   const chunks: Array<Buffer> = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+  const rawBody = Buffer.concat(chunks)
+  return {
+    body: JSON.parse(rawBody.toString('utf8')) as Record<string, unknown>,
+    rawBodySha256: createHash('sha256').update(rawBody).digest('hex'),
+  }
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
@@ -145,8 +154,8 @@ export class LlamaFixtureServer {
     response.once('finish', finish)
 
     try {
-      const body = await readJson(request)
-      this.requests.push({ headers: { ...request.headers }, body })
+      const { body, rawBodySha256 } = await readJson(request)
+      this.requests.push({ headers: { ...request.headers }, body, rawBodySha256 })
       switch (this.mode) {
         case 'success':
           sendSse(response, JSON.stringify({ verdict: 'pass', summary: 'synthetic fixture' }))
