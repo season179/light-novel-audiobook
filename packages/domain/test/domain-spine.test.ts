@@ -578,12 +578,149 @@ describe('audiobook job and numbered output lifecycle', () => {
           },
         },
       ],
+      [
+        'completed foreign chapter',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [
+              {
+                chapterId: StableIds.chapter(StableIds.book('b'.repeat(64)), 1),
+                path: '/output/foreign.flac',
+              },
+            ],
+          },
+        },
+      ],
+      [
+        'completed malformed chapter',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [{ chapterId: `${bookId}-ch1`, path: '/output/malformed.flac' }],
+          },
+        },
+      ],
+      [
+        'completed zero chapter position',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [{ chapterId: `${bookId}-ch0000`, path: '/output/zero.flac' }],
+          },
+        },
+      ],
+      [
+        'completed duplicate chapter IDs',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [
+              { chapterId, path: '/output/duplicate-one.flac' },
+              { chapterId, path: '/output/duplicate-two.flac' },
+            ],
+          },
+        },
+      ],
+      [
+        'completed more chapters than segments',
+        {
+          ...completedSnapshot,
+          output: {
+            ...completedSnapshot.output,
+            chapters: [1, 2, 3].map((position) => ({
+              chapterId: StableIds.chapter(bookId, position),
+              path: `/output/chapter-${position}.flac`,
+            })),
+          },
+        },
+      ],
     ]
 
     for (const [name, snapshot] of impossible) {
       expect(() => AudiobookJob.reconstitute(snapshot as AudiobookJobSnapshot), name).toThrow(
         DomainError,
       )
+    }
+  })
+
+  it('validates every fallback warning field and speaker-reason relationship at runtime', () => {
+    const job = new AudiobookJob('snapshot-warning-validation')
+    job.bindCommand(commandIdentity)
+    job.start()
+    job.attachBook(bookId)
+    job.beginDirection()
+    const segmentId = StableIds.segment(StableIds.passage(chapterId, 1), 1)
+    const valid = {
+      segmentId,
+      speakerId: null,
+      voiceProfileId: 'fallback-dialogue',
+      reason: 'unresolved_speaker' as const,
+    }
+    job.addFallbackWarning(valid)
+    const snapshot = job.snapshot()
+    expect(AudiobookJob.reconstitute(snapshot).warnings).toEqual([valid])
+    expect(
+      AudiobookJob.reconstitute({
+        ...snapshot,
+        warnings: [
+          {
+            ...valid,
+            speakerId: 'missing-character',
+            reason: 'missing_speaker_voice',
+          },
+        ],
+      }).warnings,
+    ).toHaveLength(1)
+
+    const probes: readonly [string, unknown][] = [
+      ['null warning', null],
+      ['non-string segment', { ...valid, segmentId: 42 }],
+      ['empty segment', { ...valid, segmentId: '' }],
+      ['unstable segment', { ...valid, segmentId: 'segment-1' }],
+      [
+        'foreign segment',
+        {
+          ...valid,
+          segmentId: StableIds.segment(
+            StableIds.passage(StableIds.chapter(StableIds.book('b'.repeat(64)), 1), 1),
+            1,
+          ),
+        },
+      ],
+      ['non-string voice', { ...valid, voiceProfileId: 42 }],
+      ['empty voice', { ...valid, voiceProfileId: '' }],
+      ['unstable voice', { ...valid, voiceProfileId: 'bad voice/id' }],
+      ['non-string speaker', { ...valid, speakerId: 42 }],
+      ['non-string reason', { ...valid, reason: 42 }],
+      ['unknown reason', { ...valid, reason: 'other' }],
+      ['unresolved with speaker', { ...valid, speakerId: 'alice' }],
+      [
+        'missing voice with null speaker',
+        { ...valid, reason: 'missing_speaker_voice', speakerId: null },
+      ],
+      [
+        'missing voice with empty speaker',
+        { ...valid, reason: 'missing_speaker_voice', speakerId: '' },
+      ],
+      [
+        'missing voice with unstable speaker',
+        { ...valid, reason: 'missing_speaker_voice', speakerId: 'bad speaker/id' },
+      ],
+    ]
+    for (const [name, warning] of probes) {
+      expect(
+        () =>
+          AudiobookJob.reconstitute({
+            ...snapshot,
+            warnings: [warning],
+          } as AudiobookJobSnapshot),
+        name,
+      ).toThrow(DomainError)
     }
   })
 })

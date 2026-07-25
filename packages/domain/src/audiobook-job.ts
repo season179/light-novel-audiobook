@@ -35,6 +35,10 @@ const allowedStateTransitions: Readonly<Record<AudiobookJobState, readonly Audio
   completed: [],
 }
 
+const stableBookIdPattern = /^book-[a-f\d]{24}$/i
+const stableSegmentIdPattern = /^book-[a-f\d]{24}-ch(\d{4})-p(\d{6})-s(\d{4})$/i
+const stableSimpleIdPattern = /^[a-z\d](?:[a-z\d._:-]*[a-z\d])?$/i
+
 export interface FallbackVoiceWarning {
   readonly segmentId: string
   readonly speakerId: string | null
@@ -251,7 +255,7 @@ export class AudiobookJob {
     if (this.currentState !== 'running' || this.currentStage !== 'directing') {
       throw new DomainError('Fallback warnings can only be added during direction')
     }
-    this.validateWarning(warning)
+    this.validateWarning(warning, this.attachedBookId)
     if (this.fallbackWarnings.some((existing) => existing.segmentId === warning.segmentId)) return
     this.fallbackWarnings = Object.freeze([...this.fallbackWarnings, Object.freeze({ ...warning })])
   }
@@ -264,6 +268,7 @@ export class AudiobookJob {
       throw new DomainError('Completed jobs require a book and rendered segments')
     }
     this.validateOutput(output)
+    this.validateOutputContext(output, this.attachedBookId, this.currentProgress.totalSegments)
     this.currentStage = 'completed'
     this.currentState = 'completed'
     this.completedOutput = Object.freeze({
@@ -389,18 +394,20 @@ export class AudiobookJob {
     const validator = new AudiobookJob(snapshot.id)
     const warningSegmentIds = new Set<string>()
     for (const warning of snapshot.warnings) {
-      validator.validateWarning(warning)
+      validator.validateWarning(warning, snapshot.bookId)
       if (warningSegmentIds.has(warning.segmentId)) {
         throw new DomainError('Audiobook job snapshot has duplicate fallback warnings')
       }
       warningSegmentIds.add(warning.segmentId)
     }
     if (snapshot.output !== null) {
-      validator.validateOutput({
+      const output = {
         version: new OutputVersion(snapshot.output.version),
         m4bPath: snapshot.output.m4bPath,
         chapters: snapshot.output.chapters,
-      })
+      }
+      validator.validateOutput(output)
+      validator.validateOutputContext(output, snapshot.bookId, snapshot.progress.totalSegments)
     }
   }
 
@@ -486,11 +493,31 @@ export class AudiobookJob {
     }
   }
 
-  private validateWarning(warning: FallbackVoiceWarning): void {
+  private validateWarning(warning: FallbackVoiceWarning, bookId: string | null): void {
+    if (warning === null || typeof warning !== 'object') {
+      throw new DomainError('Fallback warning is invalid')
+    }
+    const segmentMatch =
+      typeof warning.segmentId === 'string' ? stableSegmentIdPattern.exec(warning.segmentId) : null
+    const stableSegmentPositions =
+      segmentMatch !== null &&
+      Number(segmentMatch[1]) > 0 &&
+      Number(segmentMatch[2]) > 0 &&
+      Number(segmentMatch[3]) > 0
+    const stableVoiceId =
+      typeof warning.voiceProfileId === 'string' &&
+      stableSimpleIdPattern.test(warning.voiceProfileId)
+    const stableSpeakerId =
+      typeof warning.speakerId === 'string' && stableSimpleIdPattern.test(warning.speakerId)
+    const validSpeakerReason =
+      (warning.reason === 'unresolved_speaker' && warning.speakerId === null) ||
+      (warning.reason === 'missing_speaker_voice' && stableSpeakerId)
     if (
-      warning.segmentId.trim().length === 0 ||
-      warning.voiceProfileId.trim().length === 0 ||
-      !['unresolved_speaker', 'missing_speaker_voice'].includes(warning.reason)
+      !stableSegmentPositions ||
+      bookId === null ||
+      !warning.segmentId.startsWith(`${bookId}-ch`) ||
+      !stableVoiceId ||
+      !validSpeakerReason
     ) {
       throw new DomainError('Fallback warning is invalid')
     }
@@ -507,6 +534,27 @@ export class AudiobookJob {
       new Set(chapterIds).size !== chapterIds.length
     ) {
       throw new DomainError('Completed output paths must be nonempty and pairwise distinct')
+    }
+  }
+
+  private validateOutputContext(
+    output: AudiobookOutput,
+    bookId: string | null,
+    totalSegments: number,
+  ): void {
+    if (
+      bookId === null ||
+      !stableBookIdPattern.test(bookId) ||
+      totalSegments < 1 ||
+      output.chapters.length > totalSegments ||
+      output.chapters.some((chapter) => {
+        const expectedPrefix = `${bookId}-ch`
+        if (!chapter.chapterId.startsWith(expectedPrefix)) return true
+        const suffix = chapter.chapterId.slice(expectedPrefix.length)
+        return !/^\d{4}$/.test(suffix) || Number(suffix) < 1
+      })
+    ) {
+      throw new DomainError('Completed output chapters do not belong to the job book')
     }
   }
 
