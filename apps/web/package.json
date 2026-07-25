@@ -11,6 +11,7 @@
   "dependencies": {
     "@light-novel-audiobook/application": "workspace:*",
     "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/gemma-director": "workspace:*",
     "@light-novel-audiobook/qwen-tts": "workspace:*",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-router": "1.170.18",

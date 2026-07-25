@@ -1,17 +1,25 @@
-import type { AudiobookJob, AudiobookOutput, Book, VoiceCast } from '@light-novel-audiobook/domain'
-import { DomainError } from '@light-novel-audiobook/domain'
-import { DirectAudiobook } from './direct-audiobook.js'
-import type { PendingFallbackApproval } from './fallback-approval.js'
+import {
+  AudiobookJob,
+  type AudiobookOutput,
+  type Book,
+  type Chapter,
+  DomainError,
+  ExactSourceCoverage,
+  type Segment,
+  type VoiceCast,
+} from '@light-novel-audiobook/domain'
+import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
+import { createGenerationCommandIdentity } from './generation-command-identity.js'
 import type {
+  AssemblyChapter,
   AudioAssembler,
-  DirectorModelFactory,
+  CompletedSegmentAudio,
+  DirectorModel,
   EpubExtractor,
-  FallbackApprovalRepository,
   JobRepository,
-  SpeechEngineFactory,
+  SpeechEngine,
 } from './ports.js'
-import { RenderAudiobook } from './render-audiobook.js'
-import { ReviewFallbackApprovals } from './review-fallback-approvals.js'
+import { createRenderInputIdentity } from './render-input-identity.js'
 
 export interface GenerateAudiobookCommand {
   readonly jobId: string
@@ -22,144 +30,339 @@ export interface GenerateAudiobookCommand {
   readonly recoverAbandoned?: boolean
 }
 
-/**
- * There is deliberately **no** approval policy field on this command.
- *
- * Issue #45's round-2 review found that an optional policy whose omission pre-approved every
- * fallback segment was the old `'auto-approve'` stand-in renamed: the records it wrote carried a
- * timestamp but no actor and no review operation, so any consumer that merely updated its
- * constructor got silent approval by default. There is now no field through which a default could be
- * inserted by this use case or by composition wiring. Approvals exist only because
- * `ReviewFallbackApprovals` recorded a human decision — per segment, or once for the whole book via
- * `grantBookFallback`. A run that finds undecided unresolved speakers stops at `awaiting_review`.
- */
-
 export interface GenerateAudiobookResult {
   readonly job: AudiobookJob
   readonly output: AudiobookOutput
   readonly generatedSegments: number
   readonly reusedSegments: number
-  /** Decisions this run wrote, one per unresolved-speaker segment it authorized. */
-  readonly recordedFallbackApprovals: number
 }
 
 export interface GenerateAudiobookDependencies {
   readonly epubExtractor: EpubExtractor
-  /** Built only when direction runs; never on a render-only review resume. See `DirectorModelFactory`. */
-  readonly directorModelFactory: DirectorModelFactory
-  /**
-   * Replaces the former `speechEngine` instance. The engine cannot be built until the approval
-   * catalog exists, which is only after direction; see `SpeechEngineFactory`.
-   */
-  readonly speechEngineFactory: SpeechEngineFactory
+  readonly directorModel: DirectorModel
+  readonly speechEngine: SpeechEngine
   readonly audioAssembler: AudioAssembler
   readonly jobs: JobRepository
-  readonly approvals: FallbackApprovalRepository
-  /** Injected so a decision time is reproducible in tests; defaults to the wall clock. */
-  readonly now?: (() => Date) | undefined
 }
 
-/**
- * The one-click upload-to-M4B flow, composed from the two PLAN.md stages rather than being a third
- * implementation of them: direct → reconcile fallback decisions → render.
- *
- * A run that finds unresolved speakers under `'require-explicit-review'` stops with the job awaiting
- * review instead of rendering; `ReviewFallbackApprovals` then decides them and `RenderAudiobook`
- * continues from the persisted script without re-directing.
- */
+interface PlannedSegment {
+  readonly chapter: Chapter
+  readonly segment: Segment
+  readonly inputIdentity: string
+  readonly reusable: CompletedSegmentAudio | undefined
+}
+
+/** The single upload-to-M4B application use case. Domain rules stay in domain objects. */
 export class GenerateAudiobook {
-  private readonly direction: DirectAudiobook
-  private readonly rendering: RenderAudiobook
-  private readonly review: ReviewFallbackApprovals
+  private readonly epubExtractor: EpubExtractor
+  private readonly directorModel: DirectorModel
+  private readonly speechEngine: SpeechEngine
+  private readonly audioAssembler: AudioAssembler
   private readonly jobs: JobRepository
 
   constructor(dependencies: GenerateAudiobookDependencies) {
-    this.direction = new DirectAudiobook({
-      epubExtractor: dependencies.epubExtractor,
-      directorModelFactory: dependencies.directorModelFactory,
-      speechEngineFactory: dependencies.speechEngineFactory,
-      audioAssembler: dependencies.audioAssembler,
-      jobs: dependencies.jobs,
-    })
-    this.rendering = new RenderAudiobook({
-      speechEngineFactory: dependencies.speechEngineFactory,
-      audioAssembler: dependencies.audioAssembler,
-      jobs: dependencies.jobs,
-      approvals: dependencies.approvals,
-    })
-    this.review = new ReviewFallbackApprovals({
-      jobs: dependencies.jobs,
-      approvals: dependencies.approvals,
-      now: dependencies.now,
-    })
+    this.epubExtractor = dependencies.epubExtractor
+    this.directorModel = dependencies.directorModel
+    this.speechEngine = dependencies.speechEngine
+    this.audioAssembler = dependencies.audioAssembler
     this.jobs = dependencies.jobs
   }
 
   async execute(command: GenerateAudiobookCommand): Promise<GenerateAudiobookResult> {
-    const existing = await this.jobs.findJob(command.jobId)
+    const commandIdentity = createGenerationCommandIdentity({
+      epubSha256: command.epubSha256,
+      voices: command.voices,
+      epubExtractorIdentity: this.epubExtractor.identity,
+      directorIdentity: this.directorModel.identity,
+      speechEngineIdentity: this.speechEngine.identity,
+      audioAssemblerIdentity: this.audioAssembler.identity,
+    })
+    let job = await this.jobs.findJob(command.jobId)
     if (
-      existing !== undefined &&
-      existing.commandIdentity !== null &&
-      existing.commandIdentity !== this.direction.commandIdentity(command)
+      job !== undefined &&
+      job.commandIdentity !== null &&
+      job.commandIdentity !== commandIdentity
     ) {
       throw new DomainError('Audiobook job result is stale for the requested generation inputs')
     }
-    if (existing?.state === 'completed') {
-      if (existing.output === null) throw new DomainError('Completed job has no audiobook output')
+    if (job?.state === 'completed') {
+      if (job.output === null) throw new DomainError('Completed job has no audiobook output')
       return {
-        job: existing,
-        output: existing.output,
+        job,
+        output: job.output,
         generatedSegments: 0,
-        reusedSegments: existing.progress.totalSegments,
-        recordedFallbackApprovals: 0,
+        reusedSegments: job.progress.totalSegments,
       }
     }
 
-    // A job already awaiting review is resumed from its persisted script. Re-directing it would
-    // burn the director again and, worse, could return different delivery for every segment and so
-    // restale audio that no decision touched.
-    const directed =
-      existing?.state === 'awaiting_review'
-        ? await this.loadDirected(existing)
-        : (await this.direction.execute(command)).book
-
-    const reconciliation = await this.review.reconcile({ book: directed })
-    if (reconciliation.pending.length > 0) {
-      throw new PendingFallbackReviewError(command.jobId, reconciliation.pending)
+    if (job === undefined) {
+      job = new AudiobookJob(command.jobId)
+      job.bindCommand(commandIdentity)
+      await this.jobs.saveJob(job)
+    } else if (job.commandIdentity === null) {
+      job.bindCommand(commandIdentity)
     }
 
-    const rendered = await this.rendering.execute({
-      jobId: command.jobId,
-      voices: command.voices,
+    if (job.state === 'pending') {
+      job.start()
+    } else if (job.state === 'failed') {
+      job.retry()
+    } else if (job.state === 'running') {
+      if (command.recoverAbandoned !== true) {
+        throw new DomainError('Audiobook job is already running; duplicate request rejected')
+      }
+      job.markAbandoned()
+      await this.jobs.saveJob(job)
+      job.recoverAbandoned()
+    } else if (job.state === 'abandoned') {
+      if (command.recoverAbandoned !== true) {
+        throw new DomainError('Audiobook job is abandoned; explicit recovery is required')
+      }
+      job.recoverAbandoned()
+    }
+    await this.jobs.saveJob(job)
+
+    try {
+      const book = await this.epubExtractor.extract({ epubPath: command.epubPath })
+      if (book.source.sha256 !== command.epubSha256.toLowerCase()) {
+        throw new DomainError('Extracted EPUB identity does not match the generation command')
+      }
+      job.attachBook(book.id)
+      await this.jobs.saveBook(book)
+      job.beginDirection()
+      await this.jobs.saveJob(job)
+
+      await this.directBook(book, command.voices, job)
+      book.assertGloballyUniqueSegmentIds()
+      await this.jobs.saveBook(book)
+
+      const planned = await this.planRendering(book, command.voices)
+      job.beginRendering(planned.length)
+      await this.jobs.saveJob(job)
+
+      const { chapters, generatedSegments, reusedSegments } = await this.render(
+        book,
+        command.voices,
+        job,
+        planned,
+      )
+
+      job.beginAssembly()
+      await this.jobs.saveJob(job)
+      const reservation = await this.jobs.reserveNextOutput(book)
+      this.validateReservation(book, reservation)
+      const output = await this.audioAssembler.assemble({ book, chapters, reservation })
+      this.validateOutput(output, reservation)
+
+      job.complete(output)
+      await this.jobs.saveBook(book)
+      await this.jobs.saveJob(job)
+      return { job, output, generatedSegments, reusedSegments }
+    } catch (error) {
+      if (job.state === 'running') {
+        job.fail(this.errorMessage(error))
+        try {
+          await this.jobs.saveJob(job)
+        } catch {
+          // Preserve the causative pipeline error; the repository already surfaced if it caused the failure.
+        }
+      }
+      throw error
+    }
+  }
+
+  private async directBook(book: Book, voices: VoiceCast, job: AudiobookJob): Promise<void> {
+    let failure: unknown
+    try {
+      for (const chapter of book.chapters) {
+        job.report(chapter.id, `Directing ${chapter.title}`)
+        await this.jobs.saveJob(job)
+        const directed = await this.directorModel.directChapter(book, chapter)
+        if (directed.chapterId !== chapter.id) {
+          throw new DomainError(
+            `Director returned chapter ${directed.chapterId} while directing ${chapter.id}`,
+          )
+        }
+
+        const segments = ExactSourceCoverage.createSegments(chapter, directed.segments)
+        for (const segment of segments) {
+          const resolved = voices.resolve(segment)
+          segment.assignVoice(resolved.assignment)
+          if (resolved.assignment.usesFallback && resolved.assignment.fallbackReason !== null) {
+            job.addFallbackWarning({
+              segmentId: segment.id,
+              speakerId: segment.speakerId,
+              voiceProfileId: resolved.profile.id,
+              reason: resolved.assignment.fallbackReason,
+            })
+          }
+        }
+        chapter.submitForReview(segments)
+        chapter.approve()
+        book.assertGloballyUniqueSegmentIds()
+        await this.jobs.saveBook(book)
+        await this.jobs.saveJob(job)
+      }
+    } catch (error: unknown) {
+      failure = error
+    }
+    // The director is always released, but a failing release must not mask why direction failed.
+    try {
+      await this.directorModel.release()
+    } catch (error: unknown) {
+      failure ??= error
+    }
+    if (failure !== undefined) throw failure
+  }
+
+  private async planRendering(book: Book, voices: VoiceCast): Promise<readonly PlannedSegment[]> {
+    const planned: PlannedSegment[] = []
+    const segmentIds = new Set<string>()
+    for (const chapter of book.chapters) {
+      for (const segment of chapter.segments) {
+        if (segmentIds.has(segment.id)) {
+          throw new DomainError(`Duplicate segment map key would misassemble audio: ${segment.id}`)
+        }
+        segmentIds.add(segment.id)
+        const assignment = segment.voiceAssignment
+        if (assignment === null) throw new DomainError(`Segment ${segment.id} has no voice`)
+        const voice = voices.profile(assignment.voiceProfileId)
+        const inputIdentity = createRenderInputIdentity(segment, voice, this.speechEngine.identity)
+        const reusable = await this.jobs.findReusableSegment({
+          segmentId: segment.id,
+          inputIdentity,
+        })
+        if (reusable !== undefined) this.validateAudio(reusable, segment.id, inputIdentity)
+        planned.push({ chapter, segment, inputIdentity, reusable })
+      }
+    }
+    return planned
+  }
+
+  private async render(
+    book: Book,
+    voices: VoiceCast,
+    job: AudiobookJob,
+    planned: readonly PlannedSegment[],
+  ): Promise<{
+    readonly chapters: readonly AssemblyChapter[]
+    readonly generatedSegments: number
+    readonly reusedSegments: number
+  }> {
+    const audioBySegment = new Map<string, CompletedSegmentAudio>()
+    const missingCount = planned.filter((item) => item.reusable === undefined).length
+    let batchStarted = false
+    let generatedSegments = 0
+    let reusedSegments = 0
+
+    try {
+      if (missingCount > 0) {
+        await this.speechEngine.beginBatch()
+        batchStarted = true
+      }
+
+      for (const chapter of book.chapters) {
+        chapter.beginRendering()
+        job.report(chapter.id, `Rendering ${chapter.title}`)
+        await this.jobs.saveBook(book)
+        await this.jobs.saveJob(job)
+
+        const chapterItems = planned.filter((item) => item.chapter.id === chapter.id)
+        try {
+          for (const item of chapterItems) {
+            let audio = item.reusable
+            if (audio === undefined) {
+              const assignment = item.segment.voiceAssignment
+              if (assignment === null)
+                throw new DomainError(`Segment ${item.segment.id} has no voice`)
+              audio = await this.speechEngine.render({
+                segment: item.segment,
+                voice: voices.profile(assignment.voiceProfileId),
+                inputIdentity: item.inputIdentity,
+              })
+              this.validateAudio(audio, item.segment.id, item.inputIdentity)
+              await this.jobs.saveCompletedSegment(audio)
+              generatedSegments += 1
+            } else {
+              reusedSegments += 1
+            }
+            if (audioBySegment.has(item.segment.id)) {
+              throw new DomainError(`Duplicate segment audio map key: ${item.segment.id}`)
+            }
+            audioBySegment.set(item.segment.id, audio)
+            job.recordSegmentCompleted(item.segment.id)
+            await this.jobs.saveJob(job)
+          }
+          chapter.markRendered()
+          await this.jobs.saveBook(book)
+        } catch (error) {
+          if (chapter.state === 'rendering') chapter.renderingFailed()
+          throw error
+        }
+      }
+    } finally {
+      if (batchStarted) await this.speechEngine.endBatch()
+    }
+
+    const chapters = book.chapters.map((chapter): AssemblyChapter => {
+      const segments = chapter.segments.map((segment) => {
+        const audio = audioBySegment.get(segment.id)
+        if (audio === undefined) throw new DomainError(`Missing audio for segment ${segment.id}`)
+        return { segment, audio }
+      })
+      return { chapter, segments }
     })
-    return { ...rendered, recordedFallbackApprovals: reconciliation.created.length }
+    return { chapters, generatedSegments, reusedSegments }
   }
 
-  private async loadDirected(job: AudiobookJob): Promise<Book> {
-    if (job.bookId === null) throw new DomainError('A directed job must have an attached book')
-    const book = await this.jobs.findBook(job.bookId)
-    if (book === undefined) {
-      throw new DomainError(`Approved script for book ${job.bookId} is not persisted`)
+  private validateAudio(
+    audio: CompletedSegmentAudio,
+    segmentId: string,
+    inputIdentity: string,
+  ): void {
+    if (audio.segmentId !== segmentId || audio.inputIdentity !== inputIdentity) {
+      throw new DomainError(`Speech output identity mismatch for segment ${segmentId}`)
     }
-    return book
+    validateCompletedSegmentAudioMetadata(audio)
   }
-}
 
-/**
- * Raised when generation stopped because unresolved speakers await a human decision. The job is left
- * awaiting review, not failed: nothing went wrong, and PLAN.md:129 says the choice cannot be
- * inferred. Carries the queue so a caller can render the review list without a second read.
- */
-export class PendingFallbackReviewError extends DomainError {
-  override readonly name = 'PendingFallbackReviewError'
-  readonly jobId: string
-  readonly pending: readonly PendingFallbackApproval[]
+  private validateReservation(
+    book: Book,
+    reservation: Awaited<ReturnType<JobRepository['reserveNextOutput']>>,
+  ): void {
+    const chapterIds = reservation.chapters.map((chapter) => chapter.chapterId)
+    const paths = [reservation.m4bPath, ...reservation.chapters.map((chapter) => chapter.path)]
+    if (
+      reservation.bookId !== book.id ||
+      paths.some((path) => path.trim().length === 0) ||
+      new Set(paths).size !== paths.length ||
+      chapterIds.length !== book.chapters.length ||
+      chapterIds.some((id, index) => id !== book.chapters[index]?.id) ||
+      reservation.chapters.some((chapter) => chapter.path.length === 0)
+    ) {
+      throw new DomainError('Invalid numbered output reservation')
+    }
+  }
 
-  constructor(jobId: string, pending: readonly PendingFallbackApproval[]) {
-    super(
-      `Audiobook job ${jobId} is awaiting a fallback decision for ${pending.length} unresolved speaker segment(s)`,
-    )
-    this.jobId = jobId
-    this.pending = Object.freeze([...pending])
+  private validateOutput(
+    output: AudiobookOutput,
+    reservation: Awaited<ReturnType<JobRepository['reserveNextOutput']>>,
+  ): void {
+    if (
+      output.version.value !== reservation.version.value ||
+      output.m4bPath !== reservation.m4bPath ||
+      output.chapters.length !== reservation.chapters.length ||
+      output.chapters.some(
+        (chapter, index) =>
+          chapter.chapterId !== reservation.chapters[index]?.chapterId ||
+          chapter.path !== reservation.chapters[index]?.path,
+      )
+    ) {
+      throw new DomainError('Assembler did not honor its numbered output reservation')
+    }
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
   }
 }

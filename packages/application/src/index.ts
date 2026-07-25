@@ -4,6 +4,7 @@ export {
   inspectCompletedOutput,
 } from './completed-output.js'
 export { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
+export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   DirectAudiobook,
   type DirectAudiobookCommand,
