@@ -1,10 +1,11 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { FileBookLockCoordinator } from '../src/book-lock.js'
+import { BookLockError, FileBookLockCoordinator } from '../src/book-lock.js'
 import { deriveBookId, EpubIngestionAdapter, extractEpubDeterministically } from '../src/index.js'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -16,6 +17,25 @@ const ingestHelper = path.join(testDirectory, 'helpers/ingest-book.mts')
 
 const temporaryDirectories: string[] = []
 const runningChildren: ChildProcessWithoutNullStreams[] = []
+
+/** `EPERM` proves existence under another user; only `ESRCH` proves absence. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function processGroupAlive(groupPid: number): boolean {
+  try {
+    process.kill(-groupPid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
 
 /**
  * The workspace default lives on ext4 (`~/.local/share/...`), but `AUDIOBOOK_WORKSPACE_DIR` can
@@ -166,44 +186,290 @@ describe.each(filesystems)('book locking on %s', (label, parentDirectory) => {
   })
 })
 
-describe('book lock lifetime inside an ingest', () => {
+describe.each(filesystems)('book lock release on %s', (label, parentDirectory) => {
+  /**
+   * Release must be bounded in every path, so nothing here awaits without a deadline. A forced
+   * release rejects on purpose (it reports that the holder had to be killed), so these helpers
+   * assert *settlement* within a budget rather than success.
+   */
+  async function settleWithin(
+    budgetMs: number,
+    work: Promise<unknown>,
+  ): Promise<{ settled: 'resolved' | 'rejected'; elapsedMs: number; error?: unknown }> {
+    const startedAt = Date.now()
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`did not settle within ${budgetMs} ms`)), budgetMs)
+    })
+    try {
+      const outcome = await Promise.race([
+        work.then(
+          () => ({ settled: 'resolved' as const, elapsedMs: Date.now() - startedAt }),
+          (error: unknown) => ({
+            settled: 'rejected' as const,
+            elapsedMs: Date.now() - startedAt,
+            error,
+          }),
+        ),
+        deadline,
+      ])
+      return outcome
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  async function lockDirectoryFor(name: string): Promise<string> {
+    const workspace = await temporaryDirectory(parentDirectory, `${name}-${label}`)
+    const lockDirectory = path.join(workspace, '.book-locks')
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 })
+    return lockDirectory
+  }
+
+  it('completes release after only the direct flock child is killed', async () => {
+    const lockDirectory = await lockDirectoryFor('direct-child-killed')
+    const coordinator = new FileBookLockCoordinator({
+      lockDirectory,
+      waitMs: 5_000,
+      releaseGraceMs: 2_000,
+      killGraceMs: 2_000,
+    })
+
+    const lock = await coordinator.acquire('orphan-release')
+    const groupPid = lock.holderGroupPid
+    if (groupPid === undefined) throw new Error('holder group unavailable')
+
+    // Kill ONLY the direct flock child. Whether the nested holder happens to go with it is a kernel
+    // detail that varies; what must hold either way is that release settles and the book frees.
+    process.kill(groupPid, 'SIGKILL')
+    await delay(300)
+
+    const released = await settleWithin(5_000, lock.release())
+    expect(released.settled).toBeDefined()
+    expect(processGroupAlive(groupPid)).toBe(false)
+
+    const successor = await coordinator.acquire('orphan-release')
+    successor.assertHeld()
+    await settleWithin(5_000, successor.release())
+  })
+
+  it('terminates the group when the holder ignores stdin EOF instead of hanging', async () => {
+    const lockDirectory = await lockDirectoryFor('eof-ignored')
+    const releaseGraceMs = 400
+    const coordinator = new FileBookLockCoordinator({
+      lockDirectory,
+      waitMs: 5_000,
+      releaseGraceMs,
+      killGraceMs: 3_000,
+    })
+
+    const lock = await coordinator.acquire('eof-ignored')
+    const groupPid = lock.holderGroupPid
+    const holderPid = lock.holderPid
+    if (groupPid === undefined || holderPid === undefined)
+      throw new Error('holder pids unavailable')
+
+    // SIGSTOP makes the subtree incapable of acting on EOF without faking anything: a stopped
+    // process is precisely a wedged holder. Only a signal can dislodge it. Before this fix the
+    // waited-on promise settled on 'close', which a survivor holding inherited stdio never lets
+    // arrive, so release() -- and therefore ingest() -- hung without bound.
+    process.kill(-groupPid, 'SIGSTOP')
+
+    const released = await settleWithin(6_000, lock.release())
+
+    expect(released.settled).toBe('rejected')
+    expect((released.error as Error).message).toMatch(/required SIGKILL/)
+    expect(released.elapsedMs).toBeGreaterThanOrEqual(releaseGraceMs)
+    expect(processAlive(holderPid)).toBe(false)
+    expect(processGroupAlive(groupPid)).toBe(false)
+
+    // And the book is genuinely usable again afterwards.
+    const successor = await coordinator.acquire('eof-ignored')
+    await settleWithin(5_000, successor.release())
+  })
+
+  it('bounds release when the direct child is dead and a wedged descendant survives', async () => {
+    const lockDirectory = await lockDirectoryFor('wedged-descendant')
+    const coordinator = new FileBookLockCoordinator({
+      lockDirectory,
+      waitMs: 5_000,
+      releaseGraceMs: 400,
+      killGraceMs: 3_000,
+    })
+
+    const lock = await coordinator.acquire('wedged')
+    const groupPid = lock.holderGroupPid
+    const holderPid = lock.holderPid
+    if (groupPid === undefined || holderPid === undefined)
+      throw new Error('holder pids unavailable')
+
+    // The worst combination the reviewer measured: nothing left that could deliver EOF usefully, and
+    // a descendant that cannot act on it. This is the shape that used to hang forever.
+    process.kill(holderPid, 'SIGSTOP')
+    process.kill(groupPid, 'SIGKILL')
+    await delay(200)
+    expect(processAlive(holderPid)).toBe(true)
+
+    const released = await settleWithin(6_000, lock.release())
+
+    expect(released.settled).toBe('rejected')
+    expect(processAlive(holderPid)).toBe(false)
+    const successor = await coordinator.acquire('wedged')
+    await settleWithin(5_000, successor.release())
+  })
+
+  it('never unlinks the lock file across acquire, release, and force-release', async () => {
+    const lockDirectory = await lockDirectoryFor('never-unlinked')
+    const coordinator = new FileBookLockCoordinator({
+      lockDirectory,
+      waitMs: 5_000,
+      releaseGraceMs: 300,
+      killGraceMs: 3_000,
+    })
+    const lockFile = path.join(lockDirectory, 'persistent.lock')
+
+    const first = await coordinator.acquire('persistent')
+    expect((await stat(lockFile)).isFile()).toBe(true)
+    await first.release()
+    // Unlinking would let a newcomer lock a fresh inode at the same path while a waiter held the old
+    // one, so the file must outlive every release path.
+    expect((await stat(lockFile)).isFile()).toBe(true)
+
+    const wedged = await coordinator.acquire('persistent')
+    if (wedged.holderGroupPid === undefined) throw new Error('holder group unavailable')
+    process.kill(-wedged.holderGroupPid, 'SIGSTOP')
+    await settleWithin(6_000, wedged.release())
+    expect((await stat(lockFile)).isFile()).toBe(true)
+    expect(await readdir(lockDirectory)).toContain('persistent.lock')
+  })
+})
+
+describe('book lock ownership accuracy', () => {
   const workspaceParent = path.join(
     os.homedir(),
     '.local/share/light-novel-audiobook/test-workspaces',
   )
 
-  it.each([
-    ['after-target-rename', 'commit'],
-    ['after-quarantine-rename', 'discard'],
-  ] as const)('still holds the book at %s, mid-%s', async (point, _phase) => {
-    const workspace = await temporaryDirectory(workspaceParent, `held-at-${point}`)
-    const bytes = await fixtureBytes('synthetic-ncx-only')
-    const bookId = deriveBookId(extractEpubDeterministically(bytes))
+  it('fails closed while the event loop is blocked after the holder subtree dies', async () => {
+    const workspace = await temporaryDirectory(workspaceParent, 'assert-held-window')
     const lockDirectory = path.join(workspace, '.book-locks')
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 })
+    const coordinator = new FileBookLockCoordinator({
+      lockDirectory,
+      waitMs: 8_000,
+      releaseGraceMs: 1_000,
+      killGraceMs: 2_000,
+    })
 
-    // The discard path needs an existing book directory with no manifest to discard.
-    if (point === 'after-quarantine-rename') {
-      const seed = new EpubIngestionAdapter({ workspaceRoot: workspace, repositoryRoot })
-      await seed.ingest({ bytes })
-      await rm(path.join(workspace, 'books', bookId, 'book.json'))
+    const lock = await coordinator.acquire('window-book')
+    const groupPid = lock.holderGroupPid
+    if (groupPid === undefined) throw new Error('holder group unavailable')
+    lock.assertHeld()
+
+    // A separate OS process that will take the book the moment the kernel frees it.
+    const contender = run(holdHelper, [lockDirectory, 'window-book', '8000'])
+    const contenderReport = firstReport(contender)
+
+    // The whole holder subtree dies, so the kernel lock is free from this instant.
+    process.kill(-groupPid, 'SIGKILL')
+
+    // Block the event loop so Node cannot deliver the direct child's `exit` event or reap it. Any
+    // check reading cached exit state still believes the lock is held for this entire window, and
+    // the window is as long as the loop stays busy.
+    const blockUntil = Date.now() + 750
+    while (Date.now() < blockUntil) {
+      // deliberately synchronous
     }
 
-    let contenderState: unknown
+    // Called with no intervening await, so nothing has been delivered to the loop.
+    let thrown: unknown
+    try {
+      lock.assertHeld()
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(BookLockError)
+    // Proof the lock really was available during the blocked window.
+    expect(await contenderReport).toMatchObject({ state: 'held' })
+    contender.stdin.end()
+    await exited(contender)
+    await lock.release().catch(() => undefined)
+  })
+
+  it('refuses to discard a book directory that has become a committed record', async () => {
+    // Defence in depth for the reaping sliver above: `assertHeld()` is not the only thing standing
+    // between a lapsed lock and the destructive step.
+    const workspace = await temporaryDirectory(workspaceParent, 'discard-precondition')
+    const bytes = await fixtureBytes('synthetic-ncx-only')
+    const bookId = deriveBookId(extractEpubDeterministically(bytes))
+    const committedManifest = path.join(workspace, 'books', bookId, 'book.json')
+
+    const seeded = await new EpubIngestionAdapter({
+      workspaceRoot: workspace,
+      repositoryRoot,
+    }).ingest({ bytes })
+    const savedManifest = await readFile(committedManifest, 'utf8')
+    // Leave a manifest-less directory, which recovery decides to discard.
+    await rm(committedManifest)
+
     const adapter = new EpubIngestionAdapter({
       workspaceRoot: workspace,
       repositoryRoot,
-      lockWaitMs: 15_000,
-      async faultInjector(candidate) {
-        if (candidate !== point || contenderState !== undefined) return
-        const contender = run(holdHelper, [lockDirectory, bookId, '500'])
-        contenderState = await firstReport(contender)
-        await exited(contender)
+      lockWaitMs: 8_000,
+      async faultInjector(point) {
+        // Stand in for the moment a lapsed lock would allow: a valid committed record appears
+        // between the decision to discard and the destruction itself.
+        if (point === 'after-discard-ownership-check') {
+          await writeFile(committedManifest, savedManifest)
+        }
       },
     })
 
-    await adapter.ingest({ bytes })
+    await expect(adapter.ingest({ bytes })).rejects.toMatchObject({ code: 'STORAGE_CONFLICT' })
 
-    // Ownership spans the mutation rather than being re-proved by looking at a path.
-    expect(contenderState).toMatchObject({ state: 'refused', code: 'busy' })
+    // The record that appeared was not destroyed.
+    expect(JSON.parse(await readFile(committedManifest, 'utf8'))).toEqual(seeded)
+    expect(await readdir(path.join(workspace, '.quarantine'))).toEqual([])
   })
 })
+
+describe.each(filesystems)(
+  'book lock lifetime inside an ingest on %s',
+  (label, parentDirectory) => {
+    it.each([
+      ['after-target-rename', 'commit'],
+      ['after-quarantine-rename', 'discard'],
+    ] as const)('still holds the book at %s, mid-%s', async (point, _phase) => {
+      const workspace = await temporaryDirectory(parentDirectory, `held-at-${point}-${label}`)
+      const bytes = await fixtureBytes('synthetic-ncx-only')
+      const bookId = deriveBookId(extractEpubDeterministically(bytes))
+      const lockDirectory = path.join(workspace, '.book-locks')
+
+      // The discard path needs an existing book directory with no manifest to discard.
+      if (point === 'after-quarantine-rename') {
+        const seed = new EpubIngestionAdapter({ workspaceRoot: workspace, repositoryRoot })
+        await seed.ingest({ bytes })
+        await rm(path.join(workspace, 'books', bookId, 'book.json'))
+      }
+
+      let contenderState: unknown
+      const adapter = new EpubIngestionAdapter({
+        workspaceRoot: workspace,
+        repositoryRoot,
+        lockWaitMs: 15_000,
+        async faultInjector(candidate) {
+          if (candidate !== point || contenderState !== undefined) return
+          const contender = run(holdHelper, [lockDirectory, bookId, '500'])
+          contenderState = await firstReport(contender)
+          await exited(contender)
+        },
+      })
+
+      await adapter.ingest({ bytes })
+
+      // Ownership spans the mutation rather than being re-proved by looking at a path.
+      expect(contenderState).toMatchObject({ state: 'refused', code: 'busy' })
+    })
+  },
+)

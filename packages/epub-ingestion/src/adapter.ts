@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { link, lstat, mkdir, open, readFile, realpath, rename, rm, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import {
   type BookLockCoordinator,
@@ -411,8 +411,8 @@ async function writeFileAtomically(filePath: string, bytes: Uint8Array | string)
  * drvfs) this call *returns success* without that being evidence of a metadata flush reaching the
  * NTFS host. There the design degrades from power-loss-safe to process-crash-safe. Process-crash
  * safety -- the interruption the pending-manifest and quarantine machinery actually reasons about
- * -- is fully preserved, because the atomicity of `rename` and `link` is provided by the kernel
- * either way. A workspace on ext4 gets both properties.
+ * -- is fully preserved, because the atomicity of `rename` is provided by the kernel either way.
+ * A workspace on ext4 gets both properties.
  */
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await open(directory, 'r')
@@ -485,8 +485,24 @@ export class EpubIngestionAdapter {
       await lock.release().catch(() => undefined)
       throw error
     }
-    await lock.release()
+    await this.#releaseBookLock(lock)
     return stored
+  }
+
+  /**
+   * A release that needed force still reports failure, so it must arrive coded: callers switch on
+   * `EpubIngestionErrorCode` and a bare `BookLockError` would fall through every branch. The book is
+   * already committed and verified at this point, so a retry converges on the stored record.
+   */
+  async #releaseBookLock(lock: HeldBookLock): Promise<void> {
+    try {
+      await lock.release()
+    } catch (error) {
+      if (error instanceof BookLockError) {
+        throw new EpubIngestionError('STORAGE_FAILURE', error.message, { cause: error })
+      }
+      throw storageError('Could not release the EPUB book lock', error)
+    }
   }
 
   async #acquireBookLock(workspace: WorkspacePaths, bookId: string): Promise<HeldBookLock> {
@@ -683,13 +699,13 @@ export class EpubIngestionAdapter {
       } catch {
         // A pending record was never handed to the domain, so discarding it and re-committing
         // from the authoritative upload loses nothing.
-        await this.#discardTarget(workspace, lock)
+        await this.#discardTarget(workspace, lock, 'unusable-recovered-record')
         return undefined
       }
     }
 
     // The staging rename landed but no manifest survived: nothing here can be trusted.
-    await this.#discardTarget(workspace, lock)
+    await this.#discardTarget(workspace, lock, 'unusable-recovered-record')
     return undefined
   }
 
@@ -741,7 +757,7 @@ export class EpubIngestionAdapter {
       let rollbackError: unknown
       if (ownsTarget) {
         try {
-          await this.#discardTarget(workspace, lock)
+          await this.#discardTarget(workspace, lock, 'rolled-back-commit')
         } catch (candidate) {
           rollbackError = candidate
         }
@@ -760,15 +776,42 @@ export class EpubIngestionAdapter {
   }
 
   /**
-   * Removes an untrustworthy book directory on behalf of the lock owner that is entitled to it:
+   * Removes an untrustworthy book directory on behalf of the lock holder that is entitled to it:
    * either a partially committed target this run created, or an unusable record recovery found.
    * A single rename clears `books/` first, so an interruption can only ever leave residue under
    * `.quarantine`, which nothing reads.
+   *
+   * `reason` exists so this is not guarded by lock liveness alone. `assertHeld()` asks the kernel
+   * whether the holder group still exists, which is honest but not instantaneous -- an exited,
+   * unreaped group member still counts as present. For the recovery discards the precondition can
+   * be re-established directly instead: the directory was judged unusable *because* it had no
+   * committed manifest, so if one exists now, something outside this transaction produced it and it
+   * must not be destroyed. Rolling back a commit this run made is different: that target's contents
+   * are this run's own, so a committed manifest there is expected.
    */
-  async #discardTarget(workspace: WorkspacePaths, lock: HeldBookLock): Promise<void> {
+  async #discardTarget(
+    workspace: WorkspacePaths,
+    lock: HeldBookLock,
+    reason: 'unusable-recovered-record' | 'rolled-back-commit',
+  ): Promise<void> {
     lock.assertHeld()
     await this.#injectFault('after-discard-ownership-check')
     await this.#assertSafeDirectory(workspace.target, workspace.books, 'book target')
+    if (reason === 'unusable-recovered-record') {
+      const committed = await this.#optionalSafeFile(
+        path.join(workspace.target, COMMITTED_MANIFEST_FILENAME),
+        workspace.target,
+        manifestLabel(COMMITTED_MANIFEST_FILENAME),
+      )
+      if (committed) {
+        throw new EpubIngestionError(
+          'STORAGE_CONFLICT',
+          `Refusing to discard EPUB book ${path.basename(workspace.target)}: a committed manifest exists where an unusable record was expected`,
+        )
+      }
+    }
+    // Re-asserted immediately before the destructive rename, after the checks above.
+    lock.assertHeld()
     const quarantined = path.join(
       workspace.quarantine,
       `${path.basename(workspace.target)}.${lock.token}`,
