@@ -19,6 +19,15 @@ export interface OwnedLlamaLifecycleOptions {
   readonly terminateTimeoutMs?: number
   readonly killTimeoutMs?: number
   readonly portFreeTimeoutMs?: number
+  /**
+   * Bounded wait for an in-flight `start()` to settle once `release()` has begun.
+   *
+   * Release reaps the child before it waits, so a startup blocked polling `/health` notices its
+   * process is gone within one poll interval; this bound only covers a startup wedged somewhere
+   * release cannot unstick it, such as a hung filesystem write. Expiry is a release *failure*, never
+   * a quiet success — see `#awaitStartupSettled`.
+   */
+  readonly startupSettleTimeoutMs?: number
 }
 
 function childExited(child: ChildProcess): boolean {
@@ -40,6 +49,29 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise
     const timer = setTimeout(() => finish(childExited(child)), timeoutMs)
     child.once('exit', onExit)
   })
+}
+
+/**
+ * True once `settling` has settled either way, false if the bound expired first. Rejections count as
+ * settled: the rejection belongs to whoever called the operation, not to the code waiting for it to
+ * be over. The timer is cleared but never unref'd, so a wait here cannot be cut short by an
+ * otherwise-idle event loop.
+ */
+async function settledWithin(settling: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      settling.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout(false), timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function portIsFree(port: number): Promise<boolean> {
@@ -98,12 +130,19 @@ async function waitForHealth(options: {
  *
  * `release()` therefore does not return until the process has actually exited and its port is free.
  * Those are the two externally observable facts a caller can check; neither can be faked by bookkeeping.
+ *
+ * That promise has to hold against a *concurrent* `release()`, not just a sequential one. A start that
+ * has not settled is a start that may still be about to put weights in VRAM: it may be inside the
+ * pre-spawn key-file writes with no child to find yet, one statement away from `spawn`. So release
+ * both waits for startup to settle and permanently prohibits a spawn from that moment on. Checking for
+ * a child once and returning would report the runtime gone while it was still arriving.
  */
 export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   #child: ChildProcess | undefined
   #childError: Error | undefined
   #startPromise: Promise<void> | undefined
   #releasePromise: Promise<void> | undefined
+  #releasing = false
   #cleanupComplete = false
 
   constructor(private readonly options: OwnedLlamaLifecycleOptions) {}
@@ -129,8 +168,14 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   }
 
   async #startOnce(): Promise<void> {
+    this.#assertSpawnStillAllowed()
     await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
     await chmod(this.options.keyPath, 0o600)
+    // Re-checked here, not only on entry, and in the same synchronous step as the `spawn` below: both
+    // filesystem awaits above are windows in which `release()` can begin, and a release that found no
+    // child must not be followed by a fresh 16 GB load. Nothing may be awaited between this line and
+    // the assignment of `#child`, or the window reopens.
+    this.#assertSpawnStillAllowed()
     const child = spawn(this.options.binaryPath, [...this.options.args], {
       stdio: ['ignore', 'ignore', 'ignore'],
     })
@@ -147,29 +192,65 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     })
   }
 
+  #assertSpawnStillAllowed(): void {
+    if (this.#releasing) {
+      throw new Error('Owned llama-server start was abandoned because release had already begun')
+    }
+  }
+
   release(): Promise<void> {
     this.#releasePromise ??= this.#releaseOnce()
     return this.#releasePromise
   }
 
   async #releaseOnce(): Promise<void> {
-    const child = this.#child
+    // Assigned before the first await, so it is set synchronously with the `release()` call itself and
+    // no `spawn` can be reached after it. This is the flag `#assertSpawnStillAllowed` reads.
+    this.#releasing = true
     try {
-      if (child !== undefined && !childExited(child)) {
-        child.kill('SIGTERM')
-        if (!(await waitForChildExit(child, this.options.terminateTimeoutMs ?? 15_000))) {
-          child.kill('SIGKILL')
-          if (!(await waitForChildExit(child, this.options.killTimeoutMs ?? 10_000))) {
-            throw new Error('Owned llama-server did not exit after SIGKILL')
-          }
-        }
-      }
+      // Reap before waiting. A startup polling `/health` sees its child gone within one poll interval
+      // and fails, so awaiting settlement below cannot stall for the whole startup deadline.
+      await this.#reapChild()
+      await this.#awaitStartupSettled()
+      // Startup has settled and can no longer spawn, so this catches a child created in the window
+      // between the reap above and settlement — the one the old single snapshot of `#child` missed.
+      await this.#reapChild()
     } finally {
-      child?.removeAllListeners('error')
+      this.#child?.removeAllListeners('error')
+      // The per-run secret goes whatever else happened; a surviving 0600 key file is still a leak.
       await rm(this.options.keyPath, { force: true })
-      await waitForPortFree(this.options.port, this.options.portFreeTimeoutMs ?? 10_000)
     }
+    await waitForPortFree(this.options.port, this.options.portFreeTimeoutMs ?? 10_000)
     this.#cleanupComplete = true
+  }
+
+  async #reapChild(): Promise<void> {
+    const child = this.#child
+    if (child === undefined || childExited(child)) return
+    child.kill('SIGTERM')
+    if (await waitForChildExit(child, this.options.terminateTimeoutMs ?? 15_000)) return
+    child.kill('SIGKILL')
+    if (!(await waitForChildExit(child, this.options.killTimeoutMs ?? 10_000))) {
+      throw new Error('Owned llama-server did not exit after SIGKILL')
+    }
+  }
+
+  /**
+   * The half of the contract that used to be missing. A failed start counts as settled — its rejection
+   * is the `start()` caller's to handle, and a start that failed is a start that will never spawn.
+   *
+   * The wait is bounded so a genuinely wedged startup cannot turn a co-residency bug into a hang. But
+   * expiry means the runtime's state is *unknown*, so it throws rather than resolving: `cleanupComplete`
+   * stays false and the caller must fail closed instead of handing the GPU on.
+   */
+  async #awaitStartupSettled(): Promise<void> {
+    const startPromise = this.#startPromise
+    if (startPromise === undefined) return
+    const timeoutMs = this.options.startupSettleTimeoutMs ?? 30_000
+    if (await settledWithin(startPromise, timeoutMs)) return
+    throw new Error(
+      `Owned llama-server startup had not settled ${timeoutMs}ms after release began, so the runtime cannot be reported gone`,
+    )
   }
 }
 
