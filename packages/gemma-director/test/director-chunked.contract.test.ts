@@ -464,6 +464,69 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     expect(server.requests).toHaveLength(0)
   })
 
+  it('settles and unloads a raced-away runtime start before releasing the GPU lease', async () => {
+    // Regression (issue #53 round 4): the chapter deadline abandons the AWAIT on runtime startup,
+    // never the start itself. Pre-fix, release() awaited only tracked operations — the raced-away
+    // ensureRuntimeReady is not one — so it freed the lease ~350 ms into a 400 ms startup, and the
+    // runtime finished loading beside Qwen: the exact co-residency the lease exists to prevent.
+    // Pre-fix event order: ['start:begin', 'lifecycle:release', 'lease:released', 'start:settled'].
+    const texts = ['A passage.']
+    const ids = ['passage-001']
+    const book = makeChapterBook(texts, ids)
+    const events: string[] = []
+    const lifecycle = new (class implements DirectorRuntimeLifecycle {
+      async start(): Promise<void> {
+        events.push('start:begin')
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        events.push('start:settled')
+      }
+      async release(): Promise<void> {
+        events.push('lifecycle:release')
+      }
+    })()
+    const gpuLeaseCoordinator = new (class implements ExclusiveGpuLeaseCoordinator {
+      async acquire(owner: GpuOwner): Promise<GpuLease> {
+        return {
+          owner,
+          lockFilePath: '/fixture/shared-gpu/exclusive.lock',
+          release: async () => {
+            events.push('lease:released')
+          },
+        }
+      }
+    })()
+    const model = new GemmaDirectorModel({
+      baseUrl: 'http://127.0.0.1:1/v1',
+      apiKey: API_KEY,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [{ id: 'mira', aliases: ['Mira'] }],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+      progressStore: { async append() {} },
+      lifecycle,
+      gpuLeaseCoordinator,
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+    })
+    models.push(model)
+
+    const started = Date.now()
+    // A 50 ms chapter budget fires during the 400 ms startup; the start races away untracked.
+    await expect(
+      model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 50 }),
+    ).rejects.toMatchObject({ code: 'timeout' })
+
+    await model.release()
+
+    // release() must have waited out the start (~400 ms), then unloaded, then freed the lease:
+    // runtime exit precedes lease release, always.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(350)
+    expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
+  })
+
   it('counts context loading against the chapter deadline', async () => {
     const texts = ['A passage.']
     const ids = ['passage-001']

@@ -290,6 +290,16 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     const active = [...this.activeOperations]
     this.releasePromise = (async () => {
       await Promise.allSettled(active)
+      // Settle any in-flight runtime start before unloading. The chapter deadline abandons the
+      // AWAIT on startup, never the start itself: a raced-away ensureRuntimeReady keeps loading
+      // untracked, and unloading here while it runs frees the lease with weights still heading
+      // for the GPU — the runtime then finishes loading beside Qwen, the exact co-residency the
+      // lease exists to prevent. Read after the active-set snapshot above: no new start can
+      // appear once released is set, so this is the last start that can exist. The wait has no
+      // adapter-side cap on purpose — a cold multi-GB weight load can legitimately take minutes,
+      // so the bound belongs to the lifecycle's own startup timeout (see DirectorRuntimeLifecycle).
+      const starting = this.runtimeReady
+      if (starting !== undefined) await starting.catch(() => undefined)
       // A runtime that refuses to exit must never strand the cross-process lease: both steps
       // always run, and the runtime failure stays the reported cause.
       let failure: unknown
@@ -651,8 +661,9 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   }
 
   /**
-   * Bounds one setup phase by the chapter deadline. A raced-away loser is not cancelled —
-   * `release()` still awaits and unloads it — but the chapter stops waiting for it.
+   * Bounds one setup phase by the chapter deadline. The loser of the race is not cancelled — the
+   * chapter merely stops waiting for it. A raced-away runtime start is settled and unloaded by
+   * `release()` before the GPU lease is freed (runtime exit precedes lease release, always).
    */
   private async withChapterDeadline<T>(
     remainingMs: number,

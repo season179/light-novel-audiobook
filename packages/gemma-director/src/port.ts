@@ -182,8 +182,18 @@ export interface DirectorRuntimeLifecycle {
   /**
    * Loads the runtime and its weights onto the GPU. The adapter calls this only while it already
    * holds the exclusive GPU lease, so VRAM residency can never precede the lease. Implementations
-   * must be idempotent and must resolve only once the runtime is ready to serve requests.
+   * must be idempotent, must resolve only once the runtime is ready to serve requests, and must
+   * settle — resolve or reject — within their own startup bound. An unsettled start must not be
+   * able to outlive the adapter: `GemmaDirectorModel.release()` deliberately waits for an
+   * in-flight start with no cap of its own, so the startup timeout lives here, in the
+   * implementation that knows how long a cold weight load may take.
    */
   start(): Promise<void>
+  /**
+   * Unloads the runtime and frees the GPU, and must not resolve until that is true — process
+   * exited, port free. A `release()` that arrives while a `start()` is still in flight waits for
+   * that start to settle and then unloads whatever it produced; observing "no child yet" in a
+   * pre-spawn window and returning is exactly the co-residency hole the lease exists to prevent.
+   */
   release(): Promise<void>
 }

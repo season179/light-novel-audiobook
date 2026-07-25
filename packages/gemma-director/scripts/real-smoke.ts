@@ -115,6 +115,12 @@ class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   }
 
   private async releaseOnce(): Promise<void> {
+    // Settle any in-flight start first. Without this, a release landing in the pre-spawn window
+    // (key-file write, before `this.child` exists) observes no child and returns while
+    // `startOnce()` is still heading toward spawning — the server then comes up with no owner,
+    // beside whatever took the GPU next. Bounded by `startupTimeoutMs` inside `startOnce()`.
+    const starting = this.startPromise
+    if (starting !== undefined) await starting.catch(() => undefined)
     const child = this.child
     try {
       if (child !== undefined && !childExited(child)) {
