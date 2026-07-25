@@ -1,8 +1,15 @@
-import { existsSync } from 'node:fs'
+import { constants, existsSync, type Stats } from 'node:fs'
 import { type FileHandle, lstat, mkdir, open, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { WebApiError } from './errors.js'
+
+/**
+ * `O_NOFOLLOW` makes the open itself refuse a symlink in the final position, which is the swap a
+ * check/open race exploits. It does not exist on every platform, so it is added only when present.
+ */
+const READ_NO_FOLLOW_FLAGS =
+  constants.O_RDONLY | (typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0)
 
 /**
  * Every uploaded EPUB, rendered WAV, and exported audiobook lives in this external local workspace.
@@ -119,32 +126,35 @@ export class LocalWorkspace {
   }
 
   /**
-   * Opens a workspace file for serving. Rejects lexical escapes, symlinked files, symlinked parent
-   * directories, and anything whose canonical path leaves the workspace. Validation is done against
-   * the opened handle, so the file cannot be swapped between the check and the read.
+   * Opens a workspace file for serving and proves that **the object it opened** is a regular file
+   * inside the workspace.
+   *
+   * Order matters. Validating a pathname and then opening it is a check/open race: swapping the file
+   * for a symlink in between makes `open()` follow the new target, and a measured attack leaked
+   * outside files on 115 of 5,000 requests. So the file is opened first — with `O_NOFOLLOW`, so a
+   * symlink in the final position fails outright — and containment is then decided from the open
+   * descriptor itself via `/proc/self/fd/<fd>`, which names the inode actually held. Nothing after
+   * the open can change what this handle refers to, and the same handle is what gets streamed.
    */
   async openContainedFile(candidate: string): Promise<ContainedFile> {
     const lexical = this.assertContains(candidate)
     const canonicalRoot = this.requireCanonicalRoot()
-    await this.assertNoSymlinkedComponent(lexical)
 
-    const canonical = await canonicalize(lexical)
-    if (canonical === undefined) {
-      throw new WebApiError(
-        'output_unavailable',
-        'The generated file is missing from the workspace.',
-      )
-    }
-    if (!isInside(canonicalRoot, canonical)) {
-      throw new WebApiError('output_unavailable', 'Requested file is outside the local workspace')
-    }
-
-    const handle = await this.openFile(canonical)
+    const handle = await this.openFile(lexical)
     try {
       const stats = await handle.stat()
       if (!stats.isFile()) {
         throw new WebApiError('output_unavailable', 'Requested workspace path is not a file')
       }
+
+      const canonical = await this.canonicalPathOfOpenFile(handle, lexical, stats)
+      if (!isInside(canonicalRoot, canonical)) {
+        throw new WebApiError('output_unavailable', 'Requested file is outside the local workspace')
+      }
+      // Policy check, and a clearer message: the workspace holds no symlinks of its own. Containment
+      // is already proven above, so this cannot be raced into allowing anything.
+      await this.assertNoSymlinkedComponent(lexical)
+
       return { handle, path: canonical, byteLength: stats.size }
     } catch (error) {
       await handle.close()
@@ -152,10 +162,59 @@ export class LocalWorkspace {
     }
   }
 
+  /**
+   * The canonical path of an already-open descriptor. `/proc/self/fd/<fd>` is a kernel-maintained
+   * link to the opened inode, so resolving it cannot be influenced by anything that happens to the
+   * original pathname afterwards. Where `/proc` is unavailable, fall back to comparing the opened
+   * inode against a fresh `lstat` of the pathname, which combined with `O_NOFOLLOW` still refuses a
+   * swapped or symlinked target.
+   */
+  private async canonicalPathOfOpenFile(
+    handle: FileHandle,
+    lexical: string,
+    stats: Stats,
+  ): Promise<string> {
+    const fromDescriptor = await canonicalize(`/proc/self/fd/${handle.fd}`)
+    if (fromDescriptor !== undefined) {
+      // A path the kernel reports as deleted must never be served: the name no longer exists, so
+      // containment cannot be reasoned about, and the suffix would otherwise pass a prefix test.
+      if (fromDescriptor.endsWith(' (deleted)')) {
+        throw new WebApiError(
+          'output_unavailable',
+          'The generated file is missing from the workspace.',
+        )
+      }
+      return fromDescriptor
+    }
+
+    let link: Stats
+    try {
+      link = await lstat(lexical)
+    } catch {
+      throw new WebApiError(
+        'output_unavailable',
+        'The generated file is missing from the workspace.',
+      )
+    }
+    if (link.isSymbolicLink() || link.ino !== stats.ino || link.dev !== stats.dev) {
+      throw new WebApiError('output_unavailable', 'Requested file is outside the local workspace')
+    }
+    const canonical = await canonicalize(lexical)
+    if (canonical === undefined) {
+      throw new WebApiError(
+        'output_unavailable',
+        'The generated file is missing from the workspace.',
+      )
+    }
+    return canonical
+  }
+
   private async openFile(path: string): Promise<FileHandle> {
     try {
-      return await open(path, 'r')
+      return await open(path, READ_NO_FOLLOW_FLAGS)
     } catch {
+      // ELOOP (a symlink in the final position) is deliberately indistinguishable from a missing
+      // file here: neither is something the browser may learn more about.
       throw new WebApiError(
         'output_unavailable',
         'The generated file is missing from the workspace.',

@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 import {
@@ -38,6 +38,7 @@ describe('AudiobookWebApi', () => {
 
   afterEach(async () => {
     await harness.dispose()
+    vi.restoreAllMocks()
   })
 
   it('stores an uploaded EPUB in the external workspace, never in the repository', async () => {
@@ -274,10 +275,22 @@ describe('AudiobookWebApi', () => {
     await harness.dispose()
     harness = await createTestHarness({ beforeRender: crashOnSixthSegment })
 
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const stored = await upload()
     const first = await harness.api.startGeneration({ uploadId: stored.uploadId })
     const failed = await waitForJobState(harness.api, first.jobId, (job) => job.state === 'failed')
-    expect(failed.error).toContain('Simulated speech engine crash')
+    // The adapter's own words are logged, never persisted into job state the browser reads back.
+    expect(failed.error).toBe(
+      'The local server hit an unexpected error. Check the server log for details.',
+    )
+    expect(
+      logged.mock.calls.some((call) =>
+        call
+          .map((argument) => String(argument))
+          .join(' ')
+          .includes('Simulated speech engine crash'),
+      ),
+    ).toBe(true)
     expect(harness.speechEngine.rendered).toBe(5)
 
     const second = await harness.api.startGeneration({ uploadId: stored.uploadId })

@@ -8,6 +8,7 @@ import { toWebApiResult } from '../../src/server/errors.js'
 import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
+import { createM1VoiceCast } from '../../src/server/m1-voice-cast.js'
 import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace.js'
 
 /** Blocks the fake speech engine at a chosen segment so a test can observe mid-generation state. */
@@ -46,18 +47,28 @@ export interface TestHarness {
 
 export interface TestHarnessOptions {
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
+  /** Defaults to the composition root's M1 stand-in; set `'reject'` to test the real contract. */
+  readonly unreviewedFallbackPolicy?: 'reject' | 'auto-approve' | undefined
 }
 
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
   const root = await mkdtemp(join(tmpdir(), 'lna-web-'))
   const workspace = await createWorkspace(root)
+  const voices = createM1VoiceCast()
   // A shared speech engine is the legitimate factory shape for an adapter whose endBatch is not
-  // terminal, and it lets a test count renders across two runs.
-  const speechEngine = new FakeSpeechEngine(workspace, { beforeRender: options.beforeRender })
+  // terminal, and it lets a test count renders across two runs. The fallback policy mirrors what the
+  // composition root passes: the fake refuses unapproved fallback speech like the real Qwen adapter,
+  // so the M1 stand-in has to be explicit here too.
+  const speechEngine = new FakeSpeechEngine(workspace, {
+    beforeRender: options.beforeRender,
+    fallbackVoiceProfileId: voices.fallback.id,
+    unreviewedFallbackPolicy: options.unreviewedFallbackPolicy ?? 'auto-approve',
+  })
   const directors: FakeDirectorModel[] = []
 
   const api = await createAudiobookWebApi({
     workspace,
+    voices,
     createSpeechEngine: () => speechEngine,
     createDirectorModel: () => {
       const director = new FakeDirectorModel()

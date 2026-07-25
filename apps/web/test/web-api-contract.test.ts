@@ -1,5 +1,10 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { audioFileErrorResponse } from '../src/server/audio-file-response.js'
+import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
+import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { toPublicFailure, toWebApiResult, WebApiError } from '../src/server/errors.js'
 import { createRequestOriginPolicy } from '../src/server/request-origin-policy.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
@@ -132,5 +137,66 @@ describe('Host and Origin allowlist', () => {
     expect(configured.allowedHosts).toEqual(['localhost:4100', '127.0.0.1:4100'])
     expect(configured.isAllowed(request({ host: 'localhost:4100' }))).toBe(true)
     expect(configured.isAllowed(request({ host: 'localhost:3000' }))).toBe(false)
+  })
+})
+
+/**
+ * Regression for the round-2 MEDIUM: a failure raised asynchronously — an adapter factory, or an
+ * adapter method during the run — used to be stored as its raw message and handed to the browser as
+ * a successful job read, bypassing sanitization entirely.
+ */
+describe('asynchronous adapter failures are sanitized too', () => {
+  let root: string
+  let api: AudiobookWebApi
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'lna-async-'))
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('never returns a failing factory’s message to the browser', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const secret = 'MODEL_KEY_FAILURE at /home/user/private/model.gguf'
+    api = await createAudiobookWebApi({
+      workspaceRoot: root,
+      createDirectorModel: () => {
+        throw new Error(secret)
+      },
+    })
+
+    const upload = await api.uploadEpub({
+      fileName: 'async-failure.epub',
+      bytes: createStubEpubBytes('async'),
+    })
+    const started = await api.startGeneration({ uploadId: upload.uploadId })
+
+    const deadline = Date.now() + 10_000
+    let job = started.job
+    while (Date.now() < deadline) {
+      const latest = await api.getJobState({ jobId: started.jobId })
+      if (latest !== null) job = latest
+      if (!job.active) break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    expect(job.state).toBe('failed')
+    expect(job.error).toBe(
+      'The local server hit an unexpected error. Check the server log for details.',
+    )
+    expect(job.latestMessage).not.toContain('model.gguf')
+    expect(JSON.stringify(job)).not.toContain('MODEL_KEY_FAILURE')
+    // The cause is not lost; it is only kept server-side.
+    expect(
+      logged.mock.calls.some((call) =>
+        call
+          .map((argument) => String(argument))
+          .join(' ')
+          .includes(secret),
+      ),
+    ).toBe(true)
   })
 })

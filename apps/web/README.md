@@ -71,9 +71,38 @@ detail never reaches the browser.
 
 Binary routes: `GET /api/jobs/$jobId/audio/$chapterId` (inline chapter audio) and
 `GET /api/jobs/$jobId/download` (the M4B as an attachment). Both resolve paths from persisted job
-output only, then prove containment on **canonical** paths and refuse symlinked files or parent
-directories. The validated file handle is what gets streamed, so the file cannot be swapped between
-check and read, and the handle is closed on end-of-file, error, and client cancellation.
+output only. Containment is then decided from the **open descriptor**, not the pathname: the file is
+opened with `O_NOFOLLOW` and its identity re-read through `/proc/self/fd/<fd>`, so swapping the path
+for a symlink mid-request can only produce a refusal. Measured: 5,000 requests against an atomically
+swapped output leaked nothing, while 5,000 unattacked requests all served. The handle is closed on
+end-of-file, error, and client cancellation.
+
+## Fakes are as strict as the real adapters
+
+Each fake refuses what its merged counterpart refuses, because a permissive fake hides defects that
+only surface once real models load:
+
+| Fake | Refuses, like the real adapter |
+| --- | --- |
+| `FakeDirectorModel` | use after `release()`; a chapter that is not the exact one owned by the book |
+| `FakeSpeechEngine` | second open batch; render outside a batch; overlapping renders; non-SHA-256 `inputIdentity`; voice that is not the segment's assignment; **fallback speech with no matching per-segment human approval** |
+| `FakeAudioAssembler` | chapter/segment misordering; audio supplied for the wrong segment; truncated segment lists; duplicate segments; overwriting a reserved output; **a reserved chapter extension it cannot produce** |
+| `InMemoryJobRepository` | reuse of a segment whose bytes no longer match its hash and size; a reservation naming an existing file |
+
+Two consequences worth knowing:
+
+- `FakeSpeechEngine` defaults to `unreviewedFallbackPolicy: 'reject'`, exactly like
+  `QwenApplicationSpeechEngine`. The composition root passes `'auto-approve'` as an explicit M1
+  stand-in, because this app has no approval action yet; it mints an identity-bound record per
+  segment and lists them on `autoApprovedFallbacks`. **The real Qwen adapter accepts no such policy**
+  — #21 must supply persisted `fallbackApprovals` or any book with an unresolved speaker will fail.
+- `FakeAudioAssembler` produces WAV, so it refuses a `.flac` or extensionless reservation rather than
+  writing WAV bytes under the wrong name. The merged SQLite repository reserves extensionless chapter
+  paths and the merged FFmpeg planner requires `.flac`; that mismatch is #43 and owned elsewhere.
+
+Adapter failures are also sanitized at the composition boundary, because `GenerateAudiobook` persists
+an adapter's message into job state and the browser reads that back. The raw cause is logged
+server-side; only `WebApiError` and `DomainError` messages pass through.
 
 ## Local workspace
 

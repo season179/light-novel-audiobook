@@ -2,6 +2,7 @@ import type {
   GenerateAudiobook,
   GenerateAudiobookCommand,
 } from '@light-novel-audiobook/application'
+import { toPublicFailureMessage } from './errors.js'
 
 /**
  * Builds a use case for exactly one run, with adapters that have not been used yet.
@@ -65,7 +66,9 @@ export class GenerationRunner {
         const generate = await this.createGenerate()
         await generate.execute(command)
       } catch (error: unknown) {
-        this.failures.set(command.jobId, error instanceof Error ? error.message : String(error))
+        // Sanitized: this message is read back by the browser when the run failed before the use
+        // case could persist anything, so a raw factory or adapter message must not survive here.
+        this.failures.set(command.jobId, toPublicFailureMessage(error, 'generationRunner.run'))
       } finally {
         this.statuses.delete(command.jobId)
       }

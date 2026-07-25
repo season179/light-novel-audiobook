@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -141,5 +141,59 @@ describe('workspace containment for served files', () => {
     await expect(new LocalWorkspace(linkPath).prepare()).rejects.toMatchObject({
       code: 'internal',
     })
+  })
+})
+
+/**
+ * Regression for the round-2 HIGH: containment used to be decided on a pathname and the file opened
+ * afterwards, so swapping the file for a symlink in between made `open()` follow it. A measured
+ * attack leaked outside files on 115 of 5,000 requests. Containment is now decided from the open
+ * descriptor, so the swap can only ever produce a refusal.
+ */
+describe('containment is bound to the opened descriptor, not the pathname', () => {
+  it('never serves an outside file while the path is swapped under it', async () => {
+    const job = await completeJob()
+    const file = await harness.api.openAudiobookFile({ jobId: job.jobId })
+    const realPath = file.descriptor.path
+    const realBytes = await readFile(realPath)
+    await file.close()
+
+    const linkStaging = `${realPath}.staging-link`
+    const fileStaging = `${realPath}.staging-file`
+    await writeFile(fileStaging, realBytes)
+
+    let leaked = 0
+    let served = 0
+    let refused = 0
+
+    // Alternate atomically via rename, exactly as the reviewer's live attack did.
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      if (attempt % 2 === 0) {
+        await rm(linkStaging, { force: true })
+        await symlink(outsidePath, linkStaging)
+        await rename(linkStaging, realPath)
+      } else {
+        await writeFile(fileStaging, realBytes)
+        await rename(fileStaging, realPath)
+      }
+
+      try {
+        const opened = await harness.api.openAudiobookFile({ jobId: job.jobId })
+        const chunks: Uint8Array[] = []
+        for await (const chunk of opened.body() as unknown as AsyncIterable<Uint8Array>) {
+          chunks.push(chunk)
+        }
+        await opened.close()
+        served += 1
+        if (Buffer.concat(chunks).toString('latin1').includes('secret material')) leaked += 1
+      } catch {
+        refused += 1
+      }
+    }
+
+    expect(served + refused).toBe(400)
+    expect(refused).toBeGreaterThan(0)
+    expect(served).toBeGreaterThan(0)
+    expect(leaked).toBe(0)
   })
 })

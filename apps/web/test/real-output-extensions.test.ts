@@ -1,13 +1,21 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type {
+  AssembleAudiobookRequest,
+  AudioAssembler,
   CompletedSegmentAudio,
   JobRepository,
   OutputReservation,
   ReusableSegmentQuery,
 } from '@light-novel-audiobook/application'
-import { type AudiobookJob, type Book, OutputVersion } from '@light-novel-audiobook/domain'
+import {
+  type AudiobookJob,
+  type AudiobookOutput,
+  type Book,
+  type ChapterAudioOutput,
+  OutputVersion,
+} from '@light-novel-audiobook/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { audioFileResponse } from '../src/server/audio-file-response.js'
 import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
@@ -18,9 +26,15 @@ import { createStubEpubBytes } from './support/stub-epub.js'
 import { waitForJobState } from './support/test-harness.js'
 
 /**
- * The merged FFmpeg assembler (#32) writes `<title>-vNNN.m4b` plus `<title>-vNNN-chNNNN.flac`, and
- * the reservation comes from the repository. This proves the routes serve those real extensions
- * without any change, so #21 can wire the real assembler behind them.
+ * The merged FFmpeg assembler (#32) writes `<title>-vNNN.m4b` plus `<title>-vNNN-chNNNN.flac`. This
+ * proves **this app's routes and content typing** serve those extensions with no change, so #21 can
+ * wire the real assembler behind them.
+ *
+ * It deliberately does NOT claim the real repository/assembler pair works together: merged SQLite
+ * persistence reserves extensionless chapter paths and the merged planner requires `.flac`, which is
+ * tracked as #43 and owned elsewhere. Both doubles here are local to this test because the shipped
+ * `FakeAudioAssembler` now refuses a reservation it cannot honour, which is the behaviour that stops
+ * a fake from hiding exactly that class of mismatch.
  */
 class FlacReservingRepository implements JobRepository {
   private readonly inner: InMemoryJobRepository
@@ -70,6 +84,29 @@ class FlacReservingRepository implements JobRepository {
   }
 }
 
+/** Writes placeholder bytes wherever the reservation points, including `.flac`. */
+class FlacWritingAssembler implements AudioAssembler {
+  readonly identity = 'test-double-flac-assembler/1'
+
+  async assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput> {
+    const { reservation } = request
+    const chapters: ChapterAudioOutput[] = []
+    for (const [index, entry] of request.chapters.entries()) {
+      const reserved = reservation.chapters[index]
+      if (reserved === undefined) throw new Error(`missing reservation at ${index}`)
+      const clips = await Promise.all(
+        entry.segments.map((segment) => readFile(segment.audio.wavPath)),
+      )
+      await mkdir(dirname(reserved.path), { recursive: true })
+      await writeFile(reserved.path, Buffer.concat(clips))
+      chapters.push({ chapterId: reserved.chapterId, path: reserved.path })
+    }
+    await mkdir(dirname(reservation.m4bPath), { recursive: true })
+    await writeFile(reservation.m4bPath, Buffer.from('placeholder audiobook'))
+    return { version: reservation.version, m4bPath: reservation.m4bPath, chapters }
+  }
+}
+
 let workspace: LocalWorkspace
 let root: string
 let api: AudiobookWebApi
@@ -81,6 +118,7 @@ describe('serving the real assembler’s output extensions', () => {
     api = await createAudiobookWebApi({
       workspace,
       jobs: new FlacReservingRepository(workspace),
+      createAudioAssembler: () => new FlacWritingAssembler(),
     })
   })
 

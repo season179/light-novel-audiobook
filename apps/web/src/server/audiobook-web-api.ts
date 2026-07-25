@@ -72,6 +72,8 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 
 const STREAM_CHUNK_BYTES = 64 * 1024
 
+export const QUEUED_RUN_MESSAGE = 'Waiting for the current generation to finish'
+
 /** A job is addressed by its EPUB content, so re-opening or refreshing always finds the same run. */
 export const deriveJobId = (uploadSha256: string): string => `job-${uploadSha256.slice(0, 24)}`
 
@@ -174,7 +176,28 @@ export class AudiobookWebApi {
       const failure = this.runner.startupFailure(input.jobId)
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
     }
-    return buildJobStateView(job.snapshot(), this.books.find(job.bookId))
+    const view = buildJobStateView(job.snapshot(), this.books.find(job.bookId))
+    return this.withRunnerStatus(view)
+  }
+
+  /**
+   * A retry or recovery is queued before the use case has written anything, so the stored snapshot is
+   * still the previous terminal one. Reporting that verbatim tells the page the job is inactive, it
+   * stops polling, and a run that is about to start looks like a hang. While the runner holds the
+   * job, the view therefore reports the pending run and keeps the previous failure for context.
+   */
+  private withRunnerStatus(view: JobStateView): JobStateView {
+    const status = this.runner.status(view.jobId)
+    if (status === 'idle' || view.active) return view
+    const message = status === 'queued' ? QUEUED_RUN_MESSAGE : 'Starting generation'
+    return {
+      ...view,
+      state: 'pending',
+      stageLabel: message,
+      latestMessage: message,
+      active: true,
+      finished: false,
+    }
   }
 
   async requireJobState(input: { readonly jobId: string }): Promise<JobStateView> {
@@ -290,7 +313,7 @@ export class AudiobookWebApi {
 
   private pendingJobView(jobId: string): JobStateView {
     const queued = this.runner.status(jobId) === 'queued'
-    const message = queued ? 'Waiting for the current generation to finish' : 'Starting generation'
+    const message = queued ? QUEUED_RUN_MESSAGE : 'Starting generation'
     return {
       jobId,
       state: 'pending',

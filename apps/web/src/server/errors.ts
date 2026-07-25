@@ -1,3 +1,5 @@
+import { DomainError } from '@light-novel-audiobook/domain'
+
 /**
  * Serializable failure vocabulary for the local web API. Every boundary failure the browser can act
  * on gets a stable code, so a caller switches on `code` and never parses error prose.
@@ -46,15 +48,23 @@ const UNEXPECTED_MESSAGE =
   'The local server hit an unexpected error. Check the server log for details.'
 
 /**
- * Only messages this layer authored reach the browser. An unexpected adapter failure — a SQLite
- * path, a model stack trace — is logged here and replaced with a generic message, because the
- * browser is not the place to publish infrastructure internals.
+ * Only messages this codebase authored reach the browser. `WebApiError` and `DomainError` are ours
+ * by construction and stay intact; anything else — a SQLite path, a model key, an FFmpeg stack — is
+ * logged here and replaced, because the browser is not the place to publish infrastructure internals.
  */
 export const toPublicFailure = (error: unknown, context: string): WebApiFailure => {
   if (error instanceof WebApiError) return error.failure
+  if (error instanceof DomainError) return { code: 'generation_rejected', message: error.message }
   console.error(`[audiobook-web-api] unexpected failure in ${context}:`, error)
   return { code: 'internal', message: UNEXPECTED_MESSAGE }
 }
+
+/**
+ * The message an adapter failure is allowed to carry once it leaves this boundary. Used before a
+ * failure can be persisted into job state, since job state is read straight back by the browser.
+ */
+export const toPublicFailureMessage = (error: unknown, context: string): string =>
+  toPublicFailure(error, context).message
 
 /** Normalizes one operation into `WebApiResult`. Used at every boundary, with no exceptions. */
 export const toWebApiResult = async <T>(

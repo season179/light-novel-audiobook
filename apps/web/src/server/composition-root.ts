@@ -7,6 +7,7 @@ import {
   type SpeechEngine,
 } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
+import { withSanitizedFailures } from './adapter-failure-boundary.js'
 import { AudiobookWebApi } from './audiobook-web-api.js'
 import { BookReadModelStore, ProjectingJobRepository } from './book-read-model.js'
 import { EpubUploadStore } from './epub-upload-store.js'
@@ -62,16 +63,30 @@ export const createAudiobookWebApi = async (
   options: AudiobookWebApiOptions = {},
 ): Promise<AudiobookWebApi> => {
   const workspace = options.workspace ?? (await createWorkspace(options.workspaceRoot))
+  const voices = options.voices ?? createM1VoiceCast()
   const books = new BookReadModelStore()
+  // Sanitized before projection: a raw adapter message must not reach job state, which the browser
+  // reads back directly.
   const jobs = new ProjectingJobRepository(
-    options.jobs ?? new InMemoryJobRepository(workspace),
+    withSanitizedFailures.jobs(options.jobs ?? new InMemoryJobRepository(workspace)),
     books,
   )
 
   const createEpubExtractor = options.createEpubExtractor ?? (() => new FakeEpubExtractor())
   const createDirectorModel = options.createDirectorModel ?? (() => new FakeDirectorModel())
-  const createSpeechEngine = options.createSpeechEngine ?? (() => new FakeSpeechEngine(workspace))
   const createAudioAssembler = options.createAudioAssembler ?? (() => new FakeAudioAssembler())
+  const createSpeechEngine =
+    options.createSpeechEngine ??
+    (() =>
+      new FakeSpeechEngine(workspace, {
+        fallbackVoiceProfileId: voices.fallback.id,
+        // M1 STAND-IN, and the one place to change when the approval workflow lands. The fake — like
+        // the real Qwen adapter — refuses fallback speech without a per-segment human approval, and
+        // this app has no approval action yet, so it mints an identity-bound record per segment and
+        // reports them on `autoApprovedFallbacks`. Real Qwen accepts no such policy: #21 must supply
+        // persisted `fallbackApprovals` or every book with an unresolved speaker will fail.
+        unreviewedFallbackPolicy: 'auto-approve',
+      }))
 
   // One use case per run, with adapters that have not been released or batched yet.
   const runner = new GenerationRunner(async () => {
@@ -82,10 +97,10 @@ export const createAudiobookWebApi = async (
       createAudioAssembler(),
     ])
     return new GenerateAudiobook({
-      epubExtractor,
-      directorModel,
-      speechEngine,
-      audioAssembler,
+      epubExtractor: withSanitizedFailures.epubExtractor(epubExtractor),
+      directorModel: withSanitizedFailures.directorModel(directorModel),
+      speechEngine: withSanitizedFailures.speechEngine(speechEngine),
+      audioAssembler: withSanitizedFailures.audioAssembler(audioAssembler),
       jobs,
     })
   })
@@ -96,7 +111,7 @@ export const createAudiobookWebApi = async (
     jobs,
     books,
     runner,
-    voices: options.voices ?? createM1VoiceCast(),
+    voices,
   })
 }
 
