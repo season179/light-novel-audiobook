@@ -1,5 +1,5 @@
-import { mkdirSync, readdirSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
   CompletedSegmentAudio,
@@ -15,6 +15,7 @@ import {
   DomainError,
   OutputVersion,
 } from '@light-novel-audiobook/domain'
+import { classifySqliteFailure, withTransaction } from './transaction.js'
 import type { WorkspaceLayout } from './workspace.js'
 import { hashText, outputBaseName, sha256OfFile, toSafeAbsolute } from './workspace.js'
 
@@ -231,24 +232,40 @@ export class SqliteJobRepository implements JobRepository {
     const baseName = outputBaseName(book.title)
 
     const chapterOutputs = book.chapters.map((ch) => {
+      // Validated before the id is ever used to build a path. A NUL, a separator or a control
+      // character used to pass the lexical assertion, get committed, and only then be rejected
+      // by mkdirSync -- consuming a version on every retry and wedging the book permanently.
+      assertSafePathComponent(ch.id, `Chapter id for book ${book.id}`)
       const dir = join(this.layout.chapterDir, `ch-${ch.id}`)
       const stem = `${baseName}-ch${String(ch.position).padStart(3, '0')}`
       return { chapterId: ch.id, dir, stem }
     })
+
+    // Prove the directories that will be written to are real directories inside the workspace,
+    // creating them if needed. Lexical containment is not enough: layoutFor canonicalizes only
+    // the root, so a symlink at any directory *below* it passes a string prefix check and would
+    // redirect the assembler's writes outside the workspace. Directories left behind by a lost
+    // claim are harmless.
+    const realRoot = realpathSync(this.layout.root)
+    ensureContainedDirectory(realRoot, this.layout.outputDir)
+    for (const ch of chapterOutputs) {
+      ensureContainedDirectory(realRoot, ch.dir)
+    }
 
     // Start from the highest version already claimed for this book.
     const existing = this.db
       .prepare('SELECT MAX(version) AS v FROM output_reservations WHERE book_id = ?')
       .get(book.id) as { v: number | null } | undefined
 
-    // Existing chapter files are read once: nothing writes into these directories until the
+    // Existing entries are read once: nothing writes into these directories until the
     // reservation has been claimed, so the listings cannot go stale inside this loop.
     const chapterEntries = new Map(
-      chapterOutputs.map((ch) => [ch.dir, listExistingFiles(ch.dir)] as const),
+      chapterOutputs.map((ch) => [ch.dir, listExistingEntries(ch.dir)] as const),
     )
 
     let candidate = (existing?.v ?? 0) + 1
-    let busyRetries = 0
+    let busyAttempts = 0
+    const deadline = Date.now() + CLAIM_BUSY_DEADLINE_MS
 
     while (true) {
       const label = versionLabel(candidate)
@@ -258,13 +275,13 @@ export class SqliteJobRepository implements JobRepository {
         path: join(ch.dir, `${ch.stem}-${label}`),
       }))
 
-      assertReservablePaths(this.layout.root, [m4bPath, ...chapterPaths.map((cp) => cp.path)])
+      assertReservablePaths(realRoot, [m4bPath, ...chapterPaths.map((cp) => cp.path)])
 
       // Belt-and-braces now that the reservation row is the durable claim: never name a path
-      // that already holds a file, however that file got there (restored database, deleted
-      // database, output copied in by hand).
+      // that already holds anything, however it got there (restored database, deleted database,
+      // output copied in by hand).
       const takenOnDisk =
-        fileExists(m4bPath) ||
+        pathOccupied(m4bPath) ||
         chapterOutputs.some((ch) =>
           hasVersionedOutput(chapterEntries.get(ch.dir) ?? [], `${ch.stem}-${label}`),
         )
@@ -279,47 +296,49 @@ export class SqliteJobRepository implements JobRepository {
       const chapterPathsJson = JSON.stringify(
         chapterPaths.map((cp) => ({ chapterId: cp.chapterId, path: cp.path })),
       )
-      const outcome = withTransaction(this.db, (): 'claimed' | 'taken' | 'busy' => {
-        const dbConflict = this.db
-          .prepare('SELECT 1 FROM output_reservations WHERE book_id = ? AND version = ?')
-          .get(book.id, candidate)
-        if (dbConflict) return 'taken'
 
-        try {
-          this.db
-            .prepare(
-              'INSERT INTO output_reservations (book_id, version, m4b_path, chapter_paths_json) VALUES (?, ?, ?, ?)',
-            )
-            .run(book.id, candidate, m4bPath, chapterPathsJson)
-        } catch (error) {
-          // PRIMARY KEY(book_id, version) is what actually guarantees uniqueness, so losing
-          // this race is an ordinary outcome: take the next version instead of failing the run.
-          const failure = classifySqliteFailure(error)
-          if (failure === 'constraint') return 'taken'
-          if (failure === 'busy') return 'busy'
-          throw error
-        }
-        return 'claimed'
-      })
+      let outcome: 'claimed' | 'taken'
+      try {
+        outcome = withTransaction(this.db, (): 'claimed' | 'taken' => {
+          const dbConflict = this.db
+            .prepare('SELECT 1 FROM output_reservations WHERE book_id = ? AND version = ?')
+            .get(book.id, candidate)
+          if (dbConflict) return 'taken'
 
-      if (outcome === 'taken') {
-        candidate += 1
-        continue
-      }
-      if (outcome === 'busy') {
-        busyRetries += 1
-        if (busyRetries > BUSY_RETRY_LIMIT) {
+          try {
+            this.db
+              .prepare(
+                'INSERT INTO output_reservations (book_id, version, m4b_path, chapter_paths_json) VALUES (?, ?, ?, ?)',
+              )
+              .run(book.id, candidate, m4bPath, chapterPathsJson)
+          } catch (error) {
+            // PRIMARY KEY(book_id, version) and UNIQUE(m4b_path) are what actually guarantee
+            // distinctness, so losing either race is an ordinary outcome: take the next version
+            // instead of failing the run. UNIQUE(m4b_path) is how a second book sharing a title
+            // gets pushed off v001.
+            if (classifySqliteFailure(error) === 'constraint') return 'taken'
+            throw error
+          }
+          return 'claimed'
+        })
+      } catch (error) {
+        // Classified around the WHOLE call, not just around the INSERT: BEGIN IMMEDIATE waits
+        // out busy_timeout and then fails, and so can COMMIT -- both outside the callback and
+        // outside its try. Catching only the INSERT meant the retry budget was never consulted.
+        if (classifySqliteFailure(error) !== 'busy') throw error
+        if (Date.now() >= deadline) {
           throw new DomainError(
             `Could not reserve an output version for book ${book.id}; the workspace database stayed locked`,
           )
         }
+        await delay(backoffMs(busyAttempts))
+        busyAttempts += 1
         continue
       }
 
-      // After the claim commits, so a failed commit cannot leave directories behind.
-      mkdirSync(dirname(m4bPath), { recursive: true })
-      for (const ch of chapterOutputs) {
-        mkdirSync(ch.dir, { recursive: true })
+      if (outcome === 'taken') {
+        candidate += 1
+        continue
       }
 
       return {
@@ -339,72 +358,41 @@ export class SqliteJobRepository implements JobRepository {
 // Private helpers
 // ============================================================
 
-/** How many times a claim may lose a lock race before the run gives up. */
-const BUSY_RETRY_LIMIT = 5
+/** Total time a claim may spend losing lock races before the run gives up. */
+const CLAIM_BUSY_DEADLINE_MS = 30_000
 
-/** Primary SQLite result codes. node:sqlite reports the *extended* code on `errcode`. */
-const SQLITE_BUSY = 5
-const SQLITE_LOCKED = 6
-const SQLITE_CONSTRAINT = 19
-
-/** Open transaction depth per connection, so a nested call nests instead of failing. */
-const transactionDepth = new WeakMap<DatabaseSync, number>()
-
-/**
- * Run `work` inside a SQLite transaction. node:sqlite's DatabaseSync exposes no
- * `transaction()` helper, so BEGIN/COMMIT/ROLLBACK are issued explicitly here. A nested call
- * uses a savepoint: `BEGIN` inside a transaction is an error, and rolling the outer transaction
- * back on the inner unit's behalf would silently discard work the caller still owns.
- */
-function withTransaction<T>(db: DatabaseSync, work: () => T): T {
-  const depth = transactionDepth.get(db) ?? 0
-  const savepoint = depth > 0 ? `lna_sp_${depth}` : null
-
-  // BEGIN IMMEDIATE, not a deferred BEGIN: every unit of work here writes, and several read
-  // before writing. A deferred transaction takes a read snapshot first, so once another process
-  // commits, the write fails with SQLITE_BUSY_SNAPSHOT -- which busy_timeout does NOT wait out.
-  // Taking the write lock up front is what makes busy_timeout actually apply.
-  //
-  // The opening statement stays outside the try. If it fails there is no transaction or
-  // savepoint belonging to *this* call, and issuing ROLLBACK would destroy the caller's.
-  db.exec(savepoint === null ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${savepoint}`)
-  transactionDepth.set(db, depth + 1)
-  try {
-    const result = work()
-    // Inside the try, so a failed commit/release still unwinds below.
-    db.exec(savepoint === null ? 'COMMIT' : `RELEASE ${savepoint}`)
-    transactionDepth.set(db, depth)
-    return result
-  } catch (error) {
-    transactionDepth.set(db, depth)
-    try {
-      if (savepoint === null) {
-        db.exec('ROLLBACK')
-      } else {
-        // ROLLBACK TO rewinds but leaves the savepoint active; RELEASE pops it.
-        db.exec(`ROLLBACK TO ${savepoint}`)
-        db.exec(`RELEASE ${savepoint}`)
-      }
-    } catch {
-      // Preserve the causative error; a failed rollback should not mask it.
-    }
-    throw error
-  }
+/** NUL and the C0 controls, DEL and the C1 controls, and both path separators. */
+function isUnsafePathCharacter(character: string): boolean {
+  if (character === '/' || character === '\\') return true
+  const code = character.codePointAt(0) ?? 0
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
 }
 
-/** Map a node:sqlite failure onto the two outcomes a claim can legitimately retry. */
-function classifySqliteFailure(error: unknown): 'busy' | 'constraint' | null {
-  if (typeof error !== 'object' || error === null) return null
-  const { errcode } = error as { errcode?: unknown }
-  if (typeof errcode !== 'number') return null
-  switch (errcode & 0xff) {
-    case SQLITE_BUSY:
-    case SQLITE_LOCKED:
-      return 'busy'
-    case SQLITE_CONSTRAINT:
-      return 'constraint'
-    default:
-      return null
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+
+/** Escalating waits between lock retries. A tight retry loop with no delay is not a retry. */
+function backoffMs(attempt: number): number {
+  return Math.min(25 * 2 ** attempt, 500)
+}
+
+/**
+ * A value that will become one path component must not be able to reshape the path or produce a
+ * path the operating system rejects. A NUL is the dangerous case: it satisfies every lexical
+ * check, SQLite stores it happily, and only `mkdirSync` refuses it -- which used to happen after
+ * the reservation had committed, so every retry consumed another version and failed identically.
+ */
+function assertSafePathComponent(value: string, label: string): void {
+  if (value.length === 0) {
+    throw new DomainError(`${label} must not be empty`)
+  }
+  if ([...value].some(isUnsafePathCharacter)) {
+    // JSON.stringify so a control character is shown escaped rather than embedded in the message.
+    throw new DomainError(
+      `${label} must not contain path separators or control characters: ${JSON.stringify(value)}`,
+    )
   }
 }
 
@@ -414,40 +402,95 @@ function classifySqliteFailure(error: unknown): 'busy' | 'constraint' | null {
  * silently rewritten rather than rejected: the book encodes to a different location, and
  * GenerateAudiobook then rejects the output on an exact path compare -- after hours of
  * rendering, leaving files that wedge every retry. Fail here, before anything is rendered.
+ *
+ * This is the lexical half only. `ensureContainedDirectory` proves the physical half, because
+ * `resolve()` does not follow symlinks and this check cannot see one.
  */
-function assertReservablePaths(root: string, paths: readonly string[]): void {
+function assertReservablePaths(realRoot: string, paths: readonly string[]): void {
   for (const path of paths) {
     if (!isAbsolute(path) || resolve(path) !== path) {
       throw new DomainError(`Reserved output path must be absolute and canonical: ${path}`)
     }
-    // Also catches a chapter id whose separators or `..` segments join() already collapsed.
-    if (!path.startsWith(`${root}${sep}`)) {
+    if (!path.startsWith(`${realRoot}${sep}`)) {
       throw new DomainError(`Reserved output path must stay inside the workspace: ${path}`)
     }
   }
 }
 
 /**
- * File names directly inside `dir`, or an empty list when it does not exist yet. Directories and
+ * Prove that `directory` is a real directory inside `realRoot`, creating it if missing, and that
+ * no component along the way is a symlink. `layoutFor` canonicalizes only the root, so a symlink
+ * at `chapters/ch-<id>` or at `output` itself satisfies a lexical prefix check while pointing
+ * anywhere on the filesystem -- and the assembler would then write there.
+ *
+ * Walks one component at a time and never uses `recursive: true`, because a recursive mkdir
+ * happily traverses a symlink instead of reporting it.
+ */
+function ensureContainedDirectory(realRoot: string, directory: string): void {
+  const relativePath = relative(realRoot, directory)
+  if (relativePath.length === 0) return
+  if (isAbsolute(relativePath) || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
+    throw new DomainError(`Reserved output directory must stay inside the workspace: ${directory}`)
+  }
+
+  let current = realRoot
+  for (const part of relativePath.split(sep)) {
+    current = join(current, part)
+    let entry = lstatSync(current, { throwIfNoEntry: false })
+    if (entry === undefined) {
+      try {
+        mkdirSync(current)
+      } catch (error) {
+        // Another process may have created it between the lstat and the mkdir.
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+      entry = lstatSync(current, { throwIfNoEntry: false })
+    }
+    if (entry === undefined || entry.isSymbolicLink() || !entry.isDirectory()) {
+      throw new DomainError(
+        `Reserved output directory must be a real directory inside the workspace: ${current}`,
+      )
+    }
+  }
+
+  // With no symlink component, the canonical path must equal the lexical one. Belt-and-braces
+  // against anything the component walk above could have missed.
+  if (realpathSync(directory) !== directory) {
+    throw new DomainError(
+      `Reserved output directory resolves outside its own path: ${directory} -> ${realpathSync(directory)}`,
+    )
+  }
+}
+
+/**
+ * Whether anything at all occupies this exact path. Uses `lstat`, so a directory, or a symlink
+ * even a dangling one, counts: the assembler cannot create its output over any of them, and a
+ * reservation that names one is a version consumed for nothing.
+ */
+function pathOccupied(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined
+}
+
+/**
+ * Entry names directly inside `dir`, or an empty list when it does not exist yet. Every entry
+ * type is reported -- a directory at an output path blocks it just as a file does -- but
  * dot-entries are skipped: #32 creates `.lna-assembly-*` staging directories beside a reserved
  * output and a SIGKILL can leave one behind, and a leftover must never read as a finished output.
  */
-function listExistingFiles(dir: string): readonly string[] {
+function listExistingEntries(dir: string): readonly string[] {
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
+    return readdirSync(dir).filter((name) => !name.startsWith('.'))
   } catch {
     return []
   }
 }
 
 /**
- * Whether a file already exists named `<versionedStem>.<ext>` for this exact version. The
- * assembler picks the chapter master's container, so matching a single hard-coded extension here
- * would embed a cross-package assumption this package cannot verify. The version suffix is
- * required and the extension must be alphanumeric, so no other version and no staging leftover
- * can match.
+ * Whether anything is already named `<versionedStem>.<ext>` for this exact version, whatever its
+ * entry type. The assembler picks the chapter master's container, so matching a single hard-coded
+ * extension here would embed a cross-package assumption this package cannot verify. The version
+ * suffix is required and the extension must be alphanumeric, so no other version can match, and
+ * `listExistingEntries` has already dropped the dot-prefixed staging leftovers.
  */
 function hasVersionedOutput(entries: readonly string[], versionedStem: string): boolean {
   if (!/-v\d{3,}$/.test(versionedStem)) return false
@@ -495,15 +538,6 @@ function segmentRowMatches(want: DesiredSegmentRow, row: SegmentRow | undefined)
 
 function versionLabel(v: number): string {
   return `v${String(v).padStart(3, '0')}`
-}
-
-function fileExists(path: string): boolean {
-  try {
-    const s = statSync(path)
-    return s.isFile()
-  } catch {
-    return false
-  }
 }
 
 function validateArtifact(

@@ -1,8 +1,19 @@
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import {
   type CompletedSegmentAudio,
   createRenderInputIdentity,
@@ -158,6 +169,34 @@ const makePlainBook = (count: number): Book => {
     coverPath: null,
     source: { epubPath: '/uploads/plain.epub', sha256: SOURCE_HASH },
     chapters: [chapter],
+  })
+}
+
+/** A distinct book -- different source hash, so a different book id -- under a chosen title. */
+const makeTitledBook = (sourceHash: string, title: string): Book => {
+  const bookId = StableIds.book(sourceHash)
+  const chapterId = StableIds.chapter(bookId, 1)
+  return new Book({
+    id: bookId,
+    title,
+    author: null,
+    coverPath: null,
+    source: { epubPath: `/uploads/${sourceHash.slice(0, 8)}.epub`, sha256: sourceHash },
+    chapters: [
+      new Chapter({
+        id: chapterId,
+        bookId,
+        position: 1,
+        title: 'One',
+        sourcePassages: [
+          new SourcePassage({
+            id: StableIds.passage(chapterId, 1),
+            chapterId,
+            sourceText: 'Only passage.',
+          }),
+        ],
+      }),
+    ],
   })
 }
 
@@ -710,5 +749,222 @@ describe('SqliteJobRepository contract (issue #27)', () => {
       n: number
     }
     expect(segmentRows.n).toBe(6)
+  })
+
+  // ==========================================================================
+  // Round 2 (second review, concurrency surface)
+  // ==========================================================================
+
+  // F1: the ledger is unique on (book_id, version) but the M4B name derives only from the
+  // normalized title, so two different books sharing a title were handed the same m4bPath --
+  // and the filesystem guard cannot help, because a reservation precedes file creation.
+  it('never hands the same output path to two different books that share a title', async () => {
+    const first = makeTitledBook('a'.repeat(64), 'Identical Title')
+    const second = makeTitledBook('b'.repeat(64), 'Identical Title')
+    expect(first.id).not.toBe(second.id)
+
+    const r1 = await harness.repo.reserveNextOutput(first)
+    const r2 = await harness.repo.reserveNextOutput(second)
+
+    expect(r2.m4bPath).not.toBe(r1.m4bPath)
+    // The second book takes v002 as its first output. Harmless, and it keeps the guarantee.
+    expect(r1.version.value).toBe(1)
+    expect(r2.version.value).toBe(2)
+
+    // Every path in both reservations must be pairwise distinct, chapter masters included:
+    // two assemblers running at once must not be able to write the same byte.
+    const all = [
+      r1.m4bPath,
+      ...r1.chapters.map((chapter) => chapter.path),
+      r2.m4bPath,
+      ...r2.chapters.map((chapter) => chapter.path),
+    ]
+    expect(new Set(all).size).toBe(all.length)
+
+    // A third book with the same title keeps climbing rather than colliding.
+    const third = makeTitledBook('c'.repeat(64), 'Identical Title')
+    const r3 = await harness.repo.reserveNextOutput(third)
+    expect(r3.version.value).toBe(3)
+    expect([r1.m4bPath, r2.m4bPath]).not.toContain(r3.m4bPath)
+  })
+
+  // F1, second axis: distinct titles that normalize to the same base name collide identically.
+  it('separates output paths for books whose titles normalize to the same base name', async () => {
+    const first = makeTitledBook('a'.repeat(64), 'Resume Story')
+    const second = makeTitledBook('b'.repeat(64), 'resume   story!!')
+
+    const r1 = await harness.repo.reserveNextOutput(first)
+    const r2 = await harness.repo.reserveNextOutput(second)
+    expect(r2.m4bPath).not.toBe(r1.m4bPath)
+  })
+
+  // F2: migrateSchema read the current version, ran DDL, and stamped the version without a
+  // transaction, so two processes opening a fresh workspace both saw version 0 and the loser
+  // died with `table books already exists`.
+  it('survives many processes opening the same fresh workspace simultaneously', async () => {
+    const fresh = mkdtempSync(join(tmpdir(), 'lna-open-race-'))
+    createdRoots.push(fresh)
+    const barrier = join(fresh, 'go')
+    const child = join(dirname(fileURLToPath(import.meta.url)), 'open-workspace-child.ts')
+    const run = promisify(execFile)
+
+    const openers = Array.from({ length: 8 }, () =>
+      run(process.execPath, ['--import', 'tsx', child, join(fresh, 'ws'), barrier], {
+        maxBuffer: 1 << 22,
+      })
+        .then((result) => result.stdout.trim())
+        .catch((error: Error & { stdout?: string }) => (error.stdout ?? '').trim()),
+    )
+
+    // Let every child boot tsx before releasing them onto the migration together.
+    await new Promise((done) => setTimeout(done, 3000))
+    writeFileSync(barrier, 'go')
+    const outputs = await Promise.all(openers)
+
+    const results = outputs.map((output) => {
+      try {
+        return JSON.parse(output.split('\n').at(-1) ?? '') as {
+          ok: boolean
+          message?: string
+          schemaVersion?: number
+        }
+      } catch {
+        return { ok: false, message: `unparseable output: ${output.slice(0, 200)}` }
+      }
+    })
+
+    const failures = results.filter((result) => !result.ok).map((result) => result.message)
+    expect(failures).toEqual([])
+    expect(results.every((result) => result.schemaVersion === 1)).toBe(true)
+  }, 60_000)
+
+  // F3: containment was purely lexical. layoutFor realpaths only the root, so a symlink at a
+  // directory *below* the root passed the string prefix check and the assembler would have
+  // written outside the workspace.
+  it('refuses to reserve when a chapter directory is a symlink out of the workspace', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'lna-outside-'))
+    createdRoots.push(outside)
+
+    const { book } = makeBook()
+    const chapterId = book.chapters[0]?.id
+    if (chapterId === undefined) throw new Error('fixture chapter missing')
+
+    mkdirSync(harness.layout.chapterDir, { recursive: true })
+    symlinkSync(outside, join(harness.layout.chapterDir, `ch-${chapterId}`), 'dir')
+
+    await expect(harness.repo.reserveNextOutput(book)).rejects.toBeInstanceOf(DomainError)
+    const rows = harness.db
+      .prepare('SELECT COUNT(*) AS n FROM output_reservations WHERE book_id = ?')
+      .get(book.id) as { n: number }
+    expect(rows.n).toBe(0)
+  })
+
+  it('refuses to reserve when the output directory is a symlink out of the workspace', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'lna-outside-out-'))
+    createdRoots.push(outside)
+
+    const { book } = makeBook()
+    rmSync(harness.layout.outputDir, { recursive: true, force: true })
+    symlinkSync(outside, harness.layout.outputDir, 'dir')
+
+    await expect(harness.repo.reserveNextOutput(book)).rejects.toBeInstanceOf(DomainError)
+  })
+
+  it('resolves reserved paths to real directories inside the workspace', async () => {
+    const { book } = makeBook()
+    const reservation = await harness.repo.reserveNextOutput(book)
+    const realRoot = realpathSync(harness.layout.root)
+
+    // The canonical parent of every reserved path must sit under the canonical root, so a
+    // symlink anywhere below the root cannot redirect a write.
+    for (const path of [reservation.m4bPath, ...reservation.chapters.map((c) => c.path)]) {
+      const realParent = realpathSync(dirname(path))
+      expect(realParent === realRoot || realParent.startsWith(`${realRoot}${sep}`)).toBe(true)
+    }
+  })
+
+  // F5: a NUL passed the lexical assertion, SQLite accepted the row, and mkdirSync then threw
+  // *after* commit -- consuming a version on every retry and wedging the book permanently.
+  it('rejects a chapter id with a NUL or separator before claiming a version', async () => {
+    const badIds = [
+      'chapter\u0000null',
+      'chapter/slash',
+      'chapter\\backslash',
+      'chapter\u0007bell',
+      'chapter\nnewline',
+    ]
+    for (const badId of badIds) {
+      const chapter = new Chapter({
+        id: badId,
+        bookId: BOOK_ID,
+        position: 1,
+        title: 'Bad',
+        sourcePassages: [
+          new SourcePassage({ id: `${badId}-p1`, chapterId: badId, sourceText: 'Text.' }),
+        ],
+      })
+      const book = new Book({
+        id: BOOK_ID,
+        title: 'Bad Chapter Book',
+        author: null,
+        coverPath: null,
+        source: { epubPath: '/uploads/bad.epub', sha256: SOURCE_HASH },
+        chapters: [chapter],
+      })
+
+      await expect(harness.repo.reserveNextOutput(book)).rejects.toBeInstanceOf(DomainError)
+      // Nothing may be committed, or the next attempt burns another version and fails the same way.
+      const rows = harness.db
+        .prepare('SELECT COUNT(*) AS n FROM output_reservations WHERE book_id = ?')
+        .get(BOOK_ID) as { n: number }
+      expect(rows.n).toBe(0)
+    }
+  })
+
+  // F6: fileExists required stat().isFile(), so a *directory* sitting at the exact reserved
+  // path read as free. Assembly then cannot create the output and the version is consumed.
+  it('treats any entry at the exact output path as occupied, not just a file', async () => {
+    const { book } = makeBook()
+
+    // outputBaseName('Resume Story') === 'resume-story'
+    mkdirSync(join(harness.layout.outputDir, 'resume-story-v001.m4b'), { recursive: true })
+
+    const reservation = await harness.repo.reserveNextOutput(book)
+    expect(reservation.version.value).toBe(2)
+    expect(reservation.m4bPath.endsWith('resume-story-v002.m4b')).toBe(true)
+  })
+
+  it('treats a dangling symlink at the exact output path as occupied', async () => {
+    const { book } = makeBook()
+    symlinkSync(
+      join(harness.layout.outputDir, 'nowhere-at-all'),
+      join(harness.layout.outputDir, 'resume-story-v001.m4b'),
+    )
+
+    const reservation = await harness.repo.reserveNextOutput(book)
+    expect(reservation.version.value).toBe(2)
+  })
+
+  it('treats a non-dot directory at an exact chapter master path as occupied', async () => {
+    const { book } = makeBook()
+    const chapterId = book.chapters[0]?.id
+    if (chapterId === undefined) throw new Error('fixture chapter missing')
+    const chapterDir = join(harness.layout.chapterDir, `ch-${chapterId}`)
+    mkdirSync(join(chapterDir, 'resume-story-ch001-v001.flac'), { recursive: true })
+
+    const reservation = await harness.repo.reserveNextOutput(book)
+    expect(reservation.version.value).toBe(2)
+  })
+
+  it('still ignores a dot-prefixed assembly staging directory beside a reserved output', async () => {
+    const { book } = makeBook()
+    const chapterId = book.chapters[0]?.id
+    if (chapterId === undefined) throw new Error('fixture chapter missing')
+    const chapterDir = join(harness.layout.chapterDir, `ch-${chapterId}`)
+    // #32 leaves these behind on SIGKILL; they must never read as a finished output.
+    mkdirSync(join(chapterDir, '.lna-assembly-abc123'), { recursive: true })
+
+    const reservation = await harness.repo.reserveNextOutput(book)
+    expect(reservation.version.value).toBe(1)
   })
 })

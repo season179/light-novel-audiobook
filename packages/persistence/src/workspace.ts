@@ -44,22 +44,51 @@ export function openWorkspace(layout: WorkspaceLayout): DatabaseSync {
   mkdirSync(layout.outputDir, { recursive: true })
 
   const db = new DatabaseSync(layout.dbPath)
-  // busy_timeout FIRST: switching the journal mode needs an exclusive lock, so two processes
-  // opening a fresh workspace at the same moment would otherwise both die with
-  // `database is locked` before any timeout was in effect.
-  db.exec('PRAGMA busy_timeout = 5000')
-  // WAL then lets a reader and a writer coexist. PLAN.md has the web app and a separate worker
-  // both submitting jobs, so two processes on one workspace is expected. The mode is a durable
-  // property of the file, so this is a no-op once set -- and it is only an optimization: a
-  // filesystem that cannot support WAL (a Windows drive mounted into WSL2, a network share)
-  // keeps the rollback journal, which is still correct.
+  try {
+    // busy_timeout FIRST: switching the journal mode needs an exclusive lock, so two processes
+    // opening a fresh workspace at the same moment would otherwise both die with
+    // `database is locked` before any timeout was in effect.
+    db.exec('PRAGMA busy_timeout = 5000')
+    enableWriteAheadLog(db, layout.dbPath)
+    migrateSchema(db)
+  } catch (error) {
+    // Never leak the handle when initialization fails: a caller that retries would otherwise
+    // accumulate open connections, each still holding locks on the workspace.
+    try {
+      db.close()
+    } catch {
+      // Already unusable; the initialization error below is the one that matters.
+    }
+    throw error
+  }
+  return db
+}
+
+/**
+ * Switch to WAL so a reader and a writer can coexist. PLAN.md has the web app and a separate
+ * worker both submitting jobs, so two processes on one workspace is expected.
+ *
+ * The mode is a durable property of the file, so this is a no-op once set. It is only an
+ * optimization -- a filesystem that cannot support WAL keeps the rollback journal and remains
+ * correct -- so a failure here must not fail the open. But it must not be invisible either: the
+ * effective mode is read back so a workspace that quietly fell back can be diagnosed.
+ */
+function enableWriteAheadLog(db: DatabaseSync, dbPath: string): void {
+  let reason: string | null = null
   try {
     db.exec('PRAGMA journal_mode = WAL')
-  } catch {
-    // Keep the existing journal mode; busy_timeout above is what prevents the hard failure.
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error)
   }
-  migrateSchema(db)
-  return db
+
+  const effective = (db.prepare('PRAGMA journal_mode').get() as { journal_mode?: string })
+    .journal_mode
+  if (effective?.toLowerCase() === 'wal') return
+
+  console.warn(
+    `[persistence] ${dbPath} is using journal_mode=${effective ?? 'unknown'} instead of WAL` +
+      `${reason === null ? '' : `: ${reason}`}. Concurrent access will serialize more aggressively.`,
+  )
 }
 
 /** SHA-256 of a file on disk. */
