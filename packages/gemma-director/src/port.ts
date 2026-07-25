@@ -163,6 +163,11 @@ export interface DirectorProgressStore {
 
 export interface DirectionOptions {
   readonly signal?: AbortSignal
+  /**
+   * Whole-chapter deadline in milliseconds, spanning all window requests and retries. Defaults
+   * to 60 minutes, the representative-chapter budget PLAN locks. The per-request timeout is the
+   * adapter-owned `requestTimeoutMs` constructor setting.
+   */
   readonly timeoutMs?: number
 }
 

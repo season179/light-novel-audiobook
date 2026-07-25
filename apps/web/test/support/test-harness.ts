@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { DirectChapterOptions } from '@light-novel-audiobook/application'
 import type { AudiobookClient } from '../../src/client/audiobook-client.js'
 import type { AudiobookWebApi } from '../../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../../src/server/composition-root.js'
@@ -53,6 +54,8 @@ export interface TestHarnessOptions {
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
   /** Defaults to the composition root's M1 stand-in; set `'reject'` to test the real contract. */
   readonly unreviewedFallbackPolicy?: 'reject' | 'auto-approve' | undefined
+  /** Operational direction options the composition root forwards to every generation command. */
+  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
@@ -81,6 +84,7 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
       directors.push(director)
       return director
     },
+    ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
   })
 
   return {

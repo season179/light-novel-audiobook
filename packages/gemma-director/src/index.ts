@@ -33,6 +33,7 @@ export {
   classifyDirectorError,
   DirectorError,
   type DirectorErrorCode,
+  directorErrorChainText,
 } from './errors.js'
 export {
   GemmaDirectorModel,

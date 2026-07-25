@@ -38,6 +38,16 @@ interface ErrorFacts {
   readonly providerCode: string | undefined
 }
 
+/**
+ * The normalized lowercase text of an error and its whole causal chain (messages, names, and
+ * provider `code`/`type` fields). Classification consumes this; so does the truncation
+ * signature, which must see the provider's original `context_length_exceeded`-style wording
+ * that classification deliberately replaces with a stable message.
+ */
+export function directorErrorChainText(error: unknown): string {
+  return errorFacts(error).text
+}
+
 function errorFacts(error: unknown): ErrorFacts {
   const words: string[] = []
   const statuses: number[] = []

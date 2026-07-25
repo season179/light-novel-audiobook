@@ -14,6 +14,7 @@ import type {
   AssemblyChapter,
   AudioAssembler,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectorModel,
   EpubExtractor,
   JobRepository,
@@ -26,6 +27,12 @@ export interface GenerateAudiobookCommand {
   readonly epubPath: string
   readonly epubSha256: string
   readonly voices: VoiceCast
+  /**
+   * Direction call options (cancellation, whole-chapter deadline). Operational only: they
+   * change how direction fails or is cancelled, never its output, so they are deliberately not
+   * part of the command identity.
+   */
+  readonly directorOptions?: DirectChapterOptions
   /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
   readonly recoverAbandoned?: boolean
 }
@@ -133,7 +140,7 @@ export class GenerateAudiobook {
       job.beginDirection()
       await this.jobs.saveJob(job)
 
-      await this.directBook(book, command.voices, job)
+      await this.directBook(book, command.voices, job, command.directorOptions)
       book.assertGloballyUniqueSegmentIds()
       await this.jobs.saveBook(book)
 
@@ -172,13 +179,22 @@ export class GenerateAudiobook {
     }
   }
 
-  private async directBook(book: Book, voices: VoiceCast, job: AudiobookJob): Promise<void> {
+  private async directBook(
+    book: Book,
+    voices: VoiceCast,
+    job: AudiobookJob,
+    directorOptions?: DirectChapterOptions,
+  ): Promise<void> {
     let failure: unknown
     try {
       for (const chapter of book.chapters) {
         job.report(chapter.id, `Directing ${chapter.title}`)
         await this.jobs.saveJob(job)
-        const directed = await this.directorModel.directChapter(book, chapter)
+        const directed = await this.directorModel.directChapter(
+          book,
+          chapter,
+          directorOptions === undefined ? undefined : { ...directorOptions },
+        )
         if (directed.chapterId !== chapter.id) {
           throw new DomainError(
             `Director returned chapter ${directed.chapterId} while directing ${chapter.id}`,

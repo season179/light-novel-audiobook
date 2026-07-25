@@ -29,6 +29,13 @@ export class OracleLlamaServer {
   readonly requests: CapturedRequest[] = []
   /** When set, requests with more than this many passages get truncated (unparseable) JSON. */
   truncateAbovePassages: number | undefined
+  /**
+   * When set, requests with more than this many passages get an HTTP 400 OpenAI-style
+   * `context_length_exceeded` rejection, as llama.cpp reports a prompt that cannot fit.
+   */
+  contextOverflowAbovePassages: number | undefined
+  /** Artificial per-request delay, for timeout and deadline tests. */
+  delayMs = 0
 
   constructor(private readonly oracle: Oracle) {}
 
@@ -94,6 +101,29 @@ export class OracleLlamaServer {
       storyContext: user.story_context ?? '',
       raw: body,
     })
+
+    if (this.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs))
+      if (response.destroyed) return
+    }
+
+    if (
+      this.contextOverflowAbovePassages !== undefined &&
+      user.passages.length > this.contextOverflowAbovePassages
+    ) {
+      response.writeHead(400, { 'content-type': 'application/json' })
+      response.end(
+        JSON.stringify({
+          error: {
+            message:
+              'This model has a context window of 32768 tokens. The requested prompt cannot fit: context_length_exceeded.',
+            type: 'invalid_request_error',
+            code: 'context_length_exceeded',
+          },
+        }),
+      )
+      return
+    }
 
     const truncated =
       this.truncateAbovePassages !== undefined && user.passages.length > this.truncateAbovePassages

@@ -17,6 +17,7 @@ import {
   type AudioAssembler,
   type CompletedSegmentAudio,
   createGenerationCommandIdentity,
+  type DirectChapterOptions,
   type DirectedChapter,
   type DirectorModel,
   type EpubExtractionRequest,
@@ -166,6 +167,7 @@ class FakeDirector implements DirectorModel {
   readonly corrupt: boolean
   releaseCalls = 0
   failRelease = false
+  receivedOptions: (DirectChapterOptions | undefined)[] = []
 
   constructor(
     events: string[],
@@ -177,7 +179,12 @@ class FakeDirector implements DirectorModel {
     this.identity = identity
   }
 
-  async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
+  async directChapter(
+    _book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    this.receivedOptions.push(options)
     this.events.push(`direct:${chapter.id}`)
     const segments = directionFor(chapter)
     if (this.corrupt && chapter.position === 1) {
@@ -424,6 +431,33 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     ).toEqual(
       assembled?.chapters.flatMap((chapter) => chapter.segments.map((item) => item.segment.id)),
     )
+  })
+
+  it('forwards operational director options from the command to every directChapter call', async () => {
+    const controller = new AbortController()
+    const result = await app.useCase.execute({
+      jobId: 'job-options',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+      directorOptions: { signal: controller.signal, timeoutMs: 42_000 },
+    })
+
+    expect(result.job.state).toBe('completed')
+    expect(app.director.receivedOptions.length).toBeGreaterThan(0)
+    for (const received of app.director.receivedOptions) {
+      expect(received?.timeoutMs).toBe(42_000)
+      expect(received?.signal).toBe(controller.signal)
+    }
+    // Options are operational: the command identity — and therefore reuse — ignores them.
+    const repeat = await app.useCase.execute({
+      jobId: 'job-options',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    expect(repeat.job.state).toBe('completed')
+    expect(repeat.generatedSegments).toBe(0)
   })
 
   it('reuses every unchanged completed segment and reserves successive outputs without overwrite', async () => {

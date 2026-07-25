@@ -318,6 +318,108 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     expect(progress.events.at(-1)).toMatchObject({ state: 'failed' })
   })
 
+  it('halves and retries when the runtime rejects an oversized prompt with a context error', async () => {
+    const texts = ['One passage.', 'Two passage.', 'Three passage.', 'Four passage.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    // The pre-flight estimate cannot know the real tokenizer, so the model itself reports the
+    // overflow: HTTP 400 with provider wording that only survives in the causal chain after
+    // classification. The adaptive path must still recognize it and shrink.
+    server.contextOverflowAbovePassages = 1
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model, progress } = create({ windowPassageBudget: 8 })
+
+    const result = await model.directChapter(book, book.chapters[0] as Chapter)
+
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
+    ).not.toThrow()
+    expect(server.requests.length).toBeGreaterThan(texts.length)
+    expect(server.requests.slice(-texts.length).map((request) => request.passages.length)).toEqual([
+      1, 1, 1, 1,
+    ])
+    expect(progress.events.filter((event) => event.state === 'failed')).toHaveLength(0)
+    expect(progress.events.at(-1)).toMatchObject({ state: 'completed' })
+  })
+
+  it('fails explicitly when a solo passage is declared unaffordable by the output budget', async () => {
+    const texts = ['Short one.', `Long ${'passage '.repeat(700)}here.`, 'Short two.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    // The long passage must travel solo, and its response estimate (~8,035 chars) exceeds
+    // 1,000 while the short first window's (~690) does not.
+    const { model } = create({ windowCharBudget: 100, outputCharsBudget: 1_000 })
+
+    try {
+      await model.directChapter(book, book.chapters[0] as Chapter)
+      throw new Error('Expected an explicit output-budget failure')
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectorError)
+      expect((error as DirectorError).code).toBe('configuration')
+      expect((error as DirectorError).message).toContain('output budget')
+    }
+    // The first window succeeds, then the solo passage is rejected BEFORE being sent.
+    expect(server.requests).toHaveLength(1)
+    expect(server.requests[0]?.passages.map((p) => p.source_passage_id)).toEqual([ids[0]])
+  })
+
+  it('times out a single window request at the configured per-request timeout', async () => {
+    const texts = ['A passage that will be slow.']
+    const ids = ['passage-001']
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    server.delayMs = 1_000
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model } = create()
+    const slow = new GemmaDirectorModel({
+      baseUrl: server.baseUrl,
+      apiKey: API_KEY,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [{ id: 'mira', aliases: ['Mira'] }],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+      progressStore: { async append() {} },
+      lifecycle: new FakeLifecycle(),
+      gpuLeaseCoordinator: new FakeGpuLeaseCoordinator(),
+      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
+      requestTimeoutMs: 150,
+    })
+    models.push(slow)
+
+    await expect(slow.directChapter(book, book.chapters[0] as Chapter)).rejects.toMatchObject({
+      code: 'timeout',
+    })
+    expect(model.identity).toBe(slow.identity) // per-request timeout is operational, not identity
+  })
+
+  it('bounds the whole chapter at the deadline across sequential windows', async () => {
+    const texts = ['First.', 'Second.', 'Third.', 'Fourth.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    server.delayMs = 250
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model, progress } = create({ windowPassageBudget: 1 })
+
+    try {
+      // Chapter deadline 600ms: window 1 (~250ms) succeeds; the remaining ~350ms caps window 2
+      // below the per-request timeout and the chapter dies as a timeout, not after 4 x 15 min.
+      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 600 })
+      throw new Error('Expected the chapter deadline to fire')
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectorError)
+      expect((error as DirectorError).code).toBe('timeout')
+    }
+    expect(progress.events.at(-1)).toMatchObject({ state: 'failed' })
+  })
+
   it('binds chunking settings into the director identity', async () => {
     server = new OracleLlamaServer(new Map())
     await server.start()

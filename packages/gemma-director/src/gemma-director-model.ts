@@ -15,6 +15,7 @@ import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
 import { canonicalSha256 } from './canonical-json.js'
 import {
   type DirectionChunkingSettings,
+  estimateWindowOutputChars,
   estimateWindowPrompt,
   planWindow,
   resolveChunkingSettings,
@@ -22,7 +23,7 @@ import {
   windowBudgetError,
 } from './chunking.js'
 import { GemmaDirectorEndpoint } from './config.js'
-import { classifyDirectorError, DirectorError } from './errors.js'
+import { classifyDirectorError, DirectorError, directorErrorChainText } from './errors.js'
 import { createGemmaDirectorIdentity } from './identity.js'
 import type {
   DirectedAnnotation,
@@ -67,6 +68,13 @@ export interface GemmaDirectorModelOptions {
   readonly gpuLeaseLockFilePath: string
   readonly fetch?: typeof globalThis.fetch
   /**
+   * Per-request timeout for each underlying window request, in milliseconds. Defaults to 15
+   * minutes. This bounds a single model call; the whole-chapter deadline is the `timeoutMs`
+   * option on `directChapter` (60 minutes by default, per PLAN). Operational only — it cannot
+   * change direction output, so it is not part of the adapter identity.
+   */
+  readonly requestTimeoutMs?: number
+  /**
    * Issue #53 passage-window budgets. Window boundaries can change fragmentation, so the resolved
    * values are bound into this adapter's identity.
    */
@@ -79,6 +87,19 @@ interface ModelsResponse {
 
 /** Longest source passage ID the request schema accepts; used to bridge stream chunk boundaries. */
 const MAX_PASSAGE_ID_LENGTH = 256
+
+/** Default per-window-request timeout. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000
+
+/** PLAN locks 60 minutes per representative chapter; that is the default whole-chapter deadline. */
+const DEFAULT_CHAPTER_TIMEOUT_MS = 60 * 60_000
+
+/**
+ * Provider wording for a prompt that cannot fit the context, matched against the whole causal
+ * chain (classification replaces the message, so the original wording only survives there).
+ */
+const CONTEXT_OVERFLOW_WORDING =
+  /context[_ -]length|context[_ -]window|context[_ -]size|n_ctx|too many (tokens|prompt)|prompt (is )?too long|exceed\w* (the )?(available )?context|context.{0,24}exceed/i
 
 /**
  * The chapter is one request, so intra-chapter progress can only be inferred from the stream:
@@ -125,6 +146,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private readonly gpuLeaseLockFilePath: string
   private readonly fetchImplementation: typeof globalThis.fetch
   private readonly chunking: DirectionChunkingSettings
+  private readonly requestTimeoutMs: number
   private readonly shutdownController = new AbortController()
   private readonly activeOperations = new Set<Promise<unknown>>()
   private gpuLease: GpuLease | undefined
@@ -156,6 +178,13 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       throw new Error('Gemma Director GPU lease lock file path is required')
     }
     this.fetchImplementation = options.fetch ?? globalThis.fetch
+    if (
+      options.requestTimeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.requestTimeoutMs) || options.requestTimeoutMs < 1)
+    ) {
+      throw new Error('Gemma Director request timeout must be a positive integer')
+    }
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.chunking = resolveChunkingSettings(options.chunking)
     this.identity = createGemmaDirectorIdentity({
       baseUrl: this.endpoint.baseUrl,
@@ -302,6 +331,17 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       text: passage.sourceText,
     }))
     const totalPassages = passages.length
+    if (
+      options.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1)
+    ) {
+      throw new Error('Gemma Director chapter timeout must be a positive integer')
+    }
+    // The whole-chapter deadline spans every window request and retry. Each window's own timer
+    // is the smaller of the per-request setting and the remaining chapter budget, so a chapter
+    // can never sit below the per-request timeout window after window.
+    const chapterTimeoutMs = options.timeoutMs ?? DEFAULT_CHAPTER_TIMEOUT_MS
+    const chapterStartedAt = Date.now()
 
     const parameters: DirectorParameters = Object.freeze({
       seed: SELECTED_GEMMA_PROFILE.seed,
@@ -383,6 +423,18 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     try {
       while (nextIndex < totalPassages) {
         windowIndex += 1
+        const chapterRemainingMs = chapterTimeoutMs - (Date.now() - chapterStartedAt)
+        if (chapterRemainingMs < 1) {
+          throw new DirectorError(
+            'timeout',
+            `Gemma Director chapter direction timed out after ${chapterTimeoutMs} ms`,
+            true,
+          )
+        }
+        const windowOptions: DirectionOptions = {
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          timeoutMs: Math.min(this.requestTimeoutMs, chapterRemainingMs),
+        }
         let window = planWindow(passages, nextIndex, settings)
         // Pre-flight the prompt budget with measured sizes. A window that cannot fit is shrunk
         // before any request is sent; a single passage that still cannot fit is an explicit
@@ -414,6 +466,23 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
             settings,
           )
           if (estimate.estimatedPromptTokens <= estimate.promptTokenBudget) {
+            // planWindow only emits an over-budget window when it is a single passage, so this
+            // is the solo-passage output guard: a passage whose response estimate is already
+            // unaffordable fails explicitly here instead of being sent and truncating.
+            const windowChars = passages
+              .slice(window.start, window.end)
+              .reduce((total, passage) => total + passage.text.length, 0)
+            const outputEstimate = estimateWindowOutputChars(
+              windowChars,
+              window.end - window.start,
+              settings,
+            )
+            if (outputEstimate > settings.outputCharsBudget) {
+              throw windowBudgetError(
+                `A single source passage estimates ${outputEstimate} response characters against an output budget of ${settings.outputCharsBudget}`,
+                passages.slice(window.start, window.end).map((passage) => passage.id),
+              )
+            }
             request = candidate
             break
           }
@@ -447,7 +516,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
             parameters,
             { completed: nextIndex, total: totalPassages },
             emit,
-            options,
+            windowOptions,
           )
           annotations.push(...result.validated.annotations)
           warnings.push(...result.validated.warnings)
@@ -569,13 +638,15 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
 
   /**
    * A response cut at max_tokens surfaces as unparseable structured output; a prompt that
-   * overflowed the context despite the pre-flight estimate surfaces as a model rejection
-   * mentioning the context. Both mean exactly one thing here: the window was too large.
+   * overflowed the context surfaces as a model/HTTP rejection whose PROVIDER wording only
+   * survives in the causal chain (classification normalizes the message). Both mean exactly one
+   * thing here: the window was too large.
    */
   private isTruncationSignature(error: unknown): boolean {
     if (!(error instanceof DirectorError)) return false
     if (error.code === 'malformed_output') return true
-    return error.code === 'model' && /context/i.test(error.message)
+    if (error.code !== 'model' && error.code !== 'http') return false
+    return CONTEXT_OVERFLOW_WORDING.test(directorErrorChainText(error))
   }
 
   private async executeWindowDirection(
@@ -621,7 +692,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     const progress = new StreamedPassageProgress(request.passages.map((passage) => passage.id))
     const control = this.abortControl(
       options.signal,
-      options.timeoutMs ?? 15 * 60_000,
+      options.timeoutMs ?? this.requestTimeoutMs,
       'direction request',
     )
     try {

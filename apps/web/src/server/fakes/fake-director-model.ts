@@ -1,4 +1,8 @@
-import type { DirectedChapter, DirectorModel } from '@light-novel-audiobook/application'
+import type {
+  DirectChapterOptions,
+  DirectedChapter,
+  DirectorModel,
+} from '@light-novel-audiobook/application'
 import type {
   Book,
   Chapter,
@@ -75,12 +79,19 @@ const findSpeaker = (fragments: readonly Fragment[], dialogueIndex: number): str
 export class FakeDirectorModel implements DirectorModel {
   readonly identity = 'fake-director/1'
   private released = false
+  /** Options forwarded by the use case on the most recent call, for composition tests. */
+  lastOptions: DirectChapterOptions | undefined
 
   get isReleased(): boolean {
     return this.released
   }
 
-  async directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
+  async directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    this.lastOptions = options
     if (this.released) {
       throw new Error('Fake director has been released')
     }

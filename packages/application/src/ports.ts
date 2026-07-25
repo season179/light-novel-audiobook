@@ -25,11 +25,12 @@ export interface DirectedChapter {
 }
 
 export interface DirectChapterOptions {
-  /** Cancellation for the whole chapter direction, including every underlying window request. */
+  /** Cancellation for the whole chapter direction, including every underlying model request. */
   readonly signal?: AbortSignal
   /**
-   * Per-request timeout in milliseconds. Adapters that direct a chapter as several window
-   * requests apply it to each request, not to the chapter as a whole.
+   * Whole-chapter deadline in milliseconds, covering every underlying request the adapter needs
+   * (for example every passage window) plus retries. Adapters own their per-request timeout as a
+   * constructor setting; this option bounds the chapter operation the port actually exposes.
    */
   readonly timeoutMs?: number
 }
