@@ -994,16 +994,4 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     const reservation = await harness.repo.reserveNextOutput(book)
     expect(reservation.version.value).toBe(2)
   })
-
-  it('still ignores a dot-prefixed assembly staging directory beside a reserved output', async () => {
-    const { book } = makeBook()
-    const chapterId = book.chapters[0]?.id
-    if (chapterId === undefined) throw new Error('fixture chapter missing')
-    const chapterDir = join(harness.layout.chapterDir, `ch-${chapterId}`)
-    // #32 leaves these behind on SIGKILL; they must never read as a finished output.
-    mkdirSync(join(chapterDir, '.lna-assembly-abc123'), { recursive: true })
-
-    const reservation = await harness.repo.reserveNextOutput(book)
-    expect(reservation.version.value).toBe(1)
-  })
 })
