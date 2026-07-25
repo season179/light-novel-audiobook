@@ -230,6 +230,38 @@ export function parseExactPortListeners(ssOutput, port) {
     }))
 }
 
+export function validateLifecycleTimeline(samples, { idleSamples, pollMilliseconds }) {
+  if (samples.length < 2) throw new Error('lifecycle timeline has too few samples')
+  for (let index = 0; index < samples.length; index += 1) {
+    const elapsed = samples[index].elapsedMilliseconds
+    if (!Number.isFinite(elapsed) || elapsed < 0) {
+      throw new Error('lifecycle timeline has an invalid monotonic elapsed value')
+    }
+    if (index > 0 && elapsed <= samples[index - 1].elapsedMilliseconds) {
+      throw new Error('lifecycle timeline elapsed values are not strictly increasing')
+    }
+  }
+  const active = samples.filter((sample) => sample.gpuUtilizationPercent >= 10)
+  if (active.length === 0) throw new Error('lifecycle timeline has no active sample')
+  const lastActive = active.at(-1)
+  const observationEnd = samples.at(-1)
+  if (observationEnd.settledWindow !== true) {
+    throw new Error('lifecycle timeline did not reach its idle window')
+  }
+  const observedIdleWindowMilliseconds =
+    observationEnd.elapsedMilliseconds - lastActive.elapsedMilliseconds
+  const minimumIdleWindowMilliseconds = (idleSamples - 1) * pollMilliseconds
+  if (observedIdleWindowMilliseconds < minimumIdleWindowMilliseconds) {
+    throw new Error('lifecycle idle window is shorter than its sampled timestamps require')
+  }
+  return {
+    clock: 'performance.now monotonic',
+    sampleOrder: 'strictly-increasing',
+    observedIdleWindowMilliseconds,
+    minimumIdleWindowMilliseconds,
+  }
+}
+
 export function characterizeInterruption({
   clientResult,
   processSurvived,

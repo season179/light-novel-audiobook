@@ -17,6 +17,7 @@ import {
   requireVoxCpm2PcmWav,
   summarizeRequests,
   summarizeResourceCsv,
+  validateLifecycleTimeline,
 } from '../voxcpm2/core.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -181,6 +182,50 @@ test('exact-port listener parsing exposes every matching listener', () => {
     { state: 'LISTEN', localEndpoint: '127.0.0.1:8081', peerEndpoint: '0.0.0.0:*' },
     { state: 'LISTEN', localEndpoint: '[::1]:8081', peerEndpoint: '[::]:*' },
   ])
+})
+
+test('monotonic lifecycle timelines enforce order and the complete sampled idle window', () => {
+  const timeline = validateLifecycleTimeline(
+    [
+      { elapsedMilliseconds: 100, gpuUtilizationPercent: 80 },
+      { elapsedMilliseconds: 320, gpuUtilizationPercent: 0 },
+      { elapsedMilliseconds: 540, gpuUtilizationPercent: 0 },
+      { elapsedMilliseconds: 760, gpuUtilizationPercent: 0, settledWindow: true },
+    ],
+    { idleSamples: 4, pollMilliseconds: 200 },
+  )
+  assert.equal(timeline.clock, 'performance.now monotonic')
+  assert.equal(timeline.observedIdleWindowMilliseconds, 660)
+  assert.equal(timeline.minimumIdleWindowMilliseconds, 600)
+
+  for (const secondElapsed of [100, 99]) {
+    assert.throws(
+      () =>
+        validateLifecycleTimeline(
+          [
+            { elapsedMilliseconds: 100, gpuUtilizationPercent: 80 },
+            {
+              elapsedMilliseconds: secondElapsed,
+              gpuUtilizationPercent: 0,
+              settledWindow: true,
+            },
+          ],
+          { idleSamples: 2, pollMilliseconds: 1 },
+        ),
+      /not strictly increasing/u,
+    )
+  }
+  assert.throws(
+    () =>
+      validateLifecycleTimeline(
+        [
+          { elapsedMilliseconds: 100, gpuUtilizationPercent: 80 },
+          { elapsedMilliseconds: 250, gpuUtilizationPercent: 0, settledWindow: true },
+        ],
+        { idleSamples: 2, pollMilliseconds: 200 },
+      ),
+    /idle window is shorter/u,
+  )
 })
 
 test('interruption, parameters, streaming, and decision are derived from checks', () => {

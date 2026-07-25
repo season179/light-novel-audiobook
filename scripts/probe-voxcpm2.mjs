@@ -19,6 +19,7 @@ import {
   sha256File,
   summarizeRequests,
   summarizeResourceCsv,
+  validateLifecycleTimeline,
 } from './voxcpm2/core.mjs'
 
 const probePath = fileURLToPath(import.meta.url)
@@ -496,7 +497,7 @@ async function observeClientInterruption(instance, mode) {
     seed: mode === 'manual-abort' ? 7001 : 7002,
   }
   const logBefore = await stat(instance.stderrPath)
-  const startedEpoch = Date.now()
+  const startedMonotonic = performance.now()
   const controller = new AbortController()
   const timer = setTimeout(
     () =>
@@ -514,14 +515,14 @@ async function observeClientInterruption(instance, mode) {
   } finally {
     clearTimeout(timer)
   }
-  const clientSettledAt = Date.now()
+  const clientSettledAt = performance.now()
   const samples = []
   let observedActive = false
   let idleSamples = 0
-  const observationDeadline = startedEpoch + lock.probe.lifecycleMaximumSeconds * 1000
-  while (Date.now() < observationDeadline) {
+  const observationDeadline = startedMonotonic + lock.probe.lifecycleMaximumSeconds * 1000
+  while (performance.now() < observationDeadline) {
     const sample = {
-      elapsedMilliseconds: Date.now() - startedEpoch,
+      elapsedMilliseconds: performance.now() - startedMonotonic,
       ...gpuSample(),
       processAlive: await serverIdentityMatches(instance),
       settledWindow: false,
@@ -544,11 +545,15 @@ async function observeClientInterruption(instance, mode) {
   }
   const logAfter = await stat(instance.stderrPath)
   const logText = await readFile(instance.stderrPath, 'utf8')
+  const timeline = validateLifecycleTimeline(samples, {
+    idleSamples: lock.probe.lifecycleIdleSamples,
+    pollMilliseconds: lock.probe.lifecyclePollMilliseconds,
+  })
   const characterization = characterizeInterruption({
     clientResult,
     processSurvived: await serverIdentityMatches(instance),
     samples,
-    interruptedAtMilliseconds: clientSettledAt - startedEpoch,
+    interruptedAtMilliseconds: clientSettledAt - startedMonotonic,
   })
   if (
     characterization.inferenceAfterClientInterruption !== 'continued' ||
@@ -560,10 +565,11 @@ async function observeClientInterruption(instance, mode) {
   return {
     mode,
     configuredLongRequest: long,
-    clientSettledMilliseconds: clientSettledAt - startedEpoch,
+    clientSettledMilliseconds: clientSettledAt - startedMonotonic,
     observationMilliseconds: samples.at(-1).elapsedMilliseconds,
     sampleCount: samples.length,
     peakGpuUtilizationPercent: Math.max(...samples.map((sample) => sample.gpuUtilizationPercent)),
+    timeline,
     logLifecycle: {
       bytesBefore: logBefore.size,
       bytesAfter: logAfter.size,
