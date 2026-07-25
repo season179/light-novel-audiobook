@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-25T00:35:46.004Z",
+  "decision": "go",
+  "scope": "issue-5-spike-only",
+  "environment": {
+    "os": "Linux",
+    "wsl2": true,
+    "architecture": "x64",
+    "node": "v24.18.0"
+  },
+  "endpoint": {
+    "host": "127.0.0.1",
+    "port": 18080,
+    "baseUrl": "http://127.0.0.1:18080/v1",
+    "productionDefault": "http://127.0.0.1:8080/v1"
+  },
+  "listener": {
+    "loopbackOnly": true,
+    "address": "127.0.0.1:18080"
+  },
+  "runtime": {
+    "project": "ggml-org/llama.cpp",
+    "commit": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
+    "versionOutput": "version: 1 (555881eb)\nbuilt with GNU 13.3.0 for Linux x86_64",
+    "ext4": true,
+    "modelRepository": "bartowski/SmolLM2-135M-Instruct-GGUF",
+    "modelRevision": "09816acd5d99df7be770d85ea30822623dab342c",
+    "modelSha256": "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d"
+  },
+  "harness": {
+    "sourceSha256": "5defb8b1c053e7959c1520e5b89655f5e6906ccbb627bf4b02c468864ea33b1b",
+    "portableFaultSuite": true
+  },
+  "tanstackAi": {
+    "coreVersion": "0.42.0",
+    "openAiAdapterVersion": "0.17.1",
+    "adapter": "@tanstack/ai-openai/compatible",
+    "requestCompleted": true
+  },
+  "structuredOutput": {
+    "jsonSchemaReachedServer": true,
+    "schemaValid": true
+  },
+  "requestShape": {
+    "serverSideFixtureCaptured": true,
+    "observedFields": [
+      "model",
+      "messages",
+      "temperature",
+      "seed",
+      "max_tokens",
+      "stream",
+      "stream_options",
+      "response_format.json_schema"
+    ]
+  },
+  "capabilities": {
+    "healthStatus": "ok",
+    "modelIdentityObservable": true,
+    "totalSlots": 1,
+    "endpoints": {
+      "chatCompletions": true,
+      "health": true,
+      "models": true,
+      "props": true
+    }
+  },
+  "cancellation": {
+    "requestReachedServer": true,
+    "classifiedAs": "cancelled",
+    "serverSlotReleased": true,
+    "clientSlotReleased": true,
+    "slotReleased": true
+  },
+  "cleanup": {
+    "portReleased": true
+  }
+}
