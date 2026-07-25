@@ -513,7 +513,7 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     })
     models.push(model)
 
-    const started = Date.now()
+    const started = performance.now()
     // A 50 ms chapter budget fires during the 400 ms startup; the start races away untracked.
     await expect(
       model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 50 }),
@@ -522,8 +522,9 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     await model.release()
 
     // release() must have waited out the start (~400 ms), then unloaded, then freed the lease:
-    // runtime exit precedes lease release, always.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(350)
+    // runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps backwards
+    // under WSL2 time sync and made this assertion flake.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(350)
     expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
   })
 

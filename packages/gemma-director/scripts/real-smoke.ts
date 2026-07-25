@@ -5,7 +5,7 @@ import { chmod, readFile, readlink, realpath, rm, stat, writeFile } from 'node:f
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { Book, Chapter, SourcePassage } from '@light-novel-audiobook/domain'
 import { z } from 'zod'
@@ -57,7 +57,7 @@ class SanitizedProgressStore implements DirectorProgressStore {
   }
 }
 
-interface OwnedLlamaLifecycleOptions {
+export interface OwnedLlamaLifecycleOptions {
   readonly binaryPath: string
   readonly args: readonly string[]
   readonly apiKey: string
@@ -70,8 +70,12 @@ interface OwnedLlamaLifecycleOptions {
 /**
  * The adapter calls start() only while it already holds the GPU lease, so this is the exact point
  * at which the owned llama-server — and its VRAM residency — may come into existence.
+ *
+ * Exported (rather than script-private) so the lifecycle's own race tests can import it, and so a
+ * future consolidation can reuse this implementation instead of the copy in
+ * packages/pipeline-driver (same class, same former defect) — see the #53 round-4 report.
  */
-class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
+export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   private child: ChildProcess | undefined
   private childError: Error | undefined
   private startPromise: Promise<void> | undefined
@@ -440,4 +444,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ...sanitizedResult, cleanupVerified: true }, null, 2))
 }
 
-await main()
+// Run main() only when executed as a script (tsx scripts/real-smoke.ts), never on import — the
+// lifecycle class above is imported by tests.
+const invokedAsScript =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+if (invokedAsScript) await main()
