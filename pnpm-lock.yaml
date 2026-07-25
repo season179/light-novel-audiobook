@@ -73,6 +73,12 @@ importers:
         specifier: 0.17.1
         version: 0.17.1(@tanstack/ai@0.42.0)(zod@4.4.3)
 
+  packages/application:
+    dependencies:
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/contracts:
     dependencies:
       zod:
