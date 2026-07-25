@@ -15,6 +15,15 @@ process.on('SIGTERM', () => process.exit(0))
 /** Comfortably above an idle WSL2/GPU-PV baseline (~231 MiB) and far below any loaded model. */
 const DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB = 1_024
 const MAX_PROCESS_ANCESTRY_DEPTH = 64
+/** How often release re-checks that the holder process group has no live member left. */
+const HOLDER_GROUP_POLL_MS = 20
+/** Bounded wait for `flock`'s own diagnostics once it has exited, so failures stay explainable. */
+const HOLDER_STDERR_FLUSH_MS = 200
+
+const delay = async (ms: number): Promise<void> =>
+  await new Promise<void>((resolveDelay) => {
+    setTimeout(resolveDelay, ms)
+  })
 
 export type GpuOwner = 'composition' | 'gemma' | 'qwen3-tts'
 
@@ -86,6 +95,49 @@ async function parentProcessId(pid: number): Promise<number | undefined> {
   return Number.isSafeInteger(parent) && parent >= 0 ? parent : undefined
 }
 
+/**
+ * Only a real, positive pid may ever be negated: `process.kill(-0, …)` signals *our own* process
+ * group, and `process.kill(-1, …)` signals every process we are allowed to signal. Neither is a
+ * holder subtree, so validity - not just definedness - has to be established first.
+ */
+function isSignallableProcessId(pid: number | undefined): pid is number {
+  return pid !== undefined && Number.isSafeInteger(pid) && pid > 1
+}
+
+/**
+ * A process group with any live member still owns the locked descriptor, so `ESRCH` - and only
+ * `ESRCH` - proves the holder subtree is gone. Fail closed: an id we must not signal is an id whose
+ * group we cannot prove empty.
+ */
+function isProcessGroupAlive(groupId: number | undefined): boolean {
+  if (!isSignallableProcessId(groupId)) return true
+  try {
+    process.kill(-groupId, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+/**
+ * Stops a detached holder from being the only thing keeping the caller's event loop alive.
+ *
+ * **The placement of the call matters more than the call.** It must run only after the handshake has
+ * settled and nothing is awaiting a holder event any more. Called at spawn instead, it removes the
+ * last thing that can wake the loop while `acquire()` is still waiting for `'exit'` - the stdio
+ * pipes all close when the direct child exits - so a contended acquire drains the loop and the
+ * process exits 0 with `acquire()` never settling: no error, no log, no failed job. Measured with the
+ * call hoisted to spawn: 1 silent exit in 25 contended acquisitions under load, and a test that fails
+ * deterministically. With the call here: 30/30 contended acquisitions settled.
+ * `#stopHolder` re-refs the handle for the same reason, so release never waits on a detached holder.
+ */
+function detachHolderFromEventLoop(child: ChildProcessWithoutNullStreams): void {
+  child.unref()
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    ;(stream as { unref?: () => void }).unref?.()
+  }
+}
+
 /** Fail-closed: only a PID provably inside this process tree is treated as our own. */
 async function isOwnProcessTree(pid: number): Promise<boolean> {
   if (pid === process.pid) return true
@@ -149,8 +201,20 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         HOLDER_SOURCE,
         token,
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] as const, windowsHide: true },
+      {
+        stdio: ['pipe', 'pipe', 'pipe'] as const,
+        windowsHide: true,
+        // The holder is a two-process subtree (`flock` -> nested Node) and the nested process is the
+        // one holding the locked descriptor. Its own process group is the only handle that can
+        // terminate it, so the holder must be a group leader from the start.
+        detached: true,
+      },
     )
+    // Node destroys this pipe as soon as the direct child exits, so the unconditional EOF in
+    // release can surface an asynchronous stream error that is not a release failure.
+    child.stdin.on('error', () => {})
+    // 'exit' rather than 'close': 'close' also waits for the stdio the nested holder inherited, so
+    // a surviving descendant could otherwise stall release forever.
     const exit = new Promise<HolderExit>((resolveExit) => {
       let settled = false
       const settle = (result: HolderExit): void => {
@@ -159,25 +223,26 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         resolveExit(result)
       }
       child.once('error', (error) => settle({ code: null, signal: null, error }))
-      child.once('close', (code, closeSignal) => settle({ code, signal: closeSignal }))
+      child.once('exit', (code, exitSignal) => settle({ code, signal: exitSignal }))
     })
     let stderr = ''
+    const stderrFlushed = new Promise<void>((resolveFlushed) => {
+      child.stderr.once('end', () => resolveFlushed())
+      child.stderr.once('close', () => resolveFlushed())
+      child.stderr.once('error', () => resolveFlushed())
+    })
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       stderr = `${stderr}${chunk}`.slice(-4_000)
     })
 
-    let acquired = false
     const cancel = (): void => {
-      child.kill('SIGTERM')
+      this.#signalHolderSubtree(child, 'SIGTERM')
     }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       const handshake = await this.#waitForToken(child, exit, token)
-      acquired = handshake === 'acquired'
       if (handshake === 'unusable') {
-        // The holder may still be alive and holding the kernel lock, so it must be stopped here.
-        await this.#stopHolderQuietly(child, exit)
         throw new GpuLeaseError(
           'unavailable',
           'GPU lease holder produced an unusable handshake and was stopped',
@@ -190,17 +255,21 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         if (result.code === 75) {
           throw new GpuLeaseError('busy', `GPU lease is already held: ${this.#lockFilePath}`)
         }
+        // Settling on 'exit' can outrun flock's own stderr, so give the diagnostic a bounded wait.
+        await this.#settleWithin(stderrFlushed, HOLDER_STDERR_FLUSH_MS)
         throw new GpuLeaseError(
           'unavailable',
           `GPU lease holder failed to start: ${stderr.trim() || result.error || `exit ${result.code}`}`,
         )
       }
       if (signal?.aborted) {
-        await this.#stopHolder(child, exit)
         throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled')
       }
       if (this.#inspectExistingComputeProcesses) await this.#diagnoseExistingCompute(signal)
 
+      // Only here, once nothing is awaiting a holder event any more. See the function's comment: the
+      // placement of this call is load-bearing and must stay after the handshake.
+      detachHolderFromEventLoop(child)
       let released = false
       return {
         owner,
@@ -212,8 +281,9 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         },
       }
     } catch (error) {
-      // Stopping the holder must never replace the cause that made acquisition fail.
-      if (acquired) await this.#stopHolderQuietly(child, exit)
+      // The holder subtree can still hold the kernel lock on every failure path - including a
+      // handshake that never arrived - and stopping it must never replace the original cause.
+      await this.#stopHolderQuietly(child, exit)
       if (error instanceof GpuLeaseError) throw error
       if (signal?.aborted)
         throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled', {
@@ -337,20 +407,105 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     }
   }
 
+  /**
+   * Release is a subtree problem: `flock` is only the direct child and the nested Node process is
+   * what holds the locked descriptor. Every path here therefore ends with the whole process group
+   * proven gone, or with a thrown error - never with an unbounded wait.
+   */
   async #stopHolder(
     child: ChildProcessWithoutNullStreams,
     exit: Promise<HolderExit>,
   ): Promise<void> {
-    if (child.exitCode === null && child.signalCode === null) child.stdin.end()
-    const timeout = setTimeout(() => child.kill('SIGKILL'), this.#releaseGraceMs)
-    timeout.unref()
-    const result = await exit
-    clearTimeout(timeout)
+    // The holder was detached from the loop once the lease was handed over; release awaits its exit,
+    // so the handle has to keep the loop alive again for as long as that wait lasts. Node closes it
+    // when the child is reaped, so this cannot outlive the release itself.
+    child.ref()
+    this.#endHolderStdin(child)
+    let result = await this.#awaitSubtreeExit(child, exit, this.#releaseGraceMs)
+    let escalated = false
+    if (result === undefined) {
+      escalated = true
+      this.#signalHolderSubtree(child, 'SIGKILL')
+      result = await this.#awaitSubtreeExit(child, exit, this.#releaseGraceMs)
+    }
+    if (result === undefined)
+      throw new GpuLeaseError(
+        'unavailable',
+        `GPU lease holder subtree survived SIGKILL and may still hold ${this.#lockFilePath}`,
+      )
     if (result.error !== undefined)
       throw new GpuLeaseError('unavailable', 'GPU lease holder process failed', {
         cause: result.error,
       })
-    if (result.signal === 'SIGKILL')
+    // Only our own escalation means graceful release failed; a holder killed from outside that then
+    // freed the lock on EOF is a completed release, not a failure.
+    if (escalated)
       throw new GpuLeaseError('unavailable', 'GPU lease holder required SIGKILL during release')
+  }
+
+  /**
+   * Unconditional EOF: the nested holder releases on stdin EOF whatever the direct child's exit
+   * state is, so this must never be gated on `exitCode`/`signalCode`.
+   */
+  #endHolderStdin(child: ChildProcessWithoutNullStreams): void {
+    if (child.stdin.destroyed || child.stdin.writableEnded) return
+    try {
+      child.stdin.end()
+    } catch {
+      // An already-closed holder pipe is not a release failure.
+    }
+  }
+
+  /**
+   * Signals the direct child and the holder process group. The direct kill covers the window before
+   * the detached child has called `setsid`; the group kill covers the nested holder afterwards.
+   */
+  #signalHolderSubtree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal)
+    } catch {
+      // Already gone.
+    }
+    const groupId = child.pid
+    if (!isSignallableProcessId(groupId)) return
+    try {
+      process.kill(-groupId, signal)
+    } catch {
+      // ESRCH is success: the group has no member left to signal.
+    }
+  }
+
+  /** Resolves only when the direct child has exited *and* its process group is empty. */
+  async #awaitSubtreeExit(
+    child: ChildProcessWithoutNullStreams,
+    exit: Promise<HolderExit>,
+    timeoutMs: number,
+  ): Promise<HolderExit | undefined> {
+    const deadline = Date.now() + timeoutMs
+    const result = await this.#settleWithin(exit, timeoutMs)
+    if (result === undefined) return undefined
+    // An undefined pid means the spawn itself failed, so there is no subtree to outlive it. Any
+    // other unusable pid is handled fail-closed inside `isProcessGroupAlive`.
+    if (child.pid === undefined) return result
+    for (;;) {
+      if (!isProcessGroupAlive(child.pid)) return result
+      if (Date.now() >= deadline) return undefined
+      await delay(HOLDER_GROUP_POLL_MS)
+    }
+  }
+
+  /** Resolves `undefined` on timeout; the timer stays ref'd so release cannot be cut short. */
+  async #settleWithin<T>(settling: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        settling,
+        new Promise<undefined>((resolveTimeout) => {
+          timer = setTimeout(() => resolveTimeout(undefined), timeoutMs)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }
