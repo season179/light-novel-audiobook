@@ -1,0 +1,121 @@
+/**
+ * One command that takes an EPUB through all five real adapters to a real M4B.
+ *
+ *   pnpm pipeline:demo -- --epub <path> [options]
+ *
+ * Options:
+ *   --epub <path>              EPUB to ingest. Required.
+ *   --workspace <path>         Workspace root. Default: a fresh directory under the OS temp dir.
+ *   --job-id <id>              Job ID. Default: pipeline-demo-<timestamp>.
+ *   --chapters <n>             Keep at most N chapters. Default: 1.
+ *   --passages <n>             Keep at most N passages per chapter. Default: 3.
+ *   --characters <a,b>         Character speaker IDs to cast. Default: none (narration only).
+ *   --transports fake|real     Default: fake. `real` loads actual models; see below.
+ *   --director-url <url>       Real mode: llama.cpp OpenAI-compatible base URL.
+ *   --director-key <key>       Real mode: server-side API key.
+ *   --python <path>            Real mode: pinned uv-managed interpreter.
+ *   --worker <path>            Real mode: Qwen worker script.
+ *   --runtime-manifest <path>  Real mode: pinned runtime manifest.
+ *   --gpu-lock <path>          Real mode: GPU lock file shared by Gemma and Qwen.
+ *
+ * Fake transports are the default on purpose: no GPU, no model weights, no network beyond loopback,
+ * so this is safe to run anywhere and in CI. Real transports load Gemma and Qwen for real and must be
+ * asked for explicitly.
+ *
+ * Only sanitized evidence is printed — counts, hashes, byte sizes, durations, paths. Never story text.
+ */
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { runPipeline } from '../src/driver.js'
+import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
+import { createFakeTransports, createRealTransports } from '../src/transports.js'
+
+const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+
+function flag(name: string): string | undefined {
+  const index = process.argv.indexOf(`--${name}`)
+  return index === -1 ? undefined : process.argv[index + 1]
+}
+
+function positiveInteger(name: string, fallback: number): number {
+  const raw = flag(name)
+  if (raw === undefined) return fallback
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`--${name} must be a positive integer`)
+  }
+  return value
+}
+
+function required(name: string): string {
+  const value = flag(name)
+  if (value === undefined || value.length === 0) throw new Error(`--${name} is required`)
+  return value
+}
+
+const epubPath = path.resolve(required('epub'))
+const mode = flag('transports') ?? 'fake'
+if (mode !== 'fake' && mode !== 'real') throw new Error('--transports must be fake or real')
+
+const workspaceRoot = flag('workspace')
+  ? path.resolve(flag('workspace') as string)
+  : await mkdtemp(path.join(tmpdir(), 'pipeline-demo-'))
+const jobId = flag('job-id') ?? `pipeline-demo-${Date.now()}`
+const characterSpeakerIds = (flag('characters') ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0)
+
+const directorServer = mode === 'fake' ? new NarrationEchoDirectorServer() : undefined
+await directorServer?.start()
+
+const transports =
+  mode === 'fake'
+    ? await createFakeTransports(
+        { runtimeDirectory: path.join(workspaceRoot, 'runtime'), repositoryRoot: REPOSITORY_ROOT },
+        (directorServer as NarrationEchoDirectorServer).baseUrl,
+      )
+    : createRealTransports({
+        directorBaseUrl: required('director-url'),
+        directorApiKey: required('director-key'),
+        pythonExecutable: path.resolve(required('python')),
+        workerScriptPath: path.resolve(required('worker')),
+        runtimeManifestPath: path.resolve(required('runtime-manifest')),
+        gpuLockFilePath: path.resolve(required('gpu-lock')),
+      })
+
+process.stderr.write(
+  `[driver] mode=${mode} workspace=${workspaceRoot} chapters<=${positiveInteger('chapters', 1)} passages<=${positiveInteger('passages', 3)}\n`,
+)
+
+try {
+  const report = await runPipeline({
+    jobId,
+    epubPath,
+    workspaceRoot,
+    repositoryRoot: REPOSITORY_ROOT,
+    transports,
+    limits: {
+      maxChapters: positiveInteger('chapters', 1),
+      maxPassagesPerChapter: positiveInteger('passages', 3),
+    },
+    characterSpeakerIds,
+    onDirectorProgress: (event) => {
+      process.stderr.write(
+        `[direction] ${event.state} ${event.completedPassages}/${event.totalPassages}\n`,
+      )
+    },
+  })
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+} catch (error) {
+  // Legible failure: the known blockers all surface as a typed error, and which one matters.
+  const named = error as { name?: string; code?: string; message?: string }
+  process.stderr.write(
+    `[driver] FAILED ${named.name ?? 'Error'}${named.code ? ` (${named.code})` : ''}: ${named.message ?? String(error)}\n`,
+  )
+  process.exitCode = 1
+} finally {
+  await directorServer?.stop()
+}
