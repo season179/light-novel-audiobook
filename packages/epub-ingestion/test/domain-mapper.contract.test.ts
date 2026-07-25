@@ -76,11 +76,22 @@ describe('issue #29 EpubExtractor contract', () => {
       'Noa carried the lantern home.',
     ])
     expect(path.isAbsolute(book.source.epubPath)).toBe(true)
-    expect(path.isAbsolute(book.coverPath ?? '')).toBe(true)
+    // The fixture declares an SVG cover, which ingestion rejects before this domain boundary
+    // because the pinned M4B toolchain cannot rasterize it.
+    expect(book.coverPath).toBeNull()
 
     const manifest = JSON.parse(
       await readFile(path.join(workspaceRoot, 'books', book.id, 'book.json'), 'utf8'),
     ) as StoredEpubIngestion
+    expect(manifest.cover).toBeNull()
+    expect(manifest.audit.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'unusable-cover',
+          locators: ['EPUB/images/lantern.svg'],
+        }),
+      ]),
+    )
     expect(manifest.audit.nonStoryDocuments).toEqual([
       expect.objectContaining({
         sourceArchivePath: 'EPUB/image-page.xhtml',

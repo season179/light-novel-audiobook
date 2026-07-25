@@ -304,12 +304,12 @@ describe('EPUB ingestion crash recovery', () => {
     ) as StoredEpubIngestion
     await writeFile(
       workspace.committedManifest,
-      JSON.stringify({ ...stored, schemaVersion: 'epub-ingestion@1' }, null, 2),
+      JSON.stringify({ ...stored, schemaVersion: 'epub-ingestion@3' }, null, 2),
     )
 
     await expect(adapter.ingest({ bytes })).rejects.toMatchObject({
       code: 'STORAGE_CONFLICT',
-      message: expect.stringContaining('epub-ingestion@1'),
+      message: expect.stringContaining('epub-ingestion@3'),
     })
     await expect(adapter.ingest({ bytes })).rejects.toThrow(
       new RegExp(`this build reads ${INGESTION_SCHEMA_VERSION}`),

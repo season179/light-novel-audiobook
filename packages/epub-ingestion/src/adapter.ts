@@ -20,17 +20,16 @@ import {
 } from './extractor.js'
 
 /**
- * Bumped to `@3` by issue #52: book/chapter/passage IDs moved to the `StableIds` dialect, so every
- * manifest written before that carries different identities for the same publication. The values
- * changed, not just the wording of a rule, so a stored record genuinely is stale and
- * `#verifyExisting` reports the mismatch with the remedy rather than comparing incomparable IDs.
+ * Bumped to `@4` by issue #61: SVG covers that the pinned M4B toolchain cannot rasterize now degrade
+ * during extraction instead of surviving in a manifest and failing after every TTS render. The
+ * publication-derived book ID is intentionally unchanged, so `#verifyExisting` must reject an `@3`
+ * record under the same target rather than silently returning its now-unsupported `cover.svg`.
  *
- * No data migration is provided and none is needed. `bookId` changed shape too, so an old record
- * lives under a different `books/<id>` directory and is never consulted; a re-ingest simply writes
- * the new one. Schema v1 of the app is unreleased and workspaces are disposable, so orphaned
- * directories are the operator's to delete.
+ * `@3` was issue #52's StableIds migration. No data migration is provided: schema v1 of the app is
+ * unreleased and workspaces are disposable, so the operator removes the stale book directory and
+ * re-ingests from the authoritative upload.
  */
-export const INGESTION_SCHEMA_VERSION = 'epub-ingestion@3' as const
+export const INGESTION_SCHEMA_VERSION = 'epub-ingestion@4' as const
 
 export type EpubIngestionErrorCode =
   | 'INVALID_EPUB'
@@ -284,7 +283,6 @@ function coverExtension(mediaType: string): string {
     'image/gif': 'gif',
     'image/jpeg': 'jpg',
     'image/png': 'png',
-    'image/svg+xml': 'svg',
     'image/webp': 'webp',
   }
   return extensions[mediaType] ?? 'bin'

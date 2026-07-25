@@ -182,7 +182,7 @@ describe('production EPUB ingestion adapter', () => {
     ).toEqual(ingested.chapters.flatMap((chapter) => chapter.passages.map((passage) => passage.id)))
   })
 
-  it('extracts assembly metadata, cover bytes, headings, and exclusion provenance', async () => {
+  it('extracts assembly metadata and degrades an unsupported SVG cover before rendering', async () => {
     const workspace = await temporaryDirectory('metadata')
     const ingested = await new EpubIngestionAdapter({
       workspaceRoot: workspace,
@@ -231,17 +231,20 @@ describe('production EPUB ingestion adapter', () => {
       title: 'The Brass Door',
       headings: [expect.objectContaining({ sourceText: 'The Brass Door' })],
     })
-    expect(ingested.cover).toMatchObject({
-      sourceArchivePath: 'EPUB/images/lantern.svg',
-      mediaType: 'image/svg+xml',
-    })
-    if (!ingested.cover) throw new Error('fixture cover was not extracted')
-    const expectedCover = await readFile(
-      path.join(fixtureRoot, 'synthetic-complex/EPUB/images/lantern.svg'),
+    // The declared SVG is valid XML, but the pinned M4B toolchain cannot rasterize it. Cover
+    // usability is decided here, before direction/rendering, and the decorative asset degrades.
+    expect(ingested.extractionIdentity.cover_rules).toBe('m4b-raster-cover@1')
+    expect(ingested.cover).toBeNull()
+    expect(ingested.audit.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'unusable-cover',
+          locators: ['EPUB/images/lantern.svg'],
+          detail: expect.stringMatching(/supported M4B raster cover.*image\/svg\+xml/u),
+        }),
+      ]),
     )
-    const storedCover = await readFile(path.join(workspace, ingested.cover.relativePath))
-    expect(storedCover).toEqual(expectedCover)
-    expect(ingested.cover.sha256).toBe(hash(expectedCover))
+    expect(await exists(path.join(workspace, 'books', ingested.id, 'cover.svg'))).toBe(false)
 
     expect(ingested.audit.excludedSourcePassageCount).toBe(0)
     expect(ingested.audit.excludedSpineDocumentCount).toBe(1)
@@ -309,14 +312,13 @@ describe('production EPUB ingestion adapter', () => {
       /encrypted or obfuscated resources.*unsupported/,
     )
 
-    // A malformed SVG cover degrades exactly like a malformed raster cover: no cover, one finding.
-    const coverEntries = unzipSync(await fixture('synthetic-complex'))
-    coverEntries['EPUB/images/lantern.svg'] = strToU8('not an SVG container')
-    const malformedSvgCover = extractEpubDeterministically(zipSync(coverEntries))
-    expect(malformedSvgCover.cover).toBeNull()
+    // Even a structurally valid SVG is unsupported by the pinned M4B toolchain. It degrades at
+    // extraction rather than surviving until a final FFmpeg export after all TTS work.
+    const unsupportedSvgCover = extractEpubDeterministically(await fixture('synthetic-complex'))
+    expect(unsupportedSvgCover.cover).toBeNull()
     expect(
-      malformedSvgCover.findings.find((finding) => finding.kind === 'unusable-cover')?.detail,
-    ).toMatch(/EPUB\/images\/lantern\.svg: malformed XML/)
+      unsupportedSvgCover.findings.find((finding) => finding.kind === 'unusable-cover')?.detail,
+    ).toMatch(/supported M4B raster cover.*image\/svg\+xml/u)
     // An unusable cover is decorative: it degrades to no cover plus a review finding rather than
     // making the whole publication un-ingestable.
     const mismatchedMediaEntries = unzipSync(await fixture('synthetic-complex'))
@@ -332,7 +334,7 @@ describe('production EPUB ingestion adapter', () => {
         expect.objectContaining({
           kind: 'unusable-cover',
           locators: ['EPUB/images/lantern.svg'],
-          detail: expect.stringContaining('do not match declared media type image/png'),
+          detail: expect.stringContaining('PNG cover has an invalid signature'),
         }),
       ]),
     )
