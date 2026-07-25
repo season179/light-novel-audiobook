@@ -17,9 +17,14 @@ allow_browser_origins_on_model_endpoints = false
 
 [brain]
 base_url = "http://127.0.0.1:8080/v1"
-model = ""
+profile = "google-gemma-4-26b-a4b-it-qat-q4-0"
+model = "google-gemma-4-26b-a4b-it-qat-q4-0"
+# WSL ext4 runtime path; replace <wsl-user> or configure the launcher environment.
+model_path = "/home/<wsl-user>/.cache/light-novel-audiobook/issue-6-brain/models/gemma-4-26B_q4_0-it.gguf"
 context_size = 32768
 temperature = 0.0
+seed = 42
+top_p = 1.0
 
 [tts]
 base_url = "http://127.0.0.1:8081"
