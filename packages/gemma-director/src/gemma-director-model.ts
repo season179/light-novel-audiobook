@@ -261,7 +261,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   ): Promise<GemmaDirectedChapter> {
     // The chapter deadline clock starts here, at entry: lease acquisition, runtime startup,
     // and context loading all consume the same budget as the window requests that follow.
-    const chapterStartedAt = Date.now()
+    const chapterStartedAt = performance.now()
     this.assertAvailable()
     if (
       chapter.bookId !== book.id ||
@@ -343,7 +343,8 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     // runtime startup, and the context provider all consume the same budget as the window
     // requests — the slowest, least predictable phase is exactly what the deadline must cover.
     const chapterTimeoutMs = options.timeoutMs ?? DEFAULT_CHAPTER_TIMEOUT_MS
-    const chapterRemaining = (): number => chapterTimeoutMs - (Date.now() - chapterStartedAt)
+    const chapterRemaining = (): number =>
+      Math.floor(chapterTimeoutMs - (performance.now() - chapterStartedAt))
     await this.withChapterDeadline(
       chapterRemaining(),
       chapterTimeoutMs,

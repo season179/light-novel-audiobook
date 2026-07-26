@@ -540,6 +540,27 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
   })
 
+  it('uses a monotonic chapter deadline when the wall clock moves backward', async () => {
+    const texts = ['A delayed passage.']
+    const ids = ['passage-001']
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    server.delayMs = 100
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model } = create({ windowPassageBudget: 1 })
+    const originalNow = Date.now
+    const base = originalNow()
+    let calls = 0
+    Date.now = () => (calls++ === 0 ? base : base - 1_000)
+    try {
+      await expect(
+        model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 30 }),
+      ).rejects.toMatchObject({ code: 'timeout' })
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
   it('counts context loading against the chapter deadline', async () => {
     const texts = ['A passage.']
     const ids = ['passage-001']
