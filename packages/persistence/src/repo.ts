@@ -286,9 +286,9 @@ export class SqliteJobRepository implements JobRepository {
    * Reads the approved script back for a render stage that did not direct it.
    *
    * Rebuilt through the domain constructors rather than by rehydrating private state, so the round
-   * trip re-proves what direction proved: passages belong to their chapter, segments belong to
-   * their chapter in exact contiguous order with unique IDs, and every segment carries a voice
-   * before the chapter is approved. A partial or reshuffled write therefore fails here instead of
+   * trip re-proves what direction proved: segments cover each passage exactly once with byte-exact
+   * text and source order, belong to their chapter in exact contiguous order with unique IDs, and
+   * carry a voice before approval. A partial or reshuffled write therefore fails here instead of
    * producing a book that renders to the wrong audio.
    *
    * Chapter *render* state is deliberately not persisted or restored. What is stored is the
