@@ -1,0 +1,121 @@
+{
+  "schema": "issue-21-m1-proof@1",
+  "harness": "proof-m1@1",
+  "mode": "fake",
+  "startedAt": "2026-07-26T16:14:21.258Z",
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "linux",
+    "arch": "x64",
+    "transports": "fake",
+    "adapters": "app fakes (fake-director/1, fake-speech-engine/2, fake-assembler/2); no model, no ffmpeg"
+  },
+  "epub": {
+    "fileName": "acceptance-m1.epub",
+    "bytes": 2940,
+    "sha256": "b1a52b778b252d977f5deae3cbe65d841a999e4be4abfde118b97bffa102718e"
+  },
+  "steps": [
+    {
+      "name": "1-preflight",
+      "atMonotonicMs": 23,
+      "mode": "fake"
+    },
+    {
+      "name": "2-upload",
+      "atMonotonicMs": 2369,
+      "byteLength": 2940
+    },
+    {
+      "name": "2-start",
+      "atMonotonicMs": 2384
+    },
+    {
+      "name": "3-poll",
+      "atMonotonicMs": 2391,
+      "state": "awaiting_review"
+    },
+    {
+      "name": "4-review",
+      "atMonotonicMs": 2405,
+      "pendingBefore": 3,
+      "pendingAfter": 0,
+      "itemCount": 3
+    },
+    {
+      "name": "6-restart",
+      "atMonotonicMs": 4463,
+      "mechanism": "deterministic mid-render fault (a directory blocking one segment WAV), then an HTTP retry of the failed job",
+      "stateAtStop": "failed",
+      "segmentsCompletedAtStop": 13,
+      "totalSegments": 16,
+      "segmentsReused": 13,
+      "segmentsRenderedAfterRestart": 3,
+      "directorRequestsAfterRestart": null,
+      "directorRequestsNote": "not observable in fake mode: the in-process fake director has no HTTP endpoint. The resume path constructs no director when the persisted script is fully approved; the real-mode run asserts exactly that through the director port."
+    },
+    {
+      "name": "5-verify",
+      "atMonotonicMs": 4491,
+      "chapterCount": 3,
+      "m4bBytes": 101324
+    },
+    {
+      "name": "7-evidence",
+      "atMonotonicMs": 4492
+    }
+  ],
+  "job": {
+    "jobId": "job-b1a52b778b252d977f5deae3",
+    "uploadId": "b1a52b778b252d977f5deae3cbe65d841a999e4be4abfde118b97bffa102718e"
+  },
+  "restart": {
+    "mechanism": "deterministic mid-render fault (a directory blocking one segment WAV), then an HTTP retry of the failed job",
+    "stateAtStop": "failed",
+    "segmentsCompletedAtStop": 13,
+    "totalSegments": 16,
+    "segmentsReused": 13,
+    "segmentsRenderedAfterRestart": 3,
+    "directorRequestsAfterRestart": null,
+    "directorRequestsNote": "not observable in fake mode: the in-process fake director has no HTTP endpoint. The resume path constructs no director when the persisted script is fully approved; the real-mode run asserts exactly that through the director port."
+  },
+  "output": {
+    "chapterCount": 3,
+    "chapters": [
+      {
+        "chapterId": "book-b1a52b778b252d977f5deae3-ch0001",
+        "bytes": 36428,
+        "sha256": "2d0cea0d802a0e67b80e67b06cfee3c6099e39022df2fbc3183ea726ba32b722"
+      },
+      {
+        "chapterId": "book-b1a52b778b252d977f5deae3-ch0002",
+        "bytes": 37004,
+        "sha256": "68edfcd79882ad674138e5d03ffa3738e5ff6db2b8b19920261e1822a345683b"
+      },
+      {
+        "chapterId": "book-b1a52b778b252d977f5deae3-ch0003",
+        "bytes": 27980,
+        "sha256": "f749ea3d8cda5be8c81e352dc9cbd6548918e4901da5e321e7b13723845e69db"
+      }
+    ],
+    "m4b": {
+      "fileName": "acceptance-m1-v001.m4b",
+      "bytes": 101324,
+      "sha256": "6f1a778143565641d5efc9c7973a58a54c0ca26ddea89853f60f7a755870bb2d",
+      "workspacePath": "/tmp/lna-m1-proof-fake-TsaU3i/outputs/book-b1a52b778b252d977f5deae3/acceptance-m1-v001.m4b"
+    },
+    "container": {
+      "kind": "riff-wave-in-m4b",
+      "note": "fake assembler shortcut; MP4 chapter-marker inspection applies to real mode only"
+    }
+  },
+  "counts": {
+    "chapters": 3,
+    "segments": 16,
+    "passages": 11
+  },
+  "finishedAt": "2026-07-26T16:14:25.727Z",
+  "durationsMs": {
+    "total": 4492
+  }
+}
