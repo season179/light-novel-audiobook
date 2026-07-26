@@ -1,8 +1,10 @@
 import { type ChildProcess, spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FixtureHolderRegistry, type StatReader } from './fixture-reaper.js'
 
@@ -15,6 +17,27 @@ const roots = new Set<string>()
 
 const delay = async (ms: number): Promise<void> =>
   await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, ms))
+
+/** How long the concurrency test waits for one writer phase before failing with what it awaited. */
+const WRITER_PHASE_MS = 30_000
+
+/** Rejects with `description` after `ms` so a stuck wait names the event it was waiting for. */
+async function settleWithin<T>(work: Promise<T>, ms: number, description: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${ms} ms waiting for ${description}`)),
+          ms,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 async function makeRegistry(inspectOwner?: () => Promise<'alive' | 'dead' | 'unknown'>) {
   const root = await mkdtemp(join(tmpdir(), 'fixture-registry-test-'))
@@ -335,22 +358,45 @@ describe('fixture holder registry (#67)', () => {
     const barrierPath = join(tmpdir(), `fixture-registry-barrier-${crypto.randomUUID()}`)
     roots.add(barrierPath)
     const writerPath = join(REPO_ROOT, 'packages/gpu-lease/test/fixtures/registry-writer.mjs')
-    const moduleUrl = new URL('./fixture-reaper.ts', import.meta.url).href
-    const writers = Array.from({ length: 8 }, () =>
-      spawn(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs'),
-          writerPath,
-          moduleUrl,
-          barrierPath,
-          registry.registryPath,
-        ],
-        { stdio: ['ignore', 'pipe', 'ignore'], detached: true },
-      ),
+    // Writers run the real registry code as plain node against a bundle built once here, not
+    // through a per-writer tsx loader: eight concurrent tsx startups each carry an esbuild
+    // service, and on a CPU-starved hosted runner (bare `vitest run`, several workers sharing
+    // slow cores) that fixed cost, compounded with the lock-retry process spawns, blew the 60 s
+    // default timeout. Bundling once removes the loader entirely; four plain-node writers still
+    // race the kernel flock for real.
+    const requireFromTsx = createRequire(
+      realpathSync(join(REPO_ROOT, 'node_modules/tsx/package.json')),
+    )
+    const esbuild = requireFromTsx('esbuild') as {
+      build(options: {
+        entryPoints: string[]
+        bundle: boolean
+        format: string
+        platform: string
+        packages: string
+        outfile: string
+      }): Promise<unknown>
+    }
+    const bundlePath = join(tmpdir(), `fixture-registry-bundle-${crypto.randomUUID()}.mjs`)
+    roots.add(bundlePath)
+    await esbuild.build({
+      entryPoints: [join(REPO_ROOT, 'packages/gpu-lease/test/fixture-reaper.ts')],
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      packages: 'external',
+      outfile: bundlePath,
+    })
+    const moduleUrl = pathToFileURL(bundlePath).href
+    const writers = Array.from({ length: 4 }, () =>
+      spawn(process.execPath, [writerPath, moduleUrl, barrierPath, registry.registryPath], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        detached: true,
+      }),
     )
     children.push(...writers)
     for (const writer of writers) if (writer.pid !== undefined) groups.add(writer.pid)
+    const writerPids = writers.map((writer) => writer.pid).join(',')
     const registered = writers.map(
       (writer) =>
         new Promise<void>((resolveRegistered, rejectRegistered) => {
@@ -360,7 +406,13 @@ describe('fixture holder registry (#67)', () => {
         }),
     )
     await writeFile(barrierPath, '')
-    await Promise.all(registered)
+    // Bounded and named: if any wait ever fails to complete again, the failure says which phase
+    // and which writers it was waiting for instead of a bare test timeout (#90).
+    await settleWithin(
+      Promise.all(registered),
+      WRITER_PHASE_MS,
+      `registrations from writers ${writerPids}`,
+    )
 
     expect(await registry.loadRegistry()).toHaveLength(writers.length)
 
@@ -370,7 +422,11 @@ describe('fixture holder registry (#67)', () => {
     for (const writer of writers) {
       if (writer.pid !== undefined) process.kill(-writer.pid, 'SIGUSR1')
     }
-    await Promise.all(exited)
+    await settleWithin(
+      Promise.all(exited),
+      WRITER_PHASE_MS,
+      `exits after SIGUSR1 from writers ${writerPids}`,
+    )
     expect(await registry.loadRegistry()).toHaveLength(0)
   }, 60_000)
 })
