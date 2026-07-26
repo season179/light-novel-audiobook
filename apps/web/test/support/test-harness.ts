@@ -14,6 +14,10 @@ import {
   loadPinnedQwenConfig,
   pinnedVoiceMaterial,
 } from '../../src/server/m1-voice-cast.js'
+import {
+  REVIEWER_ENV_VARIABLE,
+  resolveReviewerIdentity,
+} from '../../src/server/reviewer-identity.js'
 import { createWorkspace, type LocalWorkspace } from '../../src/server/workspace.js'
 
 /** The actor this harness records on decisions it makes on the user's behalf. */
@@ -77,9 +81,10 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   const api = await createAudiobookWebApi({
     workspace,
     voices,
-    // Supplied, not resolved: a test must not depend on the OS account running it, and passing it
-    // here is exactly how #21 will pass a real identity.
-    reviewer: TEST_REVIEWER,
+    // Supplied through the canonical resolver (explicit configuration, never the OS account), so a
+    // test does not depend on the account running it and the branded value still only originates
+    // there. This is exactly how #21 will pass a real identity.
+    reviewer: resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: TEST_REVIEWER }),
     speechEngineFactory: {
       identity: speechEngine.identity,
       create: (context) => {

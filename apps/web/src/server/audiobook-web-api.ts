@@ -4,6 +4,7 @@ import type {
   DirectChapterOptions,
   JobRepository,
   PendingFallbackApproval,
+  ReviewerIdentity,
   ReviewFallbackApprovals,
 } from '@light-novel-audiobook/application'
 import { RenderInProgressError } from '@light-novel-audiobook/application'
@@ -85,9 +86,9 @@ export interface AudiobookWebApiDependencies {
   readonly review: ReviewFallbackApprovals
   /**
    * Who this server records as the human behind a fallback decision. Required, and never taken from a
-   * request: see `resolveReviewerIdentity`.
+   * request: see `resolveReviewerIdentity`. Branded so only the canonical resolver can produce it.
    */
-  readonly reviewer: string
+  readonly reviewer: ReviewerIdentity
   /** The only route to a stored output; shared with review so authorization and open are atomic. */
   readonly completedOutputs: CompletedOutputAuthority
   /** Operational direction controls forwarded to each generation command; never persisted. */
@@ -147,7 +148,7 @@ export class AudiobookWebApi {
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
   private readonly review: ReviewFallbackApprovals
-  private readonly reviewer: string
+  private readonly reviewer: ReviewerIdentity
   private readonly completedOutputs: CompletedOutputAuthority
   private readonly directorOptions: DirectChapterOptions | undefined
 

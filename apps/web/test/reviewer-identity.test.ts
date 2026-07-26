@@ -64,7 +64,7 @@ describe('reviewer identity (issue #45, round 3)', () => {
   it('records the configured reviewer on every decision, and no constant', async () => {
     const api = await createAudiobookWebApi({
       workspaceRoot: await workspaceRoot(),
-      reviewer: 'Grace Hopper',
+      reviewer: resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: 'Grace Hopper' }),
     })
     const upload = await api.uploadEpub({
       fileName: 'attributed.epub',
@@ -130,7 +130,7 @@ describe('reviewer identity (issue #45, round 3)', () => {
     // cannot attest to who decided and the server cannot be talked into recording someone else.
     const api = await createAudiobookWebApi({
       workspaceRoot: await workspaceRoot(),
-      reviewer: 'Grace Hopper',
+      reviewer: resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: 'Grace Hopper' }),
     })
     expect(api.approveAllFallbacks.length).toBe(1)
     expect(api.revokeFallback.length).toBe(1)
