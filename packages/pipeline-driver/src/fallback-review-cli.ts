@@ -21,28 +21,37 @@ export interface FallbackReviewItem {
   readonly fallbackReason: FallbackReason
   readonly speakerReason: string
   readonly proposedVoiceProfileId: string
+  readonly decision: 'pending' | 'excluded'
+  readonly decidedBy: string | null
 }
 
 export interface FallbackReviewApprovalNotice {
   readonly actor: string
   readonly jobId: string
-  readonly decision: 'approve one homogeneous fallback decision group for every listed pending segment'
+  readonly decision:
+    | 'approve one homogeneous fallback decision group for every listed pending segment'
+    | 'approve the fallback voice for the listed segment'
   readonly items: readonly FallbackReviewItem[]
 }
 
 export interface ListFallbackReviewReport {
   readonly action: 'list'
   readonly jobId: string
+  /** All decisions still requiring review, including explicit withdrawals. */
   readonly pendingCount: number
+  readonly excludedCount: number
   readonly items: readonly FallbackReviewItem[]
 }
 
 export interface ApproveFallbackReviewReport {
   readonly action: 'approve'
+  readonly scope: 'book' | 'segment'
   readonly jobId: string
   readonly actor: string
   readonly approvedCount: number
-  readonly grantId: string
+  readonly remainingReviewCount: number
+  readonly grantId: string | null
+  readonly approvalId: string | null
   readonly items: readonly FallbackReviewItem[]
 }
 
@@ -52,6 +61,8 @@ export interface FallbackReviewCommandOptions {
   readonly action: 'list' | 'approve'
   readonly workspaceRoot: string
   readonly jobId: string
+  /** With approve, makes an individual decision and clears any withdrawal for this segment. */
+  readonly segmentId?: string | undefined
   /** Defaults to the same environment/OS-account resolver as the local web review path. */
   readonly resolveReviewer?: (() => string) | undefined
   /** Called before the durable grant is written, so CLI output states the human act first. */
@@ -85,25 +96,66 @@ export async function runFallbackReviewCommand(
     const approvals = new SqliteFallbackApprovalRepository(database)
     const review = new ReviewFallbackApprovals({ jobs, approvals })
     const listed = await review.list(jobId)
-    const excluded = listed.filter((item) => item.decision === 'excluded')
+    const reviewRequired = listed.filter((item) => item.decision !== 'approved')
     const pending = listed.filter((item) => item.decision === 'pending')
-    const items = Object.freeze(pending.map(reviewItem))
+    const excluded = listed.filter((item) => item.decision === 'excluded')
 
     if (options.action === 'list') {
       return Object.freeze({
         action: 'list',
         jobId,
-        pendingCount: items.length,
-        items,
+        pendingCount: reviewRequired.length,
+        excludedCount: excluded.length,
+        items: Object.freeze(reviewRequired.map(reviewItem)),
       })
     }
 
     if (actor === undefined) throw new DomainError('Fallback approval requires a reviewer')
-    if (excluded.length > 0) {
-      throw new DomainError(
-        `Audiobook job ${jobId} has ${excluded.length} explicitly excluded fallback decision(s); bulk approval will not override a human withdrawal`,
-      )
+    const requestedSegmentId = options.segmentId?.trim()
+    if (options.segmentId !== undefined && requestedSegmentId?.length === 0) {
+      throw new DomainError('Fallback segment approval requires a segment ID')
     }
+    if (requestedSegmentId !== undefined) {
+      const requested = reviewRequired.find((item) => item.segmentId === requestedSegmentId)
+      if (requested === undefined) {
+        throw new DomainError(
+          `Segment ${requestedSegmentId} does not have a pending fallback decision for audiobook job ${jobId}`,
+        )
+      }
+      const items = Object.freeze([reviewItem(requested)])
+      options.announceApproval?.(
+        Object.freeze({
+          actor,
+          jobId,
+          decision: 'approve the fallback voice for the listed segment',
+          items,
+        }),
+      )
+      const approval = await review.approve({
+        jobId,
+        segmentId: requestedSegmentId,
+        decidedBy: actor,
+      })
+      if (approval.decidedBy !== actor || approval.segmentId !== requestedSegmentId) {
+        throw new DomainError(
+          `Audiobook job ${jobId} did not persist the attributed fallback approval`,
+        )
+      }
+      const remaining = (await review.list(jobId)).filter((item) => item.decision !== 'approved')
+      return Object.freeze({
+        action: 'approve',
+        scope: 'segment',
+        jobId,
+        actor,
+        approvedCount: 1,
+        remainingReviewCount: remaining.length,
+        grantId: null,
+        approvalId: approval.approvalId,
+        items,
+      })
+    }
+
+    const items = Object.freeze(pending.map(reviewItem))
     if (items.length === 0) {
       throw new DomainError(`Audiobook job ${jobId} has no pending fallback decisions to approve`)
     }
@@ -121,21 +173,19 @@ export async function runFallbackReviewCommand(
     options.announceApproval?.(notice)
 
     const reconciliation = await review.grantBookFallback({ jobId, decidedBy: actor })
-    if (reconciliation.pending.length > 0) {
-      throw new DomainError(
-        `Audiobook job ${jobId} still has ${reconciliation.pending.length} excluded fallback decision(s)`,
-      )
-    }
     const grant = reconciliation.grant
     if (grant === undefined || grant.decidedBy !== actor) {
       throw new DomainError(`Audiobook job ${jobId} did not persist the attributed fallback grant`)
     }
     return Object.freeze({
       action: 'approve',
+      scope: 'book',
       jobId,
       actor,
       approvedCount: reconciliation.created.length,
+      remainingReviewCount: reconciliation.pending.length,
       grantId: grant.grantId,
+      approvalId: null,
       items,
     })
   } finally {
@@ -152,6 +202,8 @@ function reviewItem(item: PendingFallbackApproval): FallbackReviewItem {
     fallbackReason: item.fallbackReason,
     speakerReason: item.speakerReason,
     proposedVoiceProfileId: item.proposedVoiceProfileId,
+    decision: item.decision === 'excluded' ? 'excluded' : 'pending',
+    decidedBy: item.decidedBy,
   })
 }
 

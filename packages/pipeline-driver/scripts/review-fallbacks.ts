@@ -4,9 +4,11 @@
  *
  *   pnpm pipeline:review -- list --workspace <path> --job-id <id>
  *   LNA_REVIEWER="Name" pnpm pipeline:review -- approve --workspace <path> --job-id <id>
+ *   LNA_REVIEWER="Name" pnpm pipeline:review -- approve --workspace <path> --job-id <id> --segment-id <id>
  *
- * `approve` is deliberately a separate invocation from rendering. It records one attributed
- * book-wide grant and one content-bound approval per pending segment; generation never calls this.
+ * `approve` is deliberately a separate invocation from rendering. Without `--segment-id` it records
+ * a book-wide grant for one homogeneous decision group. With that flag it makes one segment decision
+ * and clears any earlier withdrawal.
  */
 import path from 'node:path'
 import {
@@ -51,7 +53,7 @@ const report = await runFallbackReviewCommand({
   action,
   workspaceRoot: path.resolve(required('workspace')),
   jobId: required('job-id'),
-  ...(action === 'approve' ? { announceApproval: printNotice } : {}),
+  ...(action === 'approve' ? { announceApproval: printNotice, segmentId: flag('segment-id') } : {}),
 })
 
 if (report.action === 'list') {
@@ -60,10 +62,12 @@ if (report.action === 'list') {
       status: 'pending-fallback-review',
       jobId: report.jobId,
       pendingCount: report.pendingCount,
+      excludedCount: report.excludedCount,
     })}\n`,
   )
   for (const item of report.items) {
-    process.stdout.write(`${JSON.stringify({ status: 'pending-item', ...item })}\n`)
+    const status = item.decision === 'excluded' ? 'excluded-item' : 'pending-item'
+    process.stdout.write(`${JSON.stringify({ status, ...item })}\n`)
   }
 } else {
   process.stdout.write(
@@ -71,8 +75,11 @@ if (report.action === 'list') {
       status: 'approved',
       jobId: report.jobId,
       actor: report.actor,
+      scope: report.scope,
       approvedCount: report.approvedCount,
+      remainingReviewCount: report.remainingReviewCount,
       grantId: report.grantId,
+      approvalId: report.approvalId,
     })}\n`,
   )
 }

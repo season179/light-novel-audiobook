@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { ReviewFallbackApprovals } from '@light-novel-audiobook/application'
 import {
   AudiobookJob,
   Book,
@@ -181,6 +182,7 @@ describe('fallback review CLI', () => {
       action: 'list',
       jobId: 'job-list-fallbacks',
       pendingCount: 1,
+      excludedCount: 0,
       items: [
         {
           segmentId,
@@ -190,6 +192,8 @@ describe('fallback review CLI', () => {
           fallbackReason: 'unresolved_speaker',
           speakerReason,
           proposedVoiceProfileId: 'fallback',
+          decision: 'pending',
+          decidedBy: null,
         },
       ],
     })
@@ -228,12 +232,15 @@ describe('fallback review CLI', () => {
             fallbackReason: 'unresolved_speaker',
             speakerReason,
             proposedVoiceProfileId: 'fallback',
+            decision: 'pending',
+            decidedBy: null,
           },
         ],
       },
     ])
     expect(report).toMatchObject({
       action: 'approve',
+      scope: 'book',
       jobId: 'job-approve-fallbacks',
       actor: 'Ada Lovelace',
       approvedCount: 1,
@@ -284,6 +291,99 @@ describe('fallback review CLI', () => {
     database.close()
     expect(catalog.grant).toBeUndefined()
     expect(catalog.approvals).toEqual([])
+  })
+
+  it('lists withdrawals, bulk-approves the remainder, and recovers one excluded segment', async () => {
+    const { root, book } = await preparedWorkspace('job-excluded-fallbacks', {
+      heterogeneous: true,
+    })
+    const seedDatabase = openWorkspace(layoutFor(root))
+    const seedApprovals = new SqliteFallbackApprovalRepository(seedDatabase)
+    const seedReview = new ReviewFallbackApprovals({
+      jobs: new SqliteJobRepository(layoutFor(root), seedDatabase),
+      approvals: seedApprovals,
+    })
+    await seedReview.approve({
+      jobId: 'job-excluded-fallbacks',
+      segmentId: secondSegmentId,
+      decidedBy: 'Synthetic First Reviewer',
+    })
+    await seedReview.revoke({
+      jobId: 'job-excluded-fallbacks',
+      segmentId: secondSegmentId,
+      decidedBy: 'Synthetic Withdrawer',
+    })
+    seedDatabase.close()
+
+    const listed = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-excluded-fallbacks',
+    })
+    expect(listed.action).toBe('list')
+    if (listed.action !== 'list') throw new Error('list command returned an approval report')
+    expect(listed.pendingCount).toBe(2)
+    expect(listed.excludedCount).toBe(1)
+    expect(listed.items.map((item) => [item.segmentId, item.decision, item.decidedBy])).toEqual([
+      [segmentId, 'pending', null],
+      [secondSegmentId, 'excluded', 'Synthetic Withdrawer'],
+    ])
+
+    const bulk = await runFallbackReviewCommand({
+      action: 'approve',
+      workspaceRoot: root,
+      jobId: 'job-excluded-fallbacks',
+      resolveReviewer: () => 'Synthetic Bulk Reviewer',
+    })
+    expect(bulk).toMatchObject({
+      scope: 'book',
+      approvedCount: 1,
+      remainingReviewCount: 1,
+    })
+
+    const afterBulk = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-excluded-fallbacks',
+    })
+    expect(afterBulk.action).toBe('list')
+    if (afterBulk.action !== 'list') throw new Error('list command returned an approval report')
+    expect(afterBulk.pendingCount).toBe(1)
+    expect(afterBulk.excludedCount).toBe(1)
+    expect(afterBulk.items.map((item) => [item.segmentId, item.decision])).toEqual([
+      [secondSegmentId, 'excluded'],
+    ])
+
+    const recovered = await run(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        CLI,
+        'approve',
+        '--workspace',
+        root,
+        '--job-id',
+        'job-excluded-fallbacks',
+        '--segment-id',
+        secondSegmentId,
+      ],
+      { env: { ...process.env, LNA_REVIEWER: 'Synthetic Recovery Reviewer' } },
+    )
+    expect(recovered.stdout).toContain('"scope":"segment"')
+    expect(recovered.stdout).toContain('"remainingReviewCount":0')
+    expect(recovered.stdout).toContain('"grantId":null')
+
+    const database = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(database).readCatalog(book.id)
+    database.close()
+    expect(catalog.exclusions).toEqual([])
+    expect(catalog.approvals).toHaveLength(2)
+    expect(catalog.approvals.find((record) => record.segmentId === secondSegmentId)).toMatchObject({
+      decidedBy: 'Synthetic Recovery Reviewer',
+      grantId: null,
+    })
+    expect(catalog.grant?.decidedBy).toBe('Synthetic Bulk Reviewer')
   })
 
   it('exposes separate list and approve CLI invocations without printing story text', async () => {
