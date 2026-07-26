@@ -363,7 +363,7 @@ async function withBusyRetryingTransaction<T>(
   work: () => T,
   lockedMessage: string,
 ): Promise<T> {
-  const deadline = Date.now() + TRANSACTION_BUSY_DEADLINE_MS
+  const deadline = performance.now() + TRANSACTION_BUSY_DEADLINE_MS
   let busyAttempts = 0
 
   while (true) {
@@ -372,7 +372,7 @@ async function withBusyRetryingTransaction<T>(
     } catch (error) {
       if (classifySqliteFailure(error) !== 'busy') throw error
 
-      const remainingMs = deadline - Date.now()
+      const remainingMs = deadline - performance.now()
       if (remainingMs <= 0) throw new DomainError(lockedMessage)
 
       await delay(Math.min(backoffMs(busyAttempts), remainingMs))

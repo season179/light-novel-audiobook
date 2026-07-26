@@ -117,8 +117,6 @@ function randomOracle(rand: () => number, chapter: FuzzChapter, roster: readonly
 
 interface WireSegment {
   source_passage_id: string
-  source_start: number
-  source_end: number
   source_text: string
   kind: string
   speaker_id: string
@@ -138,8 +136,6 @@ function wireOutput(
       const text = chapter.texts[chapter.ids.indexOf(id)] as string
       return (oracle.get(id) ?? []).map((fragment) => ({
         source_passage_id: id,
-        source_start: fragment.start,
-        source_end: fragment.end,
         source_text: text.slice(fragment.start, fragment.end),
         kind: fragment.kind,
         speaker_id: fragment.speaker,
@@ -341,17 +337,10 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
           break
         }
         case 4: {
-          // nudge an offset while leaving source_text as it was
-          if (target.segments.length === 0) continue
-          const segment = target.segments[Math.floor(rand() * target.segments.length)]
-          if (segment === undefined) continue
-          if (segment.source_start + 1 < segment.source_end) {
-            segment.source_start += 1
-          } else {
-            segment.source_end = segment.source_start
-          }
-          applied = 'offset-nudge'
-          break
+          // #71 removed source offsets from the wire contract (@3): the validator derives ranges
+          // from text concatenation, so an offset nudge that leaves source_text unchanged is
+          // structurally invisible. This case existed for the pre-#71 offset-checking validator.
+          continue
         }
         case 5: {
           // move a fragment into a different window's output
@@ -395,7 +384,7 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
       }
     }
     // Guard the fuzz itself: every corruption family must have run a meaningful number of times.
-    for (const family of ['drop', 'duplicate', 'swap-within', 'rewrite', 'offset-nudge']) {
+    for (const family of ['drop', 'duplicate', 'swap-within', 'rewrite']) {
       expect(corruptionCounts.get(family) ?? 0).toBeGreaterThan(500)
     }
     expect(corruptionCounts.get('move-across-windows') ?? 0).toBeGreaterThan(200)

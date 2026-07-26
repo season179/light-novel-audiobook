@@ -547,7 +547,7 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     exit: Promise<HolderExit>,
     timeoutMs: number,
   ): Promise<HolderExit | undefined> {
-    const deadline = Date.now() + timeoutMs
+    const deadline = performance.now() + timeoutMs
     const result = await this.#settleWithin(exit, timeoutMs)
     if (result === undefined) return undefined
     // An undefined pid means the spawn itself failed, so there is no subtree to outlive it. Any
@@ -555,7 +555,7 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     if (child.pid === undefined) return result
     for (;;) {
       if (!isProcessGroupAlive(child.pid)) return result
-      if (Date.now() >= deadline) return undefined
+      if (performance.now() >= deadline) return undefined
       await delay(HOLDER_GROUP_POLL_MS)
     }
   }

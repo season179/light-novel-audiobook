@@ -101,6 +101,9 @@ class RecordingGpuCoordinator implements ExclusiveGpuLeaseCoordinator {
     return {
       owner,
       lockFilePath: this.lockFilePath,
+      quarantine: async () => {
+        this.events.push(`lease:quarantine:${owner}`)
+      },
       release: async () => {
         this.#held = undefined
         this.events.push(`lease:release:${owner}`)
