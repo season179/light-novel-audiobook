@@ -26,17 +26,41 @@ const runWithBadFlag = (script: string) =>
   new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const child = spawn(process.execPath, [path.join('scripts', script), '--lna-invalid-flag'], {
       cwd: REPOSITORY_ROOT,
+      detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let output = ''
+    let settled = false
+    const deadline = performance.now() + 10_000
+    const timeout = setInterval(() => {
+      if (performance.now() < deadline || settled) return
+      settled = true
+      clearInterval(timeout)
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        // A simultaneous exit is harmless; the bounded failure still reports the timeout.
+      }
+      reject(new Error(`${script} did not exit within 10000ms`))
+    }, 25)
     child.stdout.on('data', (chunk) => {
       output += String(chunk)
     })
     child.stderr.on('data', (chunk) => {
       output += String(chunk)
     })
-    child.once('error', reject)
-    child.once('close', (code) => resolve({ code, output }))
+    child.once('error', (error) => {
+      if (settled) return
+      settled = true
+      clearInterval(timeout)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      if (settled) return
+      settled = true
+      clearInterval(timeout)
+      resolve({ code, output })
+    })
   })
 
 describe('executable scripts evaluate and reach their own argument parsing', () => {
