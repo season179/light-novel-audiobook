@@ -162,7 +162,12 @@ class RequestResponsiveLlamaServer {
 function fakeGpuGate(lockFilePath: string) {
   return {
     async acquire(owner: string) {
-      return { owner, lockFilePath, release: async () => undefined }
+      return {
+        owner,
+        lockFilePath,
+        quarantine: async () => undefined,
+        release: async () => undefined,
+      }
     },
   }
 }

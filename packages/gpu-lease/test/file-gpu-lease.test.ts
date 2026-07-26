@@ -686,3 +686,41 @@ describe('FileGpuLeaseCoordinator', () => {
     await lease.release()
   })
 })
+
+it('release deadline is monotonic: a backward-jumping wall clock does not extend it (#monotonic)', async () => {
+  // The group-poll deadline in #awaitSubtreeExit only runs when the direct holder has already exited
+  // but a nested descendant survives (the orphan case) -- so reproduce that, then move the wall
+  // clock backward, the WSL2 failure mode. A monotonic deadline still fires and escalates to
+  // SIGKILL; a regressed Date.now() deadline would never be reached by the decreasing clock, so
+  // release would hang until the test times out.
+  const scripts = await makeRoot('gpu-flock-monotonic-scripts')
+  const root = await makeRoot('gpu-flock-monotonic')
+  const path = join(root, 'exclusive.lock')
+  const lease = await new FileGpuLeaseCoordinator({
+    lockFilePath: path,
+    flockExecutable: await wedgedHolderFlock(scripts),
+    inspectExistingComputeProcesses: false,
+    releaseGraceMs: RELEASE_GRACE_MS,
+  }).acquire('gemma')
+  const directPid = await directHolderPid(path) // also records the group for afterEach
+  process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
+  expect(processGroupAlive(directPid)).toBe(true)
+
+  const realDateNow = Date.now
+  let clock = realDateNow()
+  Date.now = () => (clock -= 5) // move the wall clock backward 5 ms on every read
+  const started = performance.now()
+  let thrown: unknown
+  try {
+    await lease.release()
+  } catch (error) {
+    thrown = error
+  } finally {
+    Date.now = realDateNow
+  }
+  const elapsed = performance.now() - started
+
+  expect(thrown).toMatchObject({ code: 'unavailable' }) // escalated to SIGKILL on the monotonic deadline
+  expect(processGroupAlive(directPid)).toBe(false) // the nested holder was reaped
+  expect(elapsed).toBeLessThan(RELEASE_DEADLINE_MS) // bounded; a regressed Date.now() deadline would hang
+}, 15_000)
