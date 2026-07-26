@@ -132,4 +132,43 @@ describe('approved cast derivation over bounded pinned material', () => {
       ]),
     ).toThrow(/not character-capable pinned material/)
   })
+
+  /**
+   * This is the capability issue #92 actually bought. Before the audition decision the pinned config
+   * offered two character-capable profiles over one speaker, so a book with nine characters had to
+   * share material — and sharing the fallback profile makes a character sound like the lines the
+   * director could not attribute at all. Nine distinct speakers means nine characters can be
+   * genuinely distinct, and this asserts it over the *shipped* config rather than a fixture.
+   */
+  it('casts nine characters onto nine distinct voices with nothing shared', () => {
+    const characterCapable = loaded.value.voiceProfiles.filter(
+      (profile) => profile.role !== 'narrator',
+    )
+    expect(characterCapable).toHaveLength(9)
+
+    const nine = characterCapable.map((profile, index) => ({
+      speakerId: `speaker-${index + 1}`,
+      aliases: [`Character ${index + 1}`],
+      materialProfileId: profile.id,
+      sharingGroupId: null,
+    })) satisfies readonly CastAssignment[]
+
+    const derived = deriveVoiceCast(loaded.value, nine)
+    expect(derived.characterProfileIds).toHaveLength(9)
+
+    // Distinct *material*, not distinct IDs: nine profile IDs pointing at one speaker and instruction
+    // would satisfy a naive count while every character rendered in the same voice.
+    const material = new Set(
+      derived.characterProfileIds.map((id) => {
+        const profile = derived.cast.profile(id)
+        return `${profile.syntheticSpeaker.toLowerCase()} ${profile.instruction} ${profile.seed}`
+      }),
+    )
+    expect(material.size).toBe(9)
+
+    // And none of them is the narrator's voice, which would make a character sound like narration.
+    expect([...material]).not.toContain(
+      `${derived.cast.narrator.syntheticSpeaker.toLowerCase()} ${derived.cast.narrator.instruction} ${derived.cast.narrator.seed}`,
+    )
+  })
 })
