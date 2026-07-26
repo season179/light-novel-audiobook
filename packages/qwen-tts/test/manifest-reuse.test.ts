@@ -14,6 +14,7 @@ import {
   tryReuse,
 } from '../src/manifest.js'
 import type { QwenWorkerRuntimeIdentity } from '../src/runtime-identity.js'
+import { AFFINE_WAV_GATE_REUSE_MIGRATION } from '../src/runtime-identity.js'
 import type { SpeechEngineError, SpeechSegmentRequest } from '../src/types.js'
 import { readCanonicalWavHeader } from '../src/wav.js'
 
@@ -113,12 +114,28 @@ describe('render manifest reuse', () => {
     expect(deepGate.calls, 'reuse must not reanalyze every sample of every cached WAV').toBe(1)
   })
 
-  it('reuses only the exactly pinned pre-affine artifacts after the gate-only worker edit', async () => {
+  /**
+   * The #91 affine-gate migration is spent. It was bounded to one exact pair of production-config
+   * hashes, and issue #92 changed the config to admit seven more approved speakers, so `config.sha256`
+   * no longer equals its `successorProductionConfigSha256` and the bridge can never fire again — which
+   * is precisely what its own comment promised ("any future worker hash remains identity-invalidating").
+   *
+   * That is the safe direction: reuse falls back to strict identity, so pre-#92 artifacts are
+   * re-rendered rather than served under a config that no longer describes them. This test now pins the
+   * retirement, because an inert migration that quietly came back to life would reuse audio across a
+   * config change nobody proved to be waveform-neutral.
+   */
+  it('no longer honors the spent #91 migration under the current pinned config', async () => {
     const predecessorRuntime = {
       ...RUNTIME_IDENTITY,
       workerSha256: PREDECESSOR_WORKER_SHA256,
     }
     const { config, plan: predecessor, directory } = await renderOnce(predecessorRuntime)
+    expect(
+      config.sha256,
+      'the live config must have moved off the migration successor, or this test proves nothing',
+    ).not.toBe(AFFINE_WAV_GATE_REUSE_MIGRATION.successorProductionConfigSha256)
+
     const manifest = JSON.parse(await readFile(predecessor.manifestPath, 'utf8')) as {
       observedProductionConfigSha256: string
     }
@@ -130,10 +147,8 @@ describe('render manifest reuse', () => {
     })
 
     expect(predecessor.identitySha256).not.toBe(successor.identitySha256)
-    expect((await tryReuse(successor, config))?.status).toBe('reused')
-
-    manifest.observedProductionConfigSha256 = '9'.repeat(64)
-    await writeFile(predecessor.manifestPath, `${canonicalJson(manifest)}\n`)
+    // Every migration precondition but the config hash still holds, so this asserts the config hash
+    // alone closes the bridge.
     expect(await tryReuse(successor, config)).toBeUndefined()
   })
 

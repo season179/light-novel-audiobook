@@ -12,6 +12,11 @@ export {
   type QwenApplicationSpeechEngineOptions,
 } from './application-adapter.js'
 export {
+  assertApprovedSpeakersPresent,
+  assertDistinctProfileMaterial,
+  type ProfileMaterial,
+} from './cast-distinctness.js'
+export {
   type LoadedProductionConfig,
   loadProductionConfig,
   type QwenProductionConfig,
