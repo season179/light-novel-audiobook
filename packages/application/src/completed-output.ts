@@ -86,11 +86,12 @@ export class CompletedOutputAuthority {
     job: AudiobookJob,
     consume: (output: AudiobookOutput) => T | Promise<T>,
   ): Promise<CompletedOutputAuthorization<T>> {
-    if (job.state !== 'completed' || job.bookId === null) {
+    const bookId = job.bookId
+    if (job.state !== 'completed' || bookId === null) {
       return Object.freeze({ exposable: false as const, denial: 'not-completed' as const })
     }
-    return this.catalogAccess.runExclusive(job.bookId, async () => {
-      const { revision } = await this.approvals.readCatalog(job.bookId as string)
+    return this.catalogAccess.runExclusive(bookId, async () => {
+      const { revision } = await this.approvals.readCatalog(bookId)
       const output = job.completedOutputAtCatalogRevision(revision)
       if (output === null) {
         return Object.freeze({
