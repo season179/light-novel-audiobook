@@ -18,6 +18,7 @@ import {
 } from '@light-novel-audiobook/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  ApprovalCatalogReentryError,
   CompletedOutputAuthority,
   collectFallbackSubjects,
   createRenderContract,
@@ -763,7 +764,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
 
     expect(outcome.status).toBe('rejected')
     if (outcome.status !== 'rejected') return
-    expect(outcome.error).toBeInstanceOf(Error)
+    expect(outcome.error).toBeInstanceOf(ApprovalCatalogReentryError)
     expect((outcome.error as Error).name).toBe('ApprovalCatalogReentryError')
     expect((outcome.error as Error).message).toContain(BOOK_ID)
     expect((outcome.error as Error).message).toContain('must not re-enter')
