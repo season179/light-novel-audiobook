@@ -7,13 +7,13 @@ import type {
   ReviewFallbackApprovals,
 } from '@light-novel-audiobook/application'
 import { RenderInProgressError } from '@light-novel-audiobook/application'
-import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import type {
   AudiobookJob,
   AudiobookJobSnapshot,
   AudiobookOutput,
   VoiceCast,
 } from '@light-novel-audiobook/domain'
+import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
