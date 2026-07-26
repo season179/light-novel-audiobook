@@ -65,15 +65,15 @@ export interface FallbackReviewCommandOptions {
   readonly segmentId?: string | undefined
   /** Defaults to the same environment/OS-account resolver as the local web review path. */
   readonly resolveReviewer?: (() => string) | undefined
-  /** Called before the durable grant is written, so CLI output states the human act first. */
+  /** Called before the durable grant or segment approval is written. */
   readonly announceApproval?: ((notice: FallbackReviewApprovalNotice) => void) | undefined
 }
 
 /**
  * Lists or explicitly approves fallback decisions in the driver's real SQLite workspace.
  *
- * This is intentionally separate from generation. No rendering command calls it, and the approval
- * branch cannot run without an attributed actor and at least one pending decision.
+ * This is intentionally separate from generation. No rendering command calls it. Every approval
+ * requires an attributed actor and either a pending bulk group or one listed segment decision.
  */
 export async function runFallbackReviewCommand(
   options: FallbackReviewCommandOptions,
