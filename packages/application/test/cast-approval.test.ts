@@ -1,6 +1,7 @@
 import { DomainError } from '@light-novel-audiobook/domain'
 import { describe, expect, it } from 'vitest'
 import {
+  type CastProposal,
   createCastApprovalRecord,
   type PersistedCastApproval,
   parseCastProposal,
@@ -149,5 +150,38 @@ describe('cast proposal and human approval', () => {
         speakerCount: 3,
       }),
     ).toThrow(/unsupported shape/)
+  })
+
+  it('rejects a duplicate speaker assignment at approval time so an unrenderable cast cannot persist', async () => {
+    const repository = new InMemoryCastApprovals()
+    const review = new ReviewCastApprovals({
+      approvals: repository,
+      allowedMaterialProfileIds: ['material-bright', 'material-low'],
+    })
+    // A proposal that names the same speaker twice would render as one voice in `VoiceCast` only after
+    // every later run for this EPUB throws; approval must reject it before it is written to the ledger.
+    const duplicateSpeakerProposal: CastProposal = {
+      bookId: 'book-abc123',
+      epubSha256: 'a'.repeat(64),
+      assignments: [
+        {
+          speakerId: 'speaker-amber',
+          aliases: ['Amber'],
+          materialProfileId: 'material-bright',
+          sharingGroupId: null,
+        },
+        {
+          speakerId: 'speaker-amber',
+          aliases: ['Captain Amber'],
+          materialProfileId: 'material-low',
+          sharingGroupId: null,
+        },
+      ],
+    }
+
+    await expect(
+      review.approve({ proposal: duplicateSpeakerProposal, decidedBy: 'Reviewer One' }),
+    ).rejects.toThrow(/more than once/)
+    expect(repository.approval).toBeUndefined()
   })
 })
