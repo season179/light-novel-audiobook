@@ -70,6 +70,22 @@ export const resolveSafeWorkspace = async ({
 }) => {
   const root =
     configured === undefined ? await mkdtemp(path.join(tmpdir(), prefix)) : path.resolve(configured)
+  // Containment is checked on the resolved path *before* anything is created: `mkdir` first would
+  // leave a directory inside the very root we are about to refuse, and one of those roots is the
+  // user's real workspace, which this script must never write to under any outcome. The canonical
+  // re-check after creation still covers the symlink case a textual check cannot see.
+  const containedIn = (candidate, ancestor) =>
+    candidate === ancestor || candidate.startsWith(`${ancestor}${path.sep}`)
+  for (const [ancestor, describe] of [
+    [path.resolve(REPOSITORY_ROOT), (p) => `workspace resolves inside the repository: ${p}`],
+    [
+      path.resolve(USER_DATA_ROOT),
+      (p) =>
+        `workspace resolves inside ${p}, the real user workspace; this script never writes there`,
+    ],
+  ]) {
+    if (containedIn(root, ancestor)) fail(describe(root))
+  }
   await mkdir(root, { recursive: true })
   const canonical = await realpath(root)
   const canonicalRepo = await realpath(REPOSITORY_ROOT)
