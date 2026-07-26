@@ -35,6 +35,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ACCEPTANCE_M1_EPUB_PATH, buildAcceptanceM1EpubBytes } from './build-acceptance-m1-epub.mjs'
+import { assertContainerProbe, ContainerCheckFailure } from './proof-m1-container-check.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIR, '..')
@@ -1006,8 +1007,10 @@ const verifyOutput = async (config, client, jobId, baseUrl) => {
 
 /**
  * Real mode inspects the M4B container with the pinned ffprobe — AAC stream, one marker per
- * chapter, ordered non-overlapping spans within the encoded duration — mirroring what
- * FfmpegAudioAssembler.assertAudiobook verifies at assembly time.
+ * chapter, ordered non-overlapping spans within the encoded duration, and for the acceptance
+ * book the embedded cover (attached-picture stream) and title/creator metadata the epic names —
+ * mirroring what FfmpegAudioAssembler.assertAudiobook verifies at assembly time. The assertions
+ * live in proof-m1-container-check.mjs so they can be driven with broken probe output directly.
  *
  * Fake mode's assembler concatenates placeholder WAVs into a RIFF payload under the `.m4b` name
  * (a documented shortcut, see FakeAudioAssembler), so the honest check there is the RIFF/WAVE
@@ -1035,41 +1038,22 @@ const inspectContainer = async (config, m4b, expectedChapters) => {
       'ffprobe container inspection',
     )
     const probe = JSON.parse(raw)
-    const audio = (probe.streams ?? []).find((stream) => stream.codec_type === 'audio')
-    if (audio === undefined) fail('verification: the M4B has no audio stream')
-    if (audio.codec_name !== 'aac') {
-      fail(`verification: M4B audio codec is ${audio.codec_name}, not aac`)
-    }
-    const markers = (probe.chapters ?? []).map((chapter) => ({
-      startMs: Math.round(Number(chapter.start_time) * 1000),
-      endMs: Math.round(Number(chapter.end_time) * 1000),
-    }))
-    if (markers.length !== expectedChapters) {
-      fail(
-        `verification: the M4B carries ${markers.length} chapter marker(s), expected ${expectedChapters}`,
-      )
-    }
-    const durationMs = Math.round(Number(probe.format.duration) * 1000)
-    let cursor = 0
-    for (const [index, marker] of markers.entries()) {
-      if (marker.startMs < cursor || marker.endMs <= marker.startMs) {
-        fail(
-          `verification: chapter marker ${index + 1} spans ${marker.startMs}..${marker.endMs}ms, ` +
-            'not an ordered positive span',
-        )
-      }
-      cursor = marker.endMs
-    }
-    if (Math.abs(durationMs - cursor) > 2_000) {
-      fail(`verification: chapter markers end at ${cursor}ms but the stream is ${durationMs}ms`)
+    let container
+    try {
+      container = assertContainerProbe(probe, {
+        expectedChapters,
+        // The acceptance book declares a cover and a creator, so its M4B must embed both;
+        // a custom book without them writes neither by design.
+        expectCover: config.epub === ACCEPTANCE_M1_EPUB_PATH,
+        expectCreator: config.epub === ACCEPTANCE_M1_EPUB_PATH,
+      })
+    } catch (error) {
+      if (error instanceof ContainerCheckFailure) fail(`verification: ${error.message}`)
+      throw error
     }
     return {
       kind: 'mp4',
-      formatName: probe.format.format_name,
-      codec: audio.codec_name,
-      durationMs,
-      chapterMarkers: markers.length,
-      markerSpansOrdered: true,
+      ...container,
     }
   } finally {
     await rm(scratch, { force: true })
