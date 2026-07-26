@@ -183,6 +183,16 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     this.#quarantineFilePath = `${this.#lockFilePath}.quarantined`
     this.#flockExecutable = config.flockExecutable ?? 'flock'
     this.#nvidiaSmiExecutable = config.nvidiaSmiExecutable ?? 'nvidia-smi'
+    if (config.flockExecutable !== undefined && config.onHolderStarted === undefined) {
+      // A custom flock executable exists only so tests can run hostile or stubborn holders:
+      // holders that outlive every polite stop. Without the holder-start observer there is no
+      // point at which such a holder can be durably registered, so an interrupt would strand it
+      // unregistered and unreapable (#67). Fail closed at construction instead.
+      throw new GpuLeaseError(
+        'unavailable',
+        'A custom flock executable requires onHolderStarted so the holder can be registered',
+      )
+    }
     this.#inspectExistingComputeProcesses = config.inspectExistingComputeProcesses ?? true
     this.#residentGpuMemoryThresholdMiB =
       config.residentGpuMemoryThresholdMiB ?? DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB

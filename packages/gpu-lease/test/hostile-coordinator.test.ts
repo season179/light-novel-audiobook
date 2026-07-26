@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { FileGpuLeaseCoordinator, GpuLeaseError } from '../src/index.js'
 
 const TEST_DIR = new URL('.', import.meta.url).pathname
 
@@ -26,5 +28,19 @@ describe('hostile coordinator construction (#67)', () => {
       if ((await readFile(path, 'utf8')).includes(needle)) offenders.push(name)
     }
     expect(offenders).toEqual([])
+  })
+
+  it('refuses a custom flock executable without a holder observer', () => {
+    // The load-bearing constraint: alternate holders exist to be hostile fixtures, and an
+    // unobserved hostile holder can never be durably registered. Constructing one is rejected
+    // no matter what the fixture or its scripts are named.
+    expect(
+      () =>
+        new FileGpuLeaseCoordinator({
+          lockFilePath: join(tmpdir(), `gpu-lease-observerless-${crypto.randomUUID()}.lock`),
+          flockExecutable: '/bin/true',
+          inspectExistingComputeProcesses: false,
+        }),
+    ).toThrow(GpuLeaseError)
   })
 })
