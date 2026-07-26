@@ -90,11 +90,19 @@ export function validateCanonicalWavBytes(
     validateCanonicalWavHeader(bytes, requirements, segmentId)
   const wordCount = text.trim().split(/\s+/u).filter(Boolean).length
   if (wordCount === 0) invalid('render text has no words', segmentId)
-  const secondsPerWord = durationSeconds / wordCount
+  // A ratio has no intercept and mistakes fixed short-utterance variance for speaking rate (#91).
+  // The upper allowance becomes negligible over prose. The lower side instead keeps an absolute,
+  // measured truncation floor: onset/release overhead can only lengthen an utterance, not shorten it.
+  const minimumTextDurationSeconds = Math.max(
+    requirements.minimumUtteranceDurationSeconds,
+    requirements.minimumSecondsPerWord * wordCount,
+  )
+  const maximumTextDurationSeconds =
+    requirements.maximumSecondsPerWord * wordCount + requirements.fixedUtteranceOverheadSeconds
   if (
     durationSeconds > requirements.maximumDurationSeconds ||
-    secondsPerWord < requirements.minimumSecondsPerWord ||
-    secondsPerWord > requirements.maximumSecondsPerWord
+    durationSeconds < minimumTextDurationSeconds ||
+    durationSeconds > maximumTextDurationSeconds
   ) {
     invalid('duration is outside configured text-relative bounds', segmentId)
   }

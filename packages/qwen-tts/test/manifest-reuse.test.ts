@@ -43,6 +43,10 @@ const RUNTIME_IDENTITY: QwenWorkerRuntimeIdentity = Object.freeze({
   imports: Object.freeze({ qwenTts: '0.1.1', torch: '2.9.1', torchaudio: '2.9.1' }),
 })
 
+const PREDECESSOR_CONFIG_SHA256 = '82f9a62a94a62bcf68e5d35709e358ffb552e380d1295a8e7b014dc82a219f25'
+const PREDECESSOR_WORKER_SHA256 = '966d089fc0a65d63bcdd6a3d99f6baebd32e93bf054d0d67aa6f2b4050f02ca7'
+const SUCCESSOR_WORKER_SHA256 = '9736166166ecf73cef3506f6cfa9e80e16eeb9bd5e532bc032fad54b0440d113'
+
 const REQUEST: SpeechSegmentRequest = {
   segmentId: 'book-0123456789abcdef01234567-ch0001-p000001-s0001',
   text: 'The cached clip must stay byte identical.',
@@ -107,6 +111,30 @@ describe('render manifest reuse', () => {
     expect(reused?.status).toBe('reused')
     expect(reused?.audio.sha256).toBe(sha256(canonicalWav(REQUEST.text)))
     expect(deepGate.calls, 'reuse must not reanalyze every sample of every cached WAV').toBe(1)
+  })
+
+  it('reuses only the exactly pinned pre-affine artifacts after the gate-only worker edit', async () => {
+    const predecessorRuntime = {
+      ...RUNTIME_IDENTITY,
+      workerSha256: PREDECESSOR_WORKER_SHA256,
+    }
+    const { config, plan: predecessor, directory } = await renderOnce(predecessorRuntime)
+    const manifest = JSON.parse(await readFile(predecessor.manifestPath, 'utf8')) as {
+      observedProductionConfigSha256: string
+    }
+    manifest.observedProductionConfigSha256 = PREDECESSOR_CONFIG_SHA256
+    await writeFile(predecessor.manifestPath, `${canonicalJson(manifest)}\n`)
+    const successor = createSegmentPlan(1, REQUEST, join(directory, 'audio'), config, {
+      ...RUNTIME_IDENTITY,
+      workerSha256: SUCCESSOR_WORKER_SHA256,
+    })
+
+    expect(predecessor.identitySha256).not.toBe(successor.identitySha256)
+    expect((await tryReuse(successor, config))?.status).toBe('reused')
+
+    manifest.observedProductionConfigSha256 = '9'.repeat(64)
+    await writeFile(predecessor.manifestPath, `${canonicalJson(manifest)}\n`)
+    expect(await tryReuse(successor, config)).toBeUndefined()
   })
 
   it('invalidates reuse when the pinned worker runtime identity changes', async () => {

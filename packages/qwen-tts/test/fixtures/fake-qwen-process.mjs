@@ -42,7 +42,8 @@ const emit = (type, values = {}) => {
 function wav(text) {
   const words = text.trim().split(/\s+/u).length
   const sampleRate = 24_000
-  const frames = Math.max(2_880, Math.round(words * sampleRate * 0.12))
+  // Match the measured 0.40 s shortest complete production utterance (#91).
+  const frames = Math.max(9_600, Math.round(words * sampleRate * 0.12))
   const bytes = Buffer.alloc(44 + frames * 2)
   bytes.write('RIFF', 0)
   bytes.writeUInt32LE(bytes.length - 8, 4)

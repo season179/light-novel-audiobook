@@ -8,6 +8,15 @@ interface RuntimePackage {
   readonly version: string
 }
 
+export const AFFINE_WAV_GATE_REUSE_MIGRATION = Object.freeze({
+  predecessorProductionConfigSha256:
+    '82f9a62a94a62bcf68e5d35709e358ffb552e380d1295a8e7b014dc82a219f25',
+  predecessorWorkerSha256: '966d089fc0a65d63bcdd6a3d99f6baebd32e93bf054d0d67aa6f2b4050f02ca7',
+  successorProductionConfigSha256:
+    'd830eec3a9a3c46b3955a3fa0b6975d35b24ad1389f7c7d29547fffc2f7214b1',
+  successorWorkerSha256: '9736166166ecf73cef3506f6cfa9e80e16eeb9bd5e532bc032fad54b0440d113',
+})
+
 export interface QwenWorkerRuntimeIdentity {
   readonly workerSha256: string
   readonly pythonExecutableSha256: string
@@ -19,6 +28,22 @@ export interface QwenWorkerRuntimeIdentity {
     readonly torch: string
     readonly torchaudio: string
   }
+}
+
+export function waveformProducingRuntimeIdentity(
+  identity: QwenWorkerRuntimeIdentity,
+): QwenWorkerRuntimeIdentity {
+  // #91 changed only the post-generation health validator in the pinned worker. Preserve the
+  // predecessor's waveform-content identity for that exact successor so resumable application
+  // input identities do not stale; manifests still record the actual successor hash and apply the
+  // separately bounded reuse migration. Any future worker hash remains identity-invalidating.
+  if (identity.workerSha256 !== AFFINE_WAV_GATE_REUSE_MIGRATION.successorWorkerSha256) {
+    return identity
+  }
+  return Object.freeze({
+    ...identity,
+    workerSha256: AFFINE_WAV_GATE_REUSE_MIGRATION.predecessorWorkerSha256,
+  })
 }
 
 function failure(message: string): never {

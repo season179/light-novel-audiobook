@@ -64,7 +64,9 @@ EXPECTED_WAV = {
     "maximumClippedSampleFraction": 0.001,
     "minimumActiveFrameFraction": 0.15,
     "minimumSecondsPerWord": 0.08,
+    "minimumUtteranceDurationSeconds": 0.32,
     "maximumSecondsPerWord": 2.0,
+    "fixedUtteranceOverheadSeconds": 1.0,
     "maximumDurationSeconds": 30.0,
 }
 
@@ -440,7 +442,14 @@ def validate_wav(data: bytes, wav_config: dict[str, Any], text: str) -> dict[str
     frames = len(samples)
     duration = frames / sample_rate
     words = len(text.split())
-    seconds_per_word = duration / words
+    minimum_text_duration = max(
+        wav_config["minimumUtteranceDurationSeconds"],
+        wav_config["minimumSecondsPerWord"] * words,
+    )
+    maximum_text_duration = (
+        wav_config["maximumSecondsPerWord"] * words
+        + wav_config["fixedUtteranceOverheadSeconds"]
+    )
     clipped = sum(abs(sample) >= 32760 for sample in samples) / frames
     frame_length = max(1, round(sample_rate * 0.02))
     threshold = 32768 * (10 ** (-50 / 20))
@@ -454,8 +463,8 @@ def validate_wav(data: bytes, wav_config: dict[str, Any], text: str) -> dict[str
     active_fraction = active / analyzed
     if (
         duration > wav_config["maximumDurationSeconds"]
-        or seconds_per_word < wav_config["minimumSecondsPerWord"]
-        or seconds_per_word > wav_config["maximumSecondsPerWord"]
+        or duration < minimum_text_duration
+        or duration > maximum_text_duration
         or clipped > wav_config["maximumClippedSampleFraction"]
         or active_fraction < wav_config["minimumActiveFrameFraction"]
     ):

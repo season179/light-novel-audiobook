@@ -2,7 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { LoadedProductionConfig, VoiceProfile, WavRequirements } from './config.js'
-import type { QwenWorkerRuntimeIdentity } from './runtime-identity.js'
+import {
+  AFFINE_WAV_GATE_REUSE_MIGRATION,
+  type QwenWorkerRuntimeIdentity,
+} from './runtime-identity.js'
 import type {
   FallbackApproval,
   SpeechAudioIdentity,
@@ -217,6 +220,38 @@ function recordedAudioClaim(
   return { sha256: digest, bytes, frames, durationSeconds }
 }
 
+function matchesRenderIdentity(
+  manifest: RenderManifest,
+  plan: SegmentPlan,
+  config: LoadedProductionConfig,
+): boolean {
+  if (
+    manifest.renderIdentitySha256 === plan.identitySha256 &&
+    canonicalJson(manifest.renderIdentity) === canonicalJson(plan.identity)
+  ) {
+    return true
+  }
+  const migration = AFFINE_WAV_GATE_REUSE_MIGRATION
+  if (
+    config.sha256 !== migration.successorProductionConfigSha256 ||
+    plan.identity.workerRuntime.workerSha256 !== migration.successorWorkerSha256 ||
+    manifest.observedProductionConfigSha256 !== migration.predecessorProductionConfigSha256
+  ) {
+    return false
+  }
+  const predecessorIdentity: RenderIdentity = {
+    ...plan.identity,
+    workerRuntime: {
+      ...plan.identity.workerRuntime,
+      workerSha256: migration.predecessorWorkerSha256,
+    },
+  }
+  return (
+    manifest.renderIdentitySha256 === sha256(canonicalJson(predecessorIdentity)) &&
+    canonicalJson(manifest.renderIdentity) === canonicalJson(predecessorIdentity)
+  )
+}
+
 export async function tryReuse(
   plan: SegmentPlan,
   config: LoadedProductionConfig,
@@ -236,8 +271,7 @@ export async function tryReuse(
   if (
     manifest.schemaVersion !== 1 ||
     manifest.segmentId !== plan.request.segmentId ||
-    manifest.renderIdentitySha256 !== plan.identitySha256 ||
-    canonicalJson(manifest.renderIdentity) !== canonicalJson(plan.identity) ||
+    !matchesRenderIdentity(manifest, plan, config) ||
     manifest.audio?.file !== `${plan.request.segmentId}.wav`
   ) {
     return undefined
