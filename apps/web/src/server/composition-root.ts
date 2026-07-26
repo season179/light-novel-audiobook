@@ -16,6 +16,7 @@ import { withSanitizedFailures } from './adapter-failure-boundary.js'
 import { AudiobookWebApi } from './audiobook-web-api.js'
 import { BookReadModelStore, ProjectingJobRepository } from './book-read-model.js'
 import { EpubUploadStore } from './epub-upload-store.js'
+import { resolveEnvironmentCompositionOptions } from './environment-composition.js'
 import { FakeAudioAssembler } from './fakes/fake-audio-assembler.js'
 import { FAKE_DIRECTOR_IDENTITY, FakeDirectorModel } from './fakes/fake-director-model.js'
 import { FakeEpubExtractor } from './fakes/fake-epub-extractor.js'
@@ -183,8 +184,17 @@ export const createAudiobookWebApi = async (
 
 let instance: Promise<AudiobookWebApi> | undefined
 
-/** Lazily built once per server process; never at import time, so builds stay side-effect free. */
+/**
+ * Lazily built once per server process; never at import time, so builds stay side-effect free.
+ *
+ * The adapter set comes from explicit environment configuration (`LNA_WEB_TRANSPORTS`, resolved in
+ * `environment-composition.ts`): **fakes are the default**, and the real EPUB/Gemma/Qwen/FFmpeg/
+ * SQLite adapters exist only when that variable says `real` (#21). Explicit options passed to
+ * `createAudiobookWebApi` — every test — are untouched by this.
+ */
 export const getAudiobookWebApi = (): Promise<AudiobookWebApi> => {
-  instance ??= createAudiobookWebApi()
+  instance ??= resolveEnvironmentCompositionOptions().then((options) =>
+    createAudiobookWebApi(options),
+  )
   return instance
 }

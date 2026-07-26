@@ -70,7 +70,7 @@ const M1_CAST_ROLES: readonly CastRole[] = [
   },
 ]
 
-const findRepositoryRoot = (from: string): string | undefined => {
+export const findRepositoryRoot = (from: string): string | undefined => {
   let current = resolve(from)
   for (;;) {
     if (existsSync(join(current, 'pnpm-workspace.yaml'))) return current
@@ -125,6 +125,11 @@ const toDomainProfile = (role: CastRole, pinned: PinnedQwenProfile): VoiceProfil
   })
 
 /** Casting is a composition-root decision, never a browser one. */
+/** Speaker IDs the M1 cast can render, for the real director's context roster (#21). */
+export const M1_CHARACTER_SPEAKER_IDS: readonly string[] = M1_CAST_ROLES.flatMap((role) =>
+  role.role === 'character' && role.speakerId !== null ? [role.speakerId] : [],
+)
+
 export const createM1VoiceCast = (loaded: LoadedProductionConfig): VoiceCast => {
   const profiles = M1_CAST_ROLES.map((role) =>
     toDomainProfile(role, requirePinned(loaded, role.pinnedId)),

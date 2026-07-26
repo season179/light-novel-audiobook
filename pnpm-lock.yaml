@@ -32,12 +32,24 @@ importers:
       '@light-novel-audiobook/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@light-novel-audiobook/audio-assembly':
+        specifier: workspace:*
+        version: link:../../packages/audio-assembly
       '@light-novel-audiobook/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@light-novel-audiobook/epub-ingestion':
+        specifier: workspace:*
+        version: link:../../packages/epub-ingestion
       '@light-novel-audiobook/gemma-director':
         specifier: workspace:*
         version: link:../../packages/gemma-director
+      '@light-novel-audiobook/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@light-novel-audiobook/pipeline-driver':
+        specifier: workspace:*
+        version: link:../../packages/pipeline-driver
       '@light-novel-audiobook/qwen-tts':
         specifier: workspace:*
         version: link:../../packages/qwen-tts
