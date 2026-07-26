@@ -15,65 +15,39 @@
  * Clock note: `Date.now()` runs backward on this host, so every elapsed-time computation below
  * uses `performance.now()`. Wall-clock `Date` is used only for timestamps in names and evidence.
  */
-import { spawn, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync } from 'node:fs'
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-  stat,
-  truncate,
-  writeFile,
-} from 'node:fs/promises'
-import { createConnection } from 'node:net'
-import { homedir, tmpdir } from 'node:os'
+import { mkdir, readdir, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { ACCEPTANCE_M1_EPUB_PATH, buildAcceptanceM1EpubBytes } from './build-acceptance-m1-epub.mjs'
 import { assertContainerProbe, ContainerCheckFailure } from './proof-m1-container-check.mjs'
+import {
+  assertGpuIdle,
+  checkRealRuntimePaths,
+  elapsedMs,
+  fail,
+  HarnessFailure,
+  log,
+  pathStats,
+  portIsFree,
+  REPOSITORY_ROOT,
+  resolveRealRuntimePaths,
+  resolveSafeWorkspace,
+  runChecked,
+  sha256File,
+  sha256Hex,
+  sleep,
+  waitForPort,
+} from './proof-m1-lib.mjs'
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
-const REPOSITORY_ROOT = path.resolve(SCRIPT_DIR, '..')
 const HARNESS_VERSION = 'proof-m1@1'
-
-/** Pinned Gemma profile values, mirrored from packages/gemma-director/src/profile.ts. */
-const GEMMA_MODEL_FILE = 'gemma-4-26B_q4_0-it.gguf'
-const GEMMA_MODEL_BYTES = 14_439_363_584
-const EXPECTED_FFMPEG_VERSION = '7.0.2'
 
 /** The built-in book the app's fake extractor returns; pinned by apps/web tests. */
 const FAKE_MODE_CHAPTERS = 3
 /** The acceptance EPUB's chapter count (two XHTML spine documents). */
 const REAL_MODE_CHAPTERS = 2
-
-const USER_DATA_ROOT = path.join(homedir(), '.local', 'share', 'light-novel-audiobook')
-
-class HarnessFailure extends Error {}
-const fail = (message) => {
-  throw new HarnessFailure(message)
-}
-
-const startedAtMonotonic = performance.now()
-const elapsedMs = () => Math.round(performance.now() - startedAtMonotonic)
-const log = (message) => console.log(`[+${String(elapsedMs()).padStart(7)}ms] ${message}`)
-
-const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex')
-const sha256File = async (file) => sha256Hex(await readFile(file))
-
-const pathStats = async (candidate) => {
-  try {
-    return await stat(candidate)
-  } catch {
-    return undefined
-  }
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // ----------------------------------------------------------------------------- argument parsing
 
@@ -130,59 +104,13 @@ const parseArgs = (argv) => {
 // --------------------------------------------------------------------------- workspace safety
 
 /**
- * The harness gets its own workspace and never touches the user's real one. A workspace inside
- * the repository or inside `~/.local/share/light-novel-audiobook` is refused on canonical paths.
+ * The harness gets its own workspace and never touches the user's real one (see proof-m1-lib).
+ * A reused workspace hides failures: stale segment files, stale outputs, a stale database.
  */
-const resolveHarnessWorkspace = async (configured, mode) => {
-  const root =
-    configured === undefined
-      ? await mkdtemp(path.join(tmpdir(), `lna-m1-proof-${mode}-`))
-      : path.resolve(configured)
-  await mkdir(root, { recursive: true })
-  const canonical = await realpath(root)
-  const canonicalRepo = await realpath(REPOSITORY_ROOT)
-  if (canonical === canonicalRepo || canonical.startsWith(`${canonicalRepo}${path.sep}`)) {
-    fail(`workspace resolves inside the repository: ${canonical}`)
-  }
-  const userDataCanonical = await realpath(USER_DATA_ROOT).catch(() => USER_DATA_ROOT)
-  if (canonical === userDataCanonical || canonical.startsWith(`${userDataCanonical}${path.sep}`)) {
-    fail(
-      `workspace resolves inside ${userDataCanonical}, the real user workspace; ` +
-        'this harness never writes there',
-    )
-  }
-  // A reused workspace hides failures: stale segment files, stale outputs, a stale database.
-  // The proof must build its own state from scratch every run.
-  const existing = await readdir(canonical)
-  if (existing.length > 0) {
-    fail(
-      `workspace is not fresh (${existing.length} entries, e.g. ${existing.slice(0, 3).join(', ')}); ` +
-        'use an empty directory or let the harness create one',
-    )
-  }
-  return canonical
-}
+const resolveHarnessWorkspace = async (configured, mode) =>
+  (await resolveSafeWorkspace({ configured, prefix: `lna-m1-proof-${mode}-` })).root
 
 // ------------------------------------------------------------------------------ network helpers
-
-const portIsFree = (port, host = '127.0.0.1') =>
-  new Promise((resolvePromise) => {
-    const socket = createConnection({ port, host })
-    socket.once('connect', () => {
-      socket.destroy()
-      resolvePromise(false)
-    })
-    socket.once('error', () => resolvePromise(true))
-  })
-
-const waitForPort = async (port, free, timeoutMs, label) => {
-  const deadline = performance.now() + timeoutMs
-  while (performance.now() < deadline) {
-    if ((await portIsFree(port)) === free) return
-    await sleep(250)
-  }
-  fail(`${label}: port ${port} did not become ${free ? 'free' : 'bound'} within ${timeoutMs}ms`)
-}
 
 const waitForHttp = async (baseUrl, server, timeoutMs, label) => {
   const deadline = performance.now() + timeoutMs
@@ -365,26 +293,11 @@ const killDevServer = async (server) => {
 
 // ---------------------------------------------------------------------------------- pre-flight
 
-const dataRoot = () =>
-  process.env.QWEN3_TTS_DATA_ROOT ??
-  path.join(
-    process.env.XDG_DATA_HOME ?? path.join(homedir(), '.local', 'share'),
-    'light-novel-audiobook',
-  )
-
-const runChecked = (command, args, label) => {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 30_000 })
-  if (result.error !== undefined || result.status !== 0) {
-    fail(`${label} failed: ${command} ${args.join(' ')} (${result.error ?? result.stderr?.trim()})`)
-  }
-  return result.stdout
-}
-
 /**
  * Asserts everything a run needs before anything starts, and prints each check. Fake mode needs
- * no GPU and no models; real mode mirrors what `createRealTransports` and the FFmpeg assembler
- * will demand, so a missing runtime is refused here instead of surfacing as a confusing error
- * halfway through a render.
+ * no GPU and no models; real mode checks everything createRealTransports and the FFmpeg
+ * assembler will demand (shared with listening-run via proof-m1-lib), so a missing runtime is
+ * refused here instead of surfacing as a confusing error halfway through a render.
  */
 const runPreflight = async (config) => {
   const check = (name, ok, detail) => {
@@ -427,139 +340,12 @@ const runPreflight = async (config) => {
     return {}
   }
 
-  // --- real transports: everything createRealTransports and FfmpegAudioAssembler will require.
-  const env = {}
-  const llamaRoot =
-    process.env.LNA_LLAMA_RUNTIME_ROOT ??
-    path.join(
-      process.env.XDG_CACHE_HOME ?? path.join(homedir(), '.cache'),
-      'light-novel-audiobook',
-      'issue-6-brain',
-    )
-  env.LNA_LLAMA_RUNTIME_ROOT = llamaRoot
-  check(
-    'llama runtime root is a directory',
-    (await pathStats(llamaRoot))?.isDirectory() === true,
-    llamaRoot,
-  )
-  const llamaBinary = path.join(llamaRoot, 'llama.cpp', 'build', 'bin', 'llama-server')
-  const llamaBinaryStats = await pathStats(llamaBinary)
-  check(
-    'llama-server binary is executable',
-    llamaBinaryStats !== undefined && (llamaBinaryStats.mode & 0o111) !== 0,
-    llamaBinary,
-  )
-  const gemmaModel = path.join(llamaRoot, 'models', GEMMA_MODEL_FILE)
-  const gemmaStats = await pathStats(gemmaModel)
-  check('pinned Gemma GGUF exists', gemmaStats?.isFile() === true, gemmaModel)
-  check(
-    'pinned Gemma GGUF has the pinned byte size',
-    gemmaStats?.size === GEMMA_MODEL_BYTES,
-    `${gemmaStats?.size ?? 0} of ${GEMMA_MODEL_BYTES} bytes`,
-  )
-
-  const uvLockPath = path.join(REPOSITORY_ROOT, 'scripts', 'qwen3-tts-runtime', 'uv.lock')
-  const uvLockSha256 = await sha256File(uvLockPath)
-  const runtimeDir = path.join(dataRoot(), 'runtimes', 'tts', 'qwen3-tts', uvLockSha256)
-  const qwenPython = process.env.LNA_QWEN_PYTHON ?? path.join(runtimeDir, 'bin', 'python')
-  const qwenWorker =
-    process.env.LNA_QWEN_WORKER ??
-    path.join(REPOSITORY_ROOT, 'packages', 'qwen-tts', 'python', 'qwen_batch_worker.py')
-  const qwenManifest =
-    process.env.LNA_QWEN_RUNTIME_MANIFEST ?? path.join(runtimeDir, 'manifest.json')
-  env.LNA_QWEN_PYTHON = qwenPython
-  env.LNA_QWEN_WORKER = qwenWorker
-  env.LNA_QWEN_RUNTIME_MANIFEST = qwenManifest
-  check('Qwen python exists', (await pathStats(qwenPython))?.isFile() === true, qwenPython)
-  check('Qwen worker script exists', (await pathStats(qwenWorker))?.isFile() === true, qwenWorker)
-  const manifestStats = await pathStats(qwenManifest)
-  check('Qwen runtime manifest exists', manifestStats?.isFile() === true, qwenManifest)
-  if (manifestStats?.isFile() === true) {
-    const manifest = JSON.parse(await readFile(qwenManifest, 'utf8'))
-    check(
-      'Qwen runtime manifest matches the pinned uv.lock',
-      manifest.uvLockSha256 === uvLockSha256,
-      `uv.lock sha256 ${uvLockSha256.slice(0, 16)}…`,
-    )
-  }
-
-  const lockPath = path.join(REPOSITORY_ROOT, 'config', 'qwen3-tts-custom-voice.lock.json')
-  const lock = JSON.parse(await readFile(lockPath, 'utf8'))
-  const snapshot =
-    process.env.LNA_QWEN_SNAPSHOT ??
-    path.join(
-      dataRoot(),
-      'models',
-      'tts',
-      'qwen3-tts-custom-voice',
-      lock.model.revision,
-      'snapshot',
-    )
-  if (process.env.LNA_QWEN_SNAPSHOT !== undefined) {
-    env.LNA_QWEN_SNAPSHOT = process.env.LNA_QWEN_SNAPSHOT
-  }
-  check(
-    'Qwen model snapshot is a directory',
-    (await pathStats(snapshot))?.isDirectory() === true,
-    snapshot,
-  )
-
-  const ffmpegDir =
-    process.env.LIGHT_NOVEL_AUDIOBOOK_FFMPEG_DIR ??
-    path.join(dataRoot(), 'tools', 'ffmpeg', 'current')
-  const ffmpegPath = path.join(ffmpegDir, 'ffmpeg')
-  const ffprobePath = path.join(ffmpegDir, 'ffprobe')
-  check('pinned ffmpeg exists', (await pathStats(ffmpegPath))?.isFile() === true, ffmpegPath)
-  check('pinned ffprobe exists', (await pathStats(ffprobePath))?.isFile() === true, ffprobePath)
-  const ffmpegVersion = runChecked(ffmpegPath, ['-version'], 'ffmpeg version probe')
-  check(
-    `ffmpeg is the pinned ${EXPECTED_FFMPEG_VERSION}`,
-    ffmpegVersion.includes(`ffmpeg version ${EXPECTED_FFMPEG_VERSION}`),
-    ffmpegVersion.split('\n')[0],
-  )
-  config.ffprobePath = ffprobePath
-
-  const directorUrl = process.env.LNA_DIRECTOR_URL ?? 'http://127.0.0.1:8080/v1'
-  env.LNA_DIRECTOR_URL = directorUrl
-  const directorPort = Number(new URL(directorUrl).port || 80)
-  check('director port is free', await portIsFree(directorPort), `127.0.0.1:${directorPort}`)
-  config.directorPort = directorPort
-
-  const gpuLock = process.env.LNA_GPU_LOCK ?? path.join(dataRoot(), 'gpu', 'exclusive.lock')
-  env.LNA_GPU_LOCK = gpuLock
-  check(
-    'GPU lock parent directory exists',
-    (await pathStats(path.dirname(gpuLock)))?.isDirectory() === true,
-    gpuLock,
-  )
-
-  const nvidiaSmi = spawnSync(
-    'nvidia-smi',
-    ['--query-compute-apps=pid,used_memory', '--format=csv,noheader'],
-    { encoding: 'utf8', timeout: 30_000 },
-  )
-  check(
-    'nvidia-smi is callable (read-only GPU probe)',
-    nvidiaSmi.error === undefined && nvidiaSmi.status === 0,
-    nvidiaSmi.error !== undefined ? String(nvidiaSmi.error) : undefined,
-  )
-  const holders = (nvidiaSmi.stdout ?? '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-  check(
-    'GPU is idle: no compute process holds the card',
-    holders.length === 0,
-    holders.length === 0
-      ? undefined
-      : `held by pid(s) ${holders.map((line) => line.split(',')[0]).join(', ')}`,
-  )
-  const memory = spawnSync(
-    'nvidia-smi',
-    ['--query-gpu=memory.used,memory.total', '--format=csv,noheader'],
-    { encoding: 'utf8', timeout: 30_000 },
-  )
-  if (memory.status === 0) log(`[pre-flight] GPU memory: ${memory.stdout.trim()}`)
+  // --- real transports: the shared runtime resolution and checks.
+  const { env, paths } = await resolveRealRuntimePaths()
+  await checkRealRuntimePaths(paths)
+  config.ffprobePath = paths.ffprobePath
+  config.directorPort = paths.directorPort
+  assertGpuIdle()
 
   if (process.env.LNA_REVIEWER === undefined || process.env.LNA_REVIEWER.trim().length === 0) {
     log(
