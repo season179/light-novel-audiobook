@@ -184,4 +184,23 @@ describe('cast proposal and human approval', () => {
     ).rejects.toThrow(/more than once/)
     expect(repository.approval).toBeUndefined()
   })
+
+  it('rejects an exclusive material claiming a sharing group, which would otherwise be invisible', () => {
+    // A lone sharing-group claim names no co-sharer, so sharedVoiceMaterialGroups (which only surfaces
+    // material reused by two or more speakers) would hide it. Reject it at the proposal boundary.
+    expect(() =>
+      parseCastProposal({
+        bookId: 'book-abc123',
+        epubSha256: 'a'.repeat(64),
+        assignments: [
+          {
+            speakerId: 'speaker-amber',
+            aliases: ['Amber'],
+            materialProfileId: 'material-bright',
+            sharingGroupId: 'lone-claim',
+          },
+        ],
+      }),
+    ).toThrow(/cannot claim to be shared/)
+  })
 })
