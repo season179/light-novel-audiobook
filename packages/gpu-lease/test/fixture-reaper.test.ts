@@ -172,7 +172,10 @@ describe('fixture holder registry (#67)', () => {
 
     expect(readFailures).toEqual([])
     expect(
-      snapshotSizes.every((size, index) => index === 0 || size >= snapshotSizes[index - 1]!),
+      snapshotSizes.every((size, index) => {
+        const previous = snapshotSizes[index - 1]
+        return previous === undefined || size >= previous
+      }),
     ).toBe(true)
     expect(await registry.loadRegistry()).toHaveLength(12)
   }, 30_000)
