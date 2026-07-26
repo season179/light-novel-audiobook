@@ -249,8 +249,11 @@ afterEach(async () => {
  * though it still compares two things, and a suite that quietly became half a test is worse than a
  * smaller honest one.
  *
- * What replaces the comparison is the guard immediately below. It fails the moment a second
- * implementation reappears, which is the only way the original defect can recur.
+ * What replaces the comparison is test `0.` below **together with**
+ * `lifecycle-single-owner.test.ts`. Test `0.` alone is not enough, and the review of
+ * issue/lifecycle-dedup proved it: restoring the local copy while leaving `src/index.ts` re-exporting
+ * the shared class and pointing only `src/transports.ts` at the local one passes all nine tests here.
+ * The guard on the class real runs actually construct lives in that other file; keep them together.
  */
 const consumer = {
   name: 'the one OwnedLlamaLifecycle both consumers use',
@@ -259,12 +262,13 @@ const consumer = {
 
 describe('DirectorRuntimeLifecycle contract: single implementation', () => {
   /**
-   * The guard that replaces the old two-copy loop.
+   * Half of the guard that replaces the old two-copy loop: pipeline-driver's **public export** is
+   * gemma-director's class rather than a redefinition.
    *
-   * `gemma-director/scripts/real-smoke.ts` reaches the class through gemma-director's entry point and
-   * `pipeline-driver/src/transports.ts` through the same package; pipeline-driver's own entry point
-   * re-exports it. If anyone re-adds a local copy — the exact regression this file exists to prevent —
-   * these stop being the same object and this fails, naming the reason.
+   * What it does *not* prove is that `createRealTransports` constructs that export — the production
+   * binding is a separate direct import in `src/transports.ts`, and a reintroduced copy wired only
+   * there passes this assertion. `lifecycle-single-owner.test.ts` covers that, by observing the
+   * construction real mode performs and by counting class definitions.
    *
    * It is an identity check, not a behavioural one, and that is deliberate: two *different* objects
    * cannot be proved equivalent by any assertion cheap enough to keep, which is precisely why the
