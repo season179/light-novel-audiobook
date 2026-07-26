@@ -206,13 +206,15 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       .update(await readFile(FIXTURE_EPUB))
       .digest('hex')
     // The approval is bound to this EPUB by its exact epubSha256 (the ledger primary key), but its
-    // recorded bookId names a different extracted identity. The driver's defence-in-depth cross-check
-    // must catch the mismatch before the cast is trusted.
+    // recorded bookId names a different extracted identity. Use a mismatched ID of the SAME length as
+    // the real extracted book id (book- + 24 chars), so only a real value comparison — not a
+    // length comparison — distinguishes them. The driver's defence-in-depth cross-check must catch
+    // the mismatch before the cast is trusted.
     const database = openWorkspace(layoutFor(workspaceRoot))
     try {
       await new SqliteCastApprovalRepository(database).saveCastApproval(
         createCastApprovalRecord({
-          bookId: 'book-mismatched-identity',
+          bookId: 'book-zzzzzzzzzzzzzzzzzzzzzzzz',
           epubSha256,
           assignments: [
             {
@@ -230,16 +232,22 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       database.close()
     }
 
+    let report: Awaited<ReturnType<typeof runPipeline>> | undefined
     await expect(
-      runPipeline({
-        jobId: 'driver-mismatched-book-id',
-        epubPath: FIXTURE_EPUB,
-        workspaceRoot,
-        repositoryRoot: REPOSITORY_ROOT,
-        transports,
-        limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
-      }),
+      (async () => {
+        report = await runPipeline({
+          jobId: 'driver-mismatched-book-id',
+          epubPath: FIXTURE_EPUB,
+          workspaceRoot,
+          repositoryRoot: REPOSITORY_ROOT,
+          transports,
+          limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+        })
+      })(),
     ).rejects.toThrow(/belongs to a different extracted book identity/)
+    // The mismatch is caught during extraction, before the cast is trusted or any output assembled,
+    // so no run report is produced.
+    expect(report).toBeUndefined()
   }, 600_000)
 
   it('reuses completed segment audio when the same job is run again', async () => {
