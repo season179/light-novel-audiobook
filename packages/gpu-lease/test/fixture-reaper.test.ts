@@ -140,6 +140,43 @@ describe('fixture holder registry (#67)', () => {
     await expect(registry.reapOrphanedHolders()).rejects.toThrow('invalid')
   })
 
+  it('publishes only complete schema-valid snapshots to lock-free readers', async () => {
+    const registry = await makeRegistry()
+    const readFailures: unknown[] = []
+    const snapshotSizes: number[] = []
+    let keepReading = true
+    const reader = (async () => {
+      while (keepReading) {
+        try {
+          snapshotSizes.push((await registry.loadRegistry()).length)
+        } catch (error) {
+          readFailures.push(error)
+        }
+        await new Promise<void>((resolveTurn) => setImmediate(resolveTurn))
+      }
+    })()
+
+    try {
+      await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          registry.registerHolder(
+            710_000 + index,
+            `/${'atomic-registry-payload-'.repeat(4_000)}${index}`,
+          ),
+        ),
+      )
+    } finally {
+      keepReading = false
+      await reader
+    }
+
+    expect(readFailures).toEqual([])
+    expect(
+      snapshotSizes.every((size, index) => index === 0 || size >= snapshotSizes[index - 1]!),
+    ).toBe(true)
+    expect(await registry.loadRegistry()).toHaveLength(12)
+  }, 30_000)
+
   it('serializes concurrent registrations and clears without losing another owner', async () => {
     const registry = await makeRegistry()
     const barrierPath = join(tmpdir(), `fixture-registry-barrier-${crypto.randomUUID()}`)
