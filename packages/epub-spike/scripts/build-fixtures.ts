@@ -22,10 +22,12 @@ export const fixtureNames = [
   'synthetic-nested-parent',
 ] as const
 
-async function listFiles(directory: string, prefix = ''): Promise<string[]> {
+export async function listFiles(directory: string, prefix = ''): Promise<string[]> {
   const entries = await readdir(path.join(directory, prefix), { withFileTypes: true })
   const files: string[] = []
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )) {
     const relativePath = path.posix.join(prefix, entry.name)
     if (entry.isDirectory()) {
       files.push(...(await listFiles(directory, relativePath)))

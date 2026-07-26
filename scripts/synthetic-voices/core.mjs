@@ -93,7 +93,7 @@ export function stableJsonHash(value) {
     if (item && typeof item === 'object') {
       return Object.fromEntries(
         Object.entries(item)
-          .sort(([left], [right]) => left.localeCompare(right))
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
           .map(([key, child]) => [key, normalize(child)]),
       )
     }
@@ -209,7 +209,11 @@ export async function directoryTreeHash(root) {
     }
   }
   await visit(root)
-  files.sort((left, right) => relative(root, left).localeCompare(relative(root, right)))
+  files.sort((left, right) => {
+    const a = relative(root, left)
+    const b = relative(root, right)
+    return a < b ? -1 : a > b ? 1 : 0
+  })
   const digest = createHash('sha256')
   for (const path of files) {
     digest.update(`${relative(root, path)}\0${await sha256File(path)}\n`)

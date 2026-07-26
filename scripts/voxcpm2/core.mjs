@@ -71,7 +71,9 @@ export async function sha256File(path) {
 }
 
 export function deriveSourceIdentity(sourceHashes) {
-  const entries = Object.entries(sourceHashes).sort(([left], [right]) => left.localeCompare(right))
+  const entries = Object.entries(sourceHashes).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  )
   for (const [name, hash] of entries) {
     if (!name || !SHA256.test(hash)) throw new Error(`invalid source hash: ${name}`)
   }

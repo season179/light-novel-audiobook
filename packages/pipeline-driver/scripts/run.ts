@@ -138,10 +138,23 @@ try {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 } catch (error) {
   // Legible failure: the known blockers all surface as a typed error, and which one matters.
-  const named = error as { name?: string; code?: string; message?: string }
+  const named = error as {
+    name?: string
+    code?: string
+    message?: string
+    findings?: readonly { code: string; sourcePassageId: string; message: string }[]
+  }
   process.stderr.write(
     `[driver] FAILED ${named.name ?? 'Error'}${named.code ? ` (${named.code})` : ''}: ${named.message ?? String(error)}\n`,
   )
+  // The aggregate message lists only distinct codes, so it cannot say which rule broke or where. The
+  // findings carry a passage id and a rule message and no story text, so printing them is safe and is
+  // the difference between a diagnosable failure and another full investigation.
+  for (const finding of named.findings ?? []) {
+    process.stderr.write(
+      `[driver]   ${finding.code} @ ${finding.sourcePassageId}: ${finding.message}\n`,
+    )
+  }
   // A real run's first stage loads a 13.4 GiB model. Without these, re-running the same command mints a
   // fresh workspace and job, so an expensive failure cannot be resumed and the old job cannot be found.
   process.stderr.write(`[driver] resume with: --job-id ${jobId} --workspace ${workspaceRoot}\n`)
