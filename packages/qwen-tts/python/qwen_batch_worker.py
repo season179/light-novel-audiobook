@@ -25,7 +25,9 @@ SEGMENT_ID = re.compile(r"^(?:ch[0-9]+-[0-9]+|book-[0-9a-f]{24}-ch[0-9]{4}-p[0-9
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 MODEL_REVISION = "0c0e3051f131929182e2c023b9537f8b1c68adfe"
-EXPECTED_PROFILE_IDS = ["aiden-calm-narrator", "ryan-energetic-baseline", "ryan-low-weary"]
+EXPECTED_PROFILE_IDS = ["aiden-calm-narrator", "ryan-energetic-baseline", "ryan-low-weary", "dylan-neutral-read", "eric-neutral-read", "ono-anna-neutral-read", "serena-neutral-read", "sohee-neutral-read", "uncle-fu-neutral-read", "vivian-neutral-read"]
+# The second, independent copy of the production voice lock. It exists so the inventory cannot be
+# widened on the TypeScript side alone: a profile no human approved would then reach the model here.
 EXPECTED_PROFILES = [
     {
         "id": "aiden-calm-narrator",
@@ -54,7 +56,73 @@ EXPECTED_PROFILES = [
         "seedSalt": 9205,
         "listeningEvidenceOutputSha256": "a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759",
     },
+    {
+        "id": "dylan-neutral-read",
+        "role": "character",
+        "speaker": "dylan",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9210,
+        "listeningEvidenceOutputSha256": "1c4d4cef53131d5e4b9ca216dcd38ebda619039c9ebf9bf8d22bf9b41bc1e91a",
+    },
+    {
+        "id": "eric-neutral-read",
+        "role": "character",
+        "speaker": "eric",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9211,
+        "listeningEvidenceOutputSha256": "8bb7152ce76dde0ec63315d0c4c707bdb1d1242b7426944d0059f8801348bef6",
+    },
+    {
+        "id": "ono-anna-neutral-read",
+        "role": "character",
+        "speaker": "ono_anna",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9212,
+        "listeningEvidenceOutputSha256": "8f382b9206f98c74b280e64cce58f6c2fb63360be293f859e3e9b388fe3f4ea5",
+    },
+    {
+        "id": "serena-neutral-read",
+        "role": "character",
+        "speaker": "serena",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9213,
+        "listeningEvidenceOutputSha256": "6efbbeec89fa10759c9fa2931f10f2f4aebb7186d385e134c113ae4841ac05d7",
+    },
+    {
+        "id": "sohee-neutral-read",
+        "role": "character",
+        "speaker": "sohee",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9214,
+        "listeningEvidenceOutputSha256": "6490952c47f3a099a234fd4f8a107ce98a52416257829cff68ad33ca071b131a",
+    },
+    {
+        "id": "uncle-fu-neutral-read",
+        "role": "character",
+        "speaker": "uncle_fu",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9215,
+        "listeningEvidenceOutputSha256": "84ff199e7b981e45f60262a50f37ecf10e4141bea4fbb3aa8d63a6949de48afe",
+    },
+    {
+        "id": "vivian-neutral-read",
+        "role": "character",
+        "speaker": "vivian",
+        "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+        "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+        "seedSalt": 9216,
+        "listeningEvidenceOutputSha256": "7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e",
+    },
 ]
+# Every distinct speaker the lock admits, lowercased the way the model reports them. Derived rather
+# than restated, so a speaker added above cannot be missed by the load-time availability check.
+EXPECTED_SPEAKERS = {profile["speaker"].lower() for profile in EXPECTED_PROFILES}
 EXPECTED_WAV = {
     "container": "RIFF/WAVE",
     "encoding": "PCM",
@@ -400,6 +468,8 @@ def validate_production_config(request: dict[str, Any]) -> tuple[dict[str, Any],
     if config.get("evidence") != {
         "humanListeningPath": "docs/evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json",
         "humanListeningFileSha256": "db2a3fdae8b6d9989bd261007f53c8cd5c77a61cee8510b6f1fa025a133d67d7",
+        "auditionListeningPath": "docs/evidence/issue-92-human-listening-2026-07-27.json",
+        "auditionListeningFileSha256": "3a9c395988291bb3fbfaf80cf1b50dcb7340dc8b03da042876718754581fde85",
     }:
         raise ValueError("human listening evidence binding changed")
     return config, by_id
@@ -610,7 +680,7 @@ def run() -> int:
             raise ValueError("loaded speech tokenizer did not retain SDPA attention")
         speakers = set(tts.get_supported_speakers() or [])
         languages = set(tts.get_supported_languages() or [])
-        if not {"aiden", "ryan"}.issubset(speakers) or "english" not in languages:
+        if not EXPECTED_SPEAKERS.issubset(speakers) or "english" not in languages:
             raise ValueError("selected speakers or English are unavailable")
         signature = inspect.signature(tts.model.generate)
         required_generation_flags = set(generation_kwargs(config["generation"]))

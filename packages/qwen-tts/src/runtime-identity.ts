@@ -8,6 +8,18 @@ interface RuntimePackage {
   readonly version: string
 }
 
+/**
+ * Spent as of issue #92. This bridge was bound to one exact pair of production-config hashes, and #92
+ * changed the config to admit seven more approved speakers, so `config.sha256` can no longer equal
+ * `successorProductionConfigSha256` and `isReusableIdentity` never reaches the migration branch. Reuse
+ * falls back to strict identity, meaning pre-#92 artifacts re-render — the safe direction, and no claim
+ * is made that appending voice profiles leaves existing waveforms unchanged.
+ *
+ * Kept rather than deleted because `waveformProducingRuntimeIdentity` below folds the successor worker
+ * hash back to its predecessor, and that fold is baked into the application input identity of artifacts
+ * rendered while it was live. Removing it would silently restate those identities. Both branches are
+ * now unreachable in production and pinned as unreachable by `manifest-reuse.test.ts`.
+ */
 export const AFFINE_WAV_GATE_REUSE_MIGRATION = Object.freeze({
   predecessorProductionConfigSha256:
     '82f9a62a94a62bcf68e5d35709e358ffb552e380d1295a8e7b014dc82a219f25',

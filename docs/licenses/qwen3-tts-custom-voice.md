@@ -1,9 +1,12 @@
 # Qwen3-TTS CustomVoice licensing and provenance
 
 Issue [#8](https://github.com/season179/light-novel-audiobook/issues/8) evaluates only
-`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`. It uses the model's built-in Aiden, Ryan, and Serena
-speakers. No reference recording, voice clone, microphone input, book passage, or network TTS
-service is used.
+`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`. Issue
+[#92](https://github.com/season179/light-novel-audiobook/issues/92) widened the approved cast to all
+nine of the model's built-in speakers: Aiden, Ryan, Dylan, Eric, Ono Anna, Serena, Sohee, Uncle Fu and
+Vivian. Every one is shipped inside the pinned model snapshot under the same Apache-2.0 model-card
+licence as the weights. No reference recording, voice clone, microphone input, book passage, or network
+TTS service is used, and the `referenceAudioAllowed: false` runtime lock keeps it that way.
 
 ## Model snapshot
 

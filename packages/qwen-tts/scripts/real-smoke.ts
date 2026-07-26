@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import {
   FileGpuLeaseCoordinator,
+  loadProductionConfig,
   prepareEmptySmokeOutputRoot,
   QwenTtsSpeechEngine,
 } from '../src/index.js'
@@ -67,23 +68,38 @@ async function main(): Promise<void> {
   } as const
   // Book-scoped issue #29 stable IDs; the adapter refuses unscoped IDs outside test fixtures.
   const SMOKE_BOOK = 'book-5170e0000000000000009901'
-  const requests = [
-    {
-      segmentId: `${SMOKE_BOOK}-ch0099-p000001-s0001`,
-      text: 'Morning light crossed the quiet library floor.',
-      voiceProfileId: 'aiden-calm-narrator',
-    },
-    {
-      segmentId: `${SMOKE_BOOK}-ch0099-p000002-s0001`,
-      text: 'We found it! Hurry, before the doors close!',
-      voiceProfileId: 'ryan-energetic-baseline',
-    },
-    {
-      segmentId: `${SMOKE_BOOK}-ch0099-p000003-s0001`,
-      text: 'I have carried this promise for far too long.',
-      voiceProfileId: 'ryan-low-weary',
-    },
+  /**
+   * Derived from the pinned config rather than listed here, so a profile added to the approved
+   * inventory cannot skip real-GPU coverage. Issue #92 added seven, and a hardcoded list of three
+   * would have shipped them unrendered: the model would only be asked for a speaker string like
+   * `uncle_fu` for the first time on someone's book, with 3.4 GB of weights already resident.
+   *
+   * Lines are written for this smoke test. Nothing here comes from any book.
+   */
+  const SMOKE_LINES = [
+    'Morning light crossed the quiet library floor.',
+    'We found it! Hurry, before the doors close!',
+    'I have carried this promise for far too long.',
+    'The letter arrived three days after the funeral.',
+    'Do you really expect me to believe that?',
+    'Every window on the street was dark by then.',
+    'She counted the coins twice, then once more.',
+    'Nothing about this arrangement was ever fair.',
+    'The train was late, as it always was.',
+    'He set the cup down without saying a word.',
   ] as const
+  const production = await loadProductionConfig(baseConfig.productionConfigPath)
+  const profiles = [...production.value.voiceProfiles]
+  if (profiles.length > SMOKE_LINES.length) {
+    throw new Error(
+      `The pinned config has ${profiles.length} profiles but only ${SMOKE_LINES.length} smoke lines exist`,
+    )
+  }
+  const requests = profiles.map((profile, index) => ({
+    segmentId: `${SMOKE_BOOK}-ch0099-p${String(index + 1).padStart(6, '0')}-s0001`,
+    text: SMOKE_LINES[index] as string,
+    voiceProfileId: profile.id,
+  }))
 
   const engine = await QwenTtsSpeechEngine.create(baseConfig)
   const first = await engine.renderBatch(requests, {
@@ -91,15 +107,24 @@ async function main(): Promise<void> {
       process.stderr.write(`[qwen-smoke] ${JSON.stringify(event)}\n`)
     },
   })
-  if (first.rendered !== 3) {
+  if (first.rendered !== requests.length) {
     throw new Error(
-      'Smoke output already existed; use a new empty output root so all three profiles render',
+      `Smoke output already existed; use a new empty output root so all ${requests.length} profiles render`,
+    )
+  }
+  // Every profile must have produced its own audio. Two profiles rendering identical bytes would mean
+  // the inventory advertises voices it does not have — the exact drift #92's guards target, observed
+  // here against the real model rather than against the lock table.
+  const distinctAudio = new Set(first.results.map((result) => result.audio.sha256))
+  if (distinctAudio.size !== requests.length) {
+    throw new Error(
+      `Only ${distinctAudio.size} distinct waveforms for ${requests.length} profiles: two approved voices render the same audio`,
     )
   }
 
   const restarted = await QwenTtsSpeechEngine.create(baseConfig)
   const resumed = await restarted.renderBatch(requests)
-  if (resumed.reused !== 3 || resumed.rendered !== 0) {
+  if (resumed.reused !== requests.length || resumed.rendered !== 0) {
     throw new Error('Restart reuse check failed')
   }
   process.stdout.write(
@@ -107,6 +132,7 @@ async function main(): Promise<void> {
       {
         status: 'passed',
         rendered: first.rendered,
+        distinctWaveforms: distinctAudio.size,
         reusedAfterRestart: resumed.reused,
         outputs: first.results.map((result) => ({
           segmentId: result.segmentId,

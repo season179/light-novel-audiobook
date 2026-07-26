@@ -35,8 +35,10 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
   const cast = createM1VoiceCast(loaded)
   const profiles = [cast.narrator, cast.fallback, cast.profile('character-alice-ryan-energetic')]
 
-  it('reads three approved profiles out of the config', () => {
-    expect(loaded.profiles.size).toBe(3)
+  it('reads every approved profile out of the config', () => {
+    // A literal, not `SELECTED_VOICE_PROFILE_IDS.length`: the count is a tripwire, and comparing the
+    // lock against itself would let a profile be added to both lists with nothing to notice.
+    expect(loaded.profiles.size).toBe(10)
     expect([...loaded.profiles.keys()].sort()).toEqual([...SELECTED_VOICE_PROFILE_IDS].sort())
   })
 
@@ -81,17 +83,30 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
 
   /**
    * docs/PLAN.md §7: Aiden calm narrator, Ryan energetic for the character, restrained low/weary Ryan
-   * as the fallback dialogue voice, Serena excluded. The pinned roles agree — `ryan-low-weary` is
-   * pinned `character-or-fallback`, which sanctions its use here.
+   * as the fallback dialogue voice. The pinned roles agree — `ryan-low-weary` is pinned
+   * `character-or-fallback`, which sanctions its use here.
+   *
+   * The three role bindings are unchanged by issue #92. What the audition changed is the *inventory* a
+   * cast approval can draw a character voice from, and this app's static cast does not draw from it —
+   * `deriveVoiceCast` in the pipeline driver does, per approved assignment.
    */
   it('keeps the PLAN roles the pinned config sanctions', () => {
     expect(loaded.profiles.get('aiden-calm-narrator')?.role).toBe('narrator')
     expect(loaded.profiles.get('ryan-energetic-baseline')?.role).toBe('character')
     expect(loaded.profiles.get('ryan-low-weary')?.role).toBe('character-or-fallback')
+    // Ryan twice is deliberate — energetic and weary are two instructions on one speaker. The seven
+    // lowercase entries are the issue-92 audition speakers, spelled the way the model reports them.
     expect([...loaded.profiles.values()].map((profile) => profile.speaker).sort()).toEqual([
       'Aiden',
       'Ryan',
       'Ryan',
+      'dylan',
+      'eric',
+      'ono_anna',
+      'serena',
+      'sohee',
+      'uncle_fu',
+      'vivian',
     ])
     expect(cast.narrator.role).toBe('narrator')
     expect(cast.fallback.role).toBe('fallback')
@@ -100,7 +115,7 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
 
   it('exposes exactly the approved material the fake engine checks against', () => {
     const material = pinnedVoiceMaterial(loaded)
-    expect(material).toHaveLength(3)
+    expect(material).toHaveLength(10)
     for (const entry of material) {
       expect(resolvesAgainstPinnedConfig(entry)).toBe(true)
     }

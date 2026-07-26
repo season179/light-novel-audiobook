@@ -1,0 +1,637 @@
+{
+  "schemaVersion": 1,
+  "issue": 92,
+  "kind": "built-in-speaker English audition (evidence for a user listening decision, not a decision)",
+  "noJudgment": "This file deliberately contains no ranking and no usability claim. Objective measurements only; the user's ear is the authority.",
+  "heldConstant": {
+    "transcript": "The market square was quiet at dawn, and the fountain held the first light. Then the bells began, every tower at once, and she knew the long wait was over.",
+    "transcriptSha256": "aeb5b4748c172d24acd66c3ae7462ef5dad5d68fb6eaad62b48ca62b7315fcb1",
+    "transcriptProvenance": "Written originally for this audition: one plain declarative sentence and one with emotional colour. No line, passage, or character name from any book.",
+    "language": "English",
+    "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+    "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+    "seed": 2072318748,
+    "seedDerivation": "production deriveSeed: sha256('issue-92-speaker-audition' NUL 9205 NUL 'book-920000000000000000000092-ch0099-p000001-s0001'), first 4 bytes big-endian masked to 31 bits, min 1; ONE value held constant for every candidate; Python/NumPy/torch CPU+CUDA RNGs reset immediately before each render",
+    "samplingParameters": {
+      "doSample": true,
+      "topK": 50,
+      "topP": 1.0,
+      "temperature": 0.9,
+      "repetitionPenalty": 1.05,
+      "subtalkerDoSample": true,
+      "subtalkerTopK": 50,
+      "subtalkerTopP": 1.0,
+      "subtalkerTemperature": 0.9,
+      "maxNewTokens": 8192
+    },
+    "samplingNote": "verified equal to the lock's stock-seeded profile, which equals the model's stock generation defaults, checked at render time",
+    "nonStreamingMode": true,
+    "attentionImplementation": "sdpa",
+    "referenceAudioAllowed": false,
+    "modelLoads": 1,
+    "wavFormat": "RIFF/WAVE PCM 24000 Hz mono 16-bit"
+  },
+  "model": {
+    "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "createdAt": "2026-01-21T08:56:49.000Z",
+    "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "license": "Apache-2.0",
+    "huggingFaceUsedStorageBytes": 4523965995,
+    "revisionPayloadBytes": 4520218951,
+    "files": "<file list omitted; see config/qwen3-tts-custom-voice.lock.json>"
+  },
+  "runtime": {
+    "package": "qwen-tts",
+    "version": "0.1.1",
+    "python": "3.12.13",
+    "torch": "2.9.1",
+    "torchaudio": "2.9.1",
+    "uvLockSha256": null,
+    "attentionImplementation": "sdpa",
+    "flashAttentionAllowed": false
+  },
+  "modelReportedSpeakers": [
+    "aiden",
+    "dylan",
+    "eric",
+    "ono_anna",
+    "ryan",
+    "serena",
+    "sohee",
+    "uncle_fu",
+    "vivian"
+  ],
+  "modelReportedLanguages": [
+    "auto",
+    "chinese",
+    "english",
+    "french",
+    "german",
+    "italian",
+    "japanese",
+    "korean",
+    "portuguese",
+    "russian",
+    "spanish"
+  ],
+  "readmeSpeakerTable": [
+    {
+      "speaker": "Vivian",
+      "voiceDescription": "Bright, slightly edgy young female voice.",
+      "nativeLanguage": "Chinese"
+    },
+    {
+      "speaker": "Serena",
+      "voiceDescription": "Warm, gentle young female voice.",
+      "nativeLanguage": "Chinese"
+    },
+    {
+      "speaker": "Uncle_Fu",
+      "voiceDescription": "Seasoned male voice with a low, mellow timbre.",
+      "nativeLanguage": "Chinese"
+    },
+    {
+      "speaker": "Dylan",
+      "voiceDescription": "Youthful Beijing male voice with a clear, natural timbre.",
+      "nativeLanguage": "Chinese (Beijing Dialect)"
+    },
+    {
+      "speaker": "Eric",
+      "voiceDescription": "Lively Chengdu male voice with a slightly husky brightness.",
+      "nativeLanguage": "Chinese (Sichuan Dialect)"
+    },
+    {
+      "speaker": "Ryan",
+      "voiceDescription": "Dynamic male voice with strong rhythmic drive.",
+      "nativeLanguage": "English"
+    },
+    {
+      "speaker": "Aiden",
+      "voiceDescription": "Sunny American male voice with a clear midrange.",
+      "nativeLanguage": "English"
+    },
+    {
+      "speaker": "Ono_Anna",
+      "voiceDescription": "Playful Japanese female voice with a light, nimble timbre.",
+      "nativeLanguage": "Japanese"
+    },
+    {
+      "speaker": "Sohee",
+      "voiceDescription": "Warm Korean female voice with rich emotion.",
+      "nativeLanguage": "Korean"
+    }
+  ],
+  "speakerListDiscrepancies": {
+    "inModelNotInReadme": [],
+    "inReadmeNotInModel": [],
+    "casingNote": "get_supported_speakers() reports lowercase names (e.g. 'aiden'); the README table is capitalized (e.g. 'Aiden'). Membership matches case-insensitively."
+  },
+  "outputs": [
+    {
+      "sequence": 1,
+      "file": "01-aiden.wav",
+      "speaker": "aiden",
+      "durationSeconds": 10.32,
+      "bytes": 495404,
+      "sha256": "72caef57bcd457390b614f2910f0a4298d76632421a563b202f23df82c6c7213",
+      "renderSeconds": 26.283937072003027,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7674418604651163,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.34400000000000003,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 10.32,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -2.9161483310891736,
+        "rmsDbfs": -20.439231026652966
+      },
+      "readmeVoiceDescription": "Sunny American male voice with a clear midrange.",
+      "readmeNativeLanguage": "English"
+    },
+    {
+      "sequence": 2,
+      "file": "02-dylan.wav",
+      "speaker": "dylan",
+      "durationSeconds": 13.04,
+      "bytes": 625964,
+      "sha256": "1c4d4cef53131d5e4b9ca216dcd38ebda619039c9ebf9bf8d22bf9b41bc1e91a",
+      "renderSeconds": 30.1481576820006,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.6625766871165644,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.43466666666666665,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 13.04,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -7.577123752532798,
+        "rmsDbfs": -29.698077088194896
+      },
+      "readmeVoiceDescription": "Youthful Beijing male voice with a clear, natural timbre.",
+      "readmeNativeLanguage": "Chinese (Beijing Dialect)"
+    },
+    {
+      "sequence": 3,
+      "file": "03-eric.wav",
+      "speaker": "eric",
+      "durationSeconds": 12.08,
+      "bytes": 579884,
+      "sha256": "8bb7152ce76dde0ec63315d0c4c707bdb1d1242b7426944d0059f8801348bef6",
+      "renderSeconds": 29.13636751100421,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.6903973509933775,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.4026666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 12.08,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -9.424477156940707,
+        "rmsDbfs": -29.910630896389456
+      },
+      "readmeVoiceDescription": "Lively Chengdu male voice with a slightly husky brightness.",
+      "readmeNativeLanguage": "Chinese (Sichuan Dialect)"
+    },
+    {
+      "sequence": 4,
+      "file": "04-ono_anna.wav",
+      "speaker": "ono_anna",
+      "durationSeconds": 10.96,
+      "bytes": 526124,
+      "sha256": "8f382b9206f98c74b280e64cce58f6c2fb63360be293f859e3e9b388fe3f4ea5",
+      "renderSeconds": 23.96697201600182,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7408759124087592,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.36533333333333334,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 10.96,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -7.33694560307249,
+        "rmsDbfs": -27.295879221738918
+      },
+      "readmeVoiceDescription": "Playful Japanese female voice with a light, nimble timbre.",
+      "readmeNativeLanguage": "Japanese"
+    },
+    {
+      "sequence": 5,
+      "file": "05-ryan.wav",
+      "speaker": "ryan",
+      "durationSeconds": 12.08,
+      "bytes": 579884,
+      "sha256": "ef5edc12a41ddd9ce2f89a0fa3b76a3dfd48cdeaccfbf5403be3a3fe3458291e",
+      "renderSeconds": 29.0406918699955,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7649006622516556,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.4026666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 12.08,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -6.402077532225966,
+        "rmsDbfs": -25.18598000752551
+      },
+      "readmeVoiceDescription": "Dynamic male voice with strong rhythmic drive.",
+      "readmeNativeLanguage": "English"
+    },
+    {
+      "sequence": 6,
+      "file": "06-serena.wav",
+      "speaker": "serena",
+      "durationSeconds": 10.64,
+      "bytes": 510764,
+      "sha256": "6efbbeec89fa10759c9fa2931f10f2f4aebb7186d385e134c113ae4841ac05d7",
+      "renderSeconds": 25.616631060001964,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.8421052631578947,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.3546666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 10.64,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -8.564731874562064,
+        "rmsDbfs": -25.049445137982673
+      },
+      "readmeVoiceDescription": "Warm, gentle young female voice.",
+      "readmeNativeLanguage": "Chinese"
+    },
+    {
+      "sequence": 7,
+      "file": "07-sohee.wav",
+      "speaker": "sohee",
+      "durationSeconds": 12.0,
+      "bytes": 576044,
+      "sha256": "6490952c47f3a099a234fd4f8a107ce98a52416257829cff68ad33ca071b131a",
+      "renderSeconds": 27.74723624499893,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.685,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.4,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 12.0,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -5.753834776976055,
+        "rmsDbfs": -24.436237007760408
+      },
+      "readmeVoiceDescription": "Warm Korean female voice with rich emotion.",
+      "readmeNativeLanguage": "Korean"
+    },
+    {
+      "sequence": 8,
+      "file": "08-uncle_fu.wav",
+      "speaker": "uncle_fu",
+      "durationSeconds": 11.36,
+      "bytes": 545324,
+      "sha256": "84ff199e7b981e45f60262a50f37ecf10e4141bea4fbb3aa8d63a6949de48afe",
+      "renderSeconds": 25.067681706001167,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.8257042253521126,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.37866666666666665,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 11.36,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -4.5857097661239585,
+        "rmsDbfs": -22.409649339240975
+      },
+      "readmeVoiceDescription": "Seasoned male voice with a low, mellow timbre.",
+      "readmeNativeLanguage": "Chinese"
+    },
+    {
+      "sequence": 9,
+      "file": "09-vivian.wav",
+      "speaker": "vivian",
+      "durationSeconds": 11.84,
+      "bytes": 568364,
+      "sha256": "7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e",
+      "renderSeconds": 25.55084121999971,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7736486486486487,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.39466666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 11.84,
+            "bound": 30.0,
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -6.875639521698622,
+        "rmsDbfs": -22.386031176294146
+      },
+      "readmeVoiceDescription": "Bright, slightly edgy young female voice.",
+      "readmeNativeLanguage": "Chinese"
+    }
+  ],
+  "gateBounds": {
+    "maximumClippedSampleFraction": 0.001,
+    "minimumActiveFrameFraction": 0.15,
+    "minimumSecondsPerWord": 0.08,
+    "maximumSecondsPerWord": 2.0,
+    "maximumDurationSeconds": 30.0,
+    "requiredSampleRateHz": 24000,
+    "requiredChannels": 1,
+    "requiredBitsPerSample": 16
+  },
+  "timing": {
+    "modelLoadSeconds": 2.1508818690053886,
+    "totalRenderSeconds": 242.55851638200693,
+    "clock": "time.perf_counter (monotonic)"
+  },
+  "gpu": {
+    "lease": "exclusive kernel flock at the pinned GPU lock path, held for exactly the render window and released",
+    "modelResidency": "one model load for all renders; cache emptied and process exited afterwards"
+  },
+  "storage": "numbered WAVs and a README.md listening guide in a private external directory outside Git and outside the user data root; absolute path deliberately omitted from committed evidence"
+}

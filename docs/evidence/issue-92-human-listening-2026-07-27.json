@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "issue": 92,
+  "decisionDate": "2026-07-27",
+  "kind": "human listening decision on the built-in-speaker English audition",
+  "scope": {
+    "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "modelRevision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "runtime": "qwen-tts==0.1.1; local PyTorch SDPA",
+    "referenceAudioUsed": false
+  },
+  "evidenceBindings": {
+    "audition": {
+      "committedPath": "docs/evidence/issue-92-speaker-audition.json",
+      "committedFileSha256": "640ae36474c8765d7c3c98f04f963ceca62565e80632362f84605acf087987f0",
+      "auditionedSpeakerCount": 9,
+      "transcriptSha256": "aeb5b4748c172d24acd66c3ae7462ef5dad5d68fb6eaad62b48ca62b7315fcb1",
+      "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+      "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+      "seed": 2072318748,
+      "audio": "external only; never committed"
+    }
+  },
+  "humanReview": {
+    "status": "completed-without-numeric-scores",
+    "reviewerIdentity": "omitted",
+    "numericScoresProvided": false,
+    "numericScores": null,
+    "prompt": "Which of the nine auditioned built-in speakers are usable for English narration?",
+    "judgments": [
+      {
+        "speaker": "aiden",
+        "outputSha256": "72caef57bcd457390b614f2910f0a4298d76632421a563b202f23df82c6c7213",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "dylan",
+        "outputSha256": "1c4d4cef53131d5e4b9ca216dcd38ebda619039c9ebf9bf8d22bf9b41bc1e91a",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "eric",
+        "outputSha256": "8bb7152ce76dde0ec63315d0c4c707bdb1d1242b7426944d0059f8801348bef6",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "ono_anna",
+        "outputSha256": "8f382b9206f98c74b280e64cce58f6c2fb63360be293f859e3e9b388fe3f4ea5",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "ryan",
+        "outputSha256": "ef5edc12a41ddd9ce2f89a0fa3b76a3dfd48cdeaccfbf5403be3a3fe3458291e",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "serena",
+        "outputSha256": "6efbbeec89fa10759c9fa2931f10f2f4aebb7186d385e134c113ae4841ac05d7",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "sohee",
+        "outputSha256": "6490952c47f3a099a234fd4f8a107ce98a52416257829cff68ad33ca071b131a",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "uncle_fu",
+        "outputSha256": "84ff199e7b981e45f60262a50f37ecf10e4141bea4fbb3aa8d63a6949de48afe",
+        "judgment": "good/usable for English"
+      },
+      {
+        "speaker": "vivian",
+        "outputSha256": "7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e",
+        "judgment": "good/usable for English"
+      }
+    ]
+  },
+  "decision": {
+    "result": "All nine built-in speakers are approved for English use at the auditioned instruction",
+    "approvedSpeakerCount": 9,
+    "coverage": "The approval covers each speaker rendering English at the exact auditioned instruction. It is not an approval of any other instruction: the engine matches on (speaker, instruction, seedSalt), so a differently-instructed profile for the same speaker is unapproved material and needs its own listening decision.",
+    "seedNote": "Production derives a per-segment seed from the profile seedSalt, so approved audio is evidence that the speaker and instruction are acceptable, not a prediction of exact output bytes. This is the same basis on which the original three profiles were approved under issue 8."
+  },
+  "supersedes": {
+    "record": "docs/evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json",
+    "field": "castSelection.serenaStatus",
+    "previousValue": "rejected for English use in this bootstrap decision",
+    "newValue": "approved for English use at the issue-92 audition instruction",
+    "reason": "The issue-8 rejection judged Serena under the issue-8 audition's own instructions. The issue-92 audition put every speaker through one identical English transcript and instruction, and the same human accepted all nine. The reversal is a new judgment on new evidence, not a correction of the earlier one; the earlier record stays as written."
+  },
+  "redaction": {
+    "absolutePaths": "omitted",
+    "reviewerIdentity": "omitted",
+    "inventedNumericScores": "none",
+    "audio": "external only",
+    "sourceText": "none; the audition transcript was written for the audition and is from no book"
+  }
+}

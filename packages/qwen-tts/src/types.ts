@@ -2,9 +2,37 @@ export const SELECTED_VOICE_PROFILE_IDS = [
   'aiden-calm-narrator',
   'ryan-energetic-baseline',
   'ryan-low-weary',
+  // Approved by the issue-92 listening decision: seven more of the model's built-in speakers, each at
+  // the auditioned instruction. Character material only — the narrator and fallback roles are unchanged.
+  'dylan-neutral-read',
+  'eric-neutral-read',
+  'ono-anna-neutral-read',
+  'serena-neutral-read',
+  'sohee-neutral-read',
+  'uncle-fu-neutral-read',
+  'vivian-neutral-read',
 ] as const
 
 export type SelectedVoiceProfileId = (typeof SELECTED_VOICE_PROFILE_IDS)[number]
+
+/**
+ * Every speaker a human has approved for English, exactly as the pinned config spells it. The two
+ * capitalised entries predate the issue-92 audition and are left as written: their approved audio was
+ * rendered with those strings, and the model accepts either case.
+ */
+export const APPROVED_SPEAKERS = [
+  'Aiden',
+  'Ryan',
+  'dylan',
+  'eric',
+  'ono_anna',
+  'serena',
+  'sohee',
+  'uncle_fu',
+  'vivian',
+] as const
+
+export type ApprovedSpeaker = (typeof APPROVED_SPEAKERS)[number]
 
 export interface SpeechDeliveryDirection {
   readonly emotion: string

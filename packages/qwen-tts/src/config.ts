@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import type { SelectedVoiceProfileId } from './types.js'
-import { SpeechEngineError } from './types.js'
+import {
+  assertApprovedSpeakersPresent,
+  assertDistinctProfileMaterial,
+} from './cast-distinctness.js'
+import type { ApprovedSpeaker, SelectedVoiceProfileId } from './types.js'
+import { APPROVED_SPEAKERS, SpeechEngineError } from './types.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
 export interface VoiceProfile {
   readonly id: SelectedVoiceProfileId
   readonly role: string
-  readonly speaker: 'Aiden' | 'Ryan'
+  readonly speaker: ApprovedSpeaker
   readonly instruction: string
   readonly instructionSha256: string
   readonly seedSalt: number
@@ -249,8 +253,8 @@ function validateConfig(value: unknown): QwenProductionConfig {
   for (const [key, expected] of Object.entries(wavGateLocks))
     expectLocked(wav[key], expected, `wav.${key}`)
 
-  if (!Array.isArray(root.voiceProfiles) || root.voiceProfiles.length !== 3)
-    fail('exactly three selected voice profiles are required')
+  if (!Array.isArray(root.voiceProfiles) || root.voiceProfiles.length !== 10)
+    fail('exactly ten selected voice profiles are required')
   const profileLocks = [
     {
       id: 'aiden-calm-narrator',
@@ -285,7 +289,96 @@ function validateConfig(value: unknown): QwenProductionConfig {
       listeningEvidenceOutputSha256:
         'a0fc1f5663f56d23b045b25a98c52ecd7ac45eed7d630db3b8fd902569841759',
     },
+    // The seven speakers added by the issue-92 audition decision. Every one carries the *auditioned*
+    // instruction verbatim, because that is what the listening approval covers: the engine matches on
+    // (speaker, instruction, seedSalt), so the same speaker under a different instruction is material
+    // no human has heard. Speaker strings are the model's own `get_supported_speakers()` ids.
+    {
+      id: 'dylan-neutral-read',
+      role: 'character',
+      speaker: 'dylan',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9210,
+      listeningEvidenceOutputSha256:
+        '1c4d4cef53131d5e4b9ca216dcd38ebda619039c9ebf9bf8d22bf9b41bc1e91a',
+    },
+    {
+      id: 'eric-neutral-read',
+      role: 'character',
+      speaker: 'eric',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9211,
+      listeningEvidenceOutputSha256:
+        '8bb7152ce76dde0ec63315d0c4c707bdb1d1242b7426944d0059f8801348bef6',
+    },
+    {
+      id: 'ono-anna-neutral-read',
+      role: 'character',
+      speaker: 'ono_anna',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9212,
+      listeningEvidenceOutputSha256:
+        '8f382b9206f98c74b280e64cce58f6c2fb63360be293f859e3e9b388fe3f4ea5',
+    },
+    {
+      id: 'serena-neutral-read',
+      role: 'character',
+      speaker: 'serena',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9213,
+      listeningEvidenceOutputSha256:
+        '6efbbeec89fa10759c9fa2931f10f2f4aebb7186d385e134c113ae4841ac05d7',
+    },
+    {
+      id: 'sohee-neutral-read',
+      role: 'character',
+      speaker: 'sohee',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9214,
+      listeningEvidenceOutputSha256:
+        '6490952c47f3a099a234fd4f8a107ce98a52416257829cff68ad33ca071b131a',
+    },
+    {
+      id: 'uncle-fu-neutral-read',
+      role: 'character',
+      speaker: 'uncle_fu',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9215,
+      listeningEvidenceOutputSha256:
+        '84ff199e7b981e45f60262a50f37ecf10e4141bea4fbb3aa8d63a6949de48afe',
+    },
+    {
+      id: 'vivian-neutral-read',
+      role: 'character',
+      speaker: 'vivian',
+      instruction:
+        'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.',
+      instructionSha256: 'e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756',
+      seedSalt: 9216,
+      listeningEvidenceOutputSha256:
+        '7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e',
+    },
   ] as const
+  // Wired as of issue #92, having been parked while the cast was two speakers — and pointed at the
+  // lock table above, NOT at the parsed file. Every field below is `expectLocked` against that table,
+  // so a config file holding a duplicated voice fails on the mismatch and these guards would never
+  // see it. The drift they exist to catch is an edit to the table itself, which is exactly how the
+  // original #92 defect arrived: a "third voice" added in code that resolved to an existing one.
+  assertDistinctProfileMaterial(profileLocks)
+  assertApprovedSpeakersPresent(profileLocks, APPROVED_SPEAKERS)
+
   root.voiceProfiles.forEach((item, index) => {
     const profile = record(item, `voiceProfiles[${index}]`)
     exactKeys(
@@ -317,7 +410,19 @@ function validateConfig(value: unknown): QwenProductionConfig {
   expectLocked(root.fallbackVoiceProfileId, 'ryan-low-weary', 'fallbackVoiceProfileId')
   expectLocked(root.seedStrategy, 'sha256-profile-segment-v1', 'seedStrategy')
   const evidence = record(root.evidence, 'evidence')
-  exactKeys(evidence, ['humanListeningPath', 'humanListeningFileSha256'], 'evidence')
+  exactKeys(
+    evidence,
+    [
+      'humanListeningPath',
+      'humanListeningFileSha256',
+      // Two listening decisions, not one: issue 8 approved the original Aiden/Ryan cast, and issue 92
+      // approved the seven speakers added on top of it. Both stay bound, because dropping either would
+      // leave approved material in this file with no record of who approved it.
+      'auditionListeningPath',
+      'auditionListeningFileSha256',
+    ],
+    'evidence',
+  )
   expectLocked(
     evidence.humanListeningPath,
     'docs/evidence/issue-8-qwen3-tts-human-listening-2026-07-25.json',
@@ -329,6 +434,17 @@ function validateConfig(value: unknown): QwenProductionConfig {
     'evidence.humanListeningFileSha256',
   )
   expectSha(evidence.humanListeningFileSha256, 'human listening evidence hash')
+  expectLocked(
+    evidence.auditionListeningPath,
+    'docs/evidence/issue-92-human-listening-2026-07-27.json',
+    'evidence.auditionListeningPath',
+  )
+  expectLocked(
+    evidence.auditionListeningFileSha256,
+    '3a9c395988291bb3fbfaf80cf1b50dcb7340dc8b03da042876718754581fde85',
+    'evidence.auditionListeningFileSha256',
+  )
+  expectSha(evidence.auditionListeningFileSha256, 'audition listening evidence hash')
 
   return root as unknown as QwenProductionConfig
 }
