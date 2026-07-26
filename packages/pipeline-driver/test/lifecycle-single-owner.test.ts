@@ -23,8 +23,8 @@
  * Neither can pass vacuously: guard 1 fails on a count of zero as loudly as on a count of two, and
  * guard 2 fails if it finds no definition at all.
  *
- * No GPU, no model, no process: `createRealTransports` only stats its inputs and constructs. The
- * lifecycle it builds is never started, so nothing is spawned and nothing is loaded.
+ * No GPU, no model, no process: `createRealTransports` only stats its inputs, and the test invokes
+ * its per-run factory without calling `start()`. Nothing is spawned or loaded.
  */
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -127,9 +127,13 @@ describe('one OwnedLlamaLifecycle, owned by gemma-director', () => {
       gpuLockFilePath: layout.gpuLockFilePath,
     })
 
-    // Proves we went through the real function rather than failing early.
+    // Proves we went through the real function rather than failing early, then consumes the exact
+    // factory production gives one generation run. Construction before this call would be
+    // process-scoped again; no construction after it would make the seam vacuous.
     expect(transports.mode).toBe('real')
-    expect(transports.director.lifecycle).toBeDefined()
+    expect(built.constructions).toHaveLength(0)
+    const runtime = transports.director.createRuntime()
+    expect(runtime.lifecycle).toBeDefined()
     // THE ASSERTION THIS FILE EXISTS FOR. The class actually constructed must be the one the
     // package exports — the recording class itself — so a subclass that delegates construction but
     // drifts in release() is caught: its new.target is the subclass, not the recording class. A
@@ -140,6 +144,8 @@ describe('one OwnedLlamaLifecycle, owned by gemma-director', () => {
         'package export: the recorded new.target must be the recording class itself, so a subclass ' +
         'or wrapper that delegates construction but drifts is caught.',
     ).toEqual([built.recorder])
+    await runtime.lifecycle.release()
+    await transports.close()
   })
 
   it('is the only definition in the repository, and it lives in gemma-director', async () => {

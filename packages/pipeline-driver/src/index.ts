@@ -28,6 +28,7 @@ export {
 export {
   createFakeTransports,
   createRealTransports,
+  type DirectorRuntimeTransport,
   type PipelineTransports,
   type RealTransportConfig,
   resolveDefaultModelSnapshotPath,

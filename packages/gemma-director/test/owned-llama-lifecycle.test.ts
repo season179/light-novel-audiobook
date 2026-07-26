@@ -153,6 +153,52 @@ describe('OwnedLlamaLifecycle', () => {
     expect(isAlive(childPid as number)).toBe(false)
   }, 20_000)
 
+  it('is permanently single-use after a completed start and release', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-single-use-'))
+    roots.push(root)
+    server = createServer((request, response) => {
+      response.writeHead(request.url === '/health' ? 200 : 404, {
+        'content-type': 'application/json',
+      })
+      response.end('{"status":"ok"}')
+      if (request.url === '/health') setTimeout(() => server?.close(), 25)
+    })
+    await new Promise<void>((resolveListen) => server?.listen(0, '127.0.0.1', resolveListen))
+    const address = server.address() as AddressInfo
+    const keyPath = join(root, 'llama.key')
+    const lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: ['-e', 'setInterval(() => undefined, 1000)'],
+      apiKey: API_KEY,
+      keyPath,
+      origin: `http://127.0.0.1:${address.port}`,
+      port: address.port,
+      startupTimeoutMs: 10_000,
+    })
+
+    const firstStart = lifecycle.start()
+    await firstStart
+    const pid = lifecycle.processId
+    expect(pid).toBeDefined()
+    expect(isAlive(pid as number)).toBe(true)
+    await lifecycle.release()
+    expect(isAlive(pid as number)).toBe(false)
+    expect(lifecycle.cleanupComplete).toBe(true)
+
+    // A resettable lifecycle would spawn here. The contract is a terminal memo: callers needing a
+    // fresh process must construct a fresh lifecycle instead.
+    const startAfterRelease = lifecycle.start()
+    const outcomeAfterRelease = startAfterRelease.then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+    expect(startAfterRelease).toBe(firstStart)
+    await expect(outcomeAfterRelease).resolves.toBe('resolved')
+    expect(lifecycle.processId).toBe(pid)
+    expect(lifecycle.running).toBe(false)
+    await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('blocks a pre-spawn release, then permanently prohibits the pending spawn', async () => {
     const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-prespawn-'))
     roots.push(root)

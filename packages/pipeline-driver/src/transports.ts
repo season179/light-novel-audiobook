@@ -23,12 +23,22 @@ import {
  * All five adapters are real in both modes. Only these three seams change, which is what lets the
  * same composition root be CI-safe by default and load real models on demand.
  */
+export interface DirectorRuntimeTransport {
+  /** Per-runtime secret paired with the lifecycle that writes it to llama.cpp's key file. */
+  readonly apiKey: string
+  /** Single-use by contract: release is terminal and this instance must never be reset. */
+  readonly lifecycle: DirectorRuntimeLifecycle
+}
+
 export interface PipelineTransports {
   readonly mode: 'fake' | 'real'
   readonly director: {
     readonly baseUrl: string
-    readonly apiKey: string
-    readonly lifecycle: DirectorRuntimeLifecycle
+    /**
+     * Constructs one fresh, single-use runtime for each director model. Long-lived web processes call
+     * this once per generation; the CLI calls it at most once in its single run.
+     */
+    createRuntime(): DirectorRuntimeTransport
   }
   readonly speech: {
     readonly pythonExecutable: string
@@ -116,12 +126,26 @@ class RecordingGpuCoordinator implements ExclusiveGpuLeaseCoordinator {
 
 /** Records the director runtime's load/unload without ever putting weights anywhere. */
 class RecordingLifecycle implements DirectorRuntimeLifecycle {
+  #startPromise: Promise<void> | undefined
+  #releasePromise: Promise<void> | undefined
+  #releasing = false
+
   constructor(private readonly events: string[]) {}
-  async start(): Promise<void> {
-    this.events.push('director:start')
+
+  start(): Promise<void> {
+    this.#startPromise ??= (async () => {
+      if (this.#releasing) throw new Error('Fake director runtime cannot start after release')
+      this.events.push('director:start')
+    })()
+    return this.#startPromise
   }
-  async release(): Promise<void> {
-    this.events.push('director:release')
+
+  release(): Promise<void> {
+    this.#releasing = true
+    this.#releasePromise ??= (async () => {
+      this.events.push('director:release')
+    })()
+    return this.#releasePromise
   }
 }
 
@@ -152,8 +176,10 @@ export async function createFakeTransports(
     mode: 'fake',
     director: {
       baseUrl: directorBaseUrl,
-      apiKey: 'pipeline-driver-fake-key',
-      lifecycle: new RecordingLifecycle(events),
+      createRuntime: () => ({
+        apiKey: 'pipeline-driver-fake-key',
+        lifecycle: new RecordingLifecycle(events),
+      }),
     },
     speech: {
       pythonExecutable: process.execPath,
@@ -256,34 +282,38 @@ export async function createRealTransports(
     throw new Error(`Pinned Gemma model file is missing: ${modelPath}`)
   }
 
-  // Generated per run and passed by file, never on argv, so it cannot leak through the process table.
-  const apiKey = randomBytes(32).toString('base64url')
-  const keyPath = path.join(config.llamaRuntimeRoot, `.pipeline-driver-key-${process.pid}`)
-  const owned = new OwnedLlamaLifecycle({
-    binaryPath,
-    args: llamaServerArgs({
-      modelPath,
-      host: endpoint.host,
-      port: endpoint.port,
-      keyPath,
-    }),
-    apiKey,
-    keyPath,
-    origin: endpoint.origin,
-    port: endpoint.port,
-    startupTimeoutMs: config.startupTimeoutMs ?? 600_000,
-  })
+  // A transport may live for the whole web process, but every owned lifecycle remains single-use.
+  // Track the currently unreleased instances so one set of process guards can reap any of them
+  // without accumulating signal listeners after many generations.
+  const ownedLifecycles = new Set<OwnedLlamaLifecycle>()
+  let runtimeSequence = 0
+  let closePromise: Promise<void> | undefined
+  let closed = false
+
+  const releaseAll = async (): Promise<void> => {
+    const results = await Promise.allSettled(
+      [...ownedLifecycles].map(async (owned) => {
+        await owned.release()
+        ownedLifecycles.delete(owned)
+      }),
+    )
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason)
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'One or more owned director runtimes failed to release')
+    }
+  }
 
   // Last-ditch orphan guard. The lifecycle's own paths cover success and failure, and a terminal
   // Ctrl-C reaches the server through the process group; but a SIGTERM aimed at this process
-  // alone, or an unhandled rejection, kills the driver without touching its child, whose stdio is
-  // 'ignore' so nothing EOFs it. A resident llama-server then wedges every later run (the compute
-  // diagnostic fails closed) and, if that guard is ever disabled, invites co-residency. The 'exit'
-  // hook cannot run under SIGKILL; that residual needs a parent-death signal the server does not
-  // have, and is documented rather than half-fixed here.
-  const killOrphanedServer = () => {
-    const pid = owned.processId
-    if (owned.running && pid !== undefined) {
+  // alone, or an unhandled rejection, kills the host without touching children whose stdio is
+  // 'ignore'. One process-level guard covers every per-run lifecycle. The 'exit' hook cannot run
+  // under SIGKILL; that residual needs a parent-death signal llama-server does not have.
+  const killOrphanedServers = () => {
+    for (const owned of ownedLifecycles) {
+      const pid = owned.processId
+      if (!owned.running || pid === undefined) continue
       try {
         process.kill(pid, 'SIGKILL')
       } catch {
@@ -291,35 +321,82 @@ export async function createRealTransports(
       }
     }
   }
-  process.once('exit', killOrphanedServer)
+  const signalHandlers = new Map<NodeJS.Signals, () => void>()
+  process.once('exit', killOrphanedServers)
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-    process.once(signal, () => {
+    const handler = () => {
       const relay = () => {
         // Only re-raise when no other listener remains: a host with its own shutdown must not be
         // killed mid-cleanup by this guard.
         if (process.listenerCount(signal) === 0) process.kill(process.pid, signal)
       }
-      void owned.release().then(relay, relay)
+      void releaseAll().then(relay, relay)
+    }
+    signalHandlers.set(signal, handler)
+    process.once(signal, handler)
+  }
+
+  const detachProcessGuards = (): void => {
+    process.removeListener('exit', killOrphanedServers)
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler)
+  }
+
+  const createRuntime = (): DirectorRuntimeTransport => {
+    if (closed) throw new Error('Real director transports have been closed')
+    runtimeSequence += 1
+    // Generated per runtime and passed by file, never on argv, so it cannot leak through the process
+    // table. A sequence makes queued instances non-colliding even though the GPU lease serializes
+    // their eventual starts.
+    const apiKey = randomBytes(32).toString('base64url')
+    const keyPath = path.join(
+      config.llamaRuntimeRoot,
+      `.pipeline-driver-key-${process.pid}-${runtimeSequence}`,
+    )
+    const owned = new OwnedLlamaLifecycle({
+      binaryPath,
+      args: llamaServerArgs({
+        modelPath,
+        host: endpoint.host,
+        port: endpoint.port,
+        keyPath,
+      }),
+      apiKey,
+      keyPath,
+      origin: endpoint.origin,
+      port: endpoint.port,
+      startupTimeoutMs: config.startupTimeoutMs ?? 600_000,
     })
+    ownedLifecycles.add(owned)
+    let startPromise: Promise<void> | undefined
+    let releasePromise: Promise<void> | undefined
+
+    return {
+      apiKey,
+      lifecycle: {
+        start: () => {
+          startPromise ??= owned.start().then(() => {
+            // Recorded after the process is serving, so the event cannot precede GPU residency.
+            events.push(`director:start:pid=${owned.processId ?? 'unknown'}`)
+          })
+          return startPromise
+        },
+        release: () => {
+          releasePromise ??= owned.release().then(() => {
+            ownedLifecycles.delete(owned)
+            // Recorded only after the process has exited and its port is free.
+            events.push('director:release:process-exited')
+          })
+          return releasePromise
+        },
+      },
+    }
   }
 
   return {
     mode: 'real',
     director: {
       baseUrl: endpoint.baseUrl,
-      apiKey,
-      lifecycle: {
-        start: async () => {
-          await owned.start()
-          // Recorded after the process is serving, so the event cannot precede GPU residency.
-          events.push(`director:start:pid=${owned.processId ?? 'unknown'}`)
-        },
-        release: async () => {
-          await owned.release()
-          // Recorded only after the process has exited and its port is free.
-          events.push('director:release:process-exited')
-        },
-      },
+      createRuntime,
     },
     speech: {
       pythonExecutable: config.pythonExecutable,
@@ -333,9 +410,15 @@ export async function createRealTransports(
       lockFilePath: config.gpuLockFilePath,
     },
     lifecycleEvents: events,
-    // Safety net: a failure between start() and release() must not leave a model resident.
-    close: async () => {
-      await owned.release()
+    // Safety net: a failure between runtime construction, start, and model release must not leave a
+    // child resident. The CLI calls this after its one run; a long-lived web host relies on each
+    // model's release plus the process guards above.
+    close: () => {
+      closed = true
+      closePromise ??= releaseAll().then(() => {
+        detachProcessGuards()
+      })
+      return closePromise
     },
   }
 }
