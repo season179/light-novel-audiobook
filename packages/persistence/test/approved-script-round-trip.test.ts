@@ -353,11 +353,21 @@ describe('fallback approval ledger (issue #45)', () => {
     await approvals.revoke(BOOK_ID, segmentId, WITHDRAWAL)
     expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(3)
 
+    const scopedDecision = decision(segmentId)
     await approvals.saveBookGrant(
       createBookFallbackGrant({
         bookId: BOOK_ID,
         decidedBy: 'local-reviewer',
         decidedAt: DECIDED_AT,
+        subjects: [
+          {
+            segmentId: scopedDecision.segmentId,
+            speakerId: scopedDecision.speakerId,
+            fallbackReason: scopedDecision.fallbackReason,
+            voiceProfileId: scopedDecision.voiceProfileId,
+            sourceTextSha256: scopedDecision.sourceTextSha256,
+          },
+        ],
       }),
     )
     expect((await approvals.readCatalog(BOOK_ID)).revision).toBe(4)

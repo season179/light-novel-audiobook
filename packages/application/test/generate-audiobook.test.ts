@@ -17,6 +17,7 @@ import {
   type AssembleAudiobookRequest,
   type AudioAssembler,
   type CompletedSegmentAudio,
+  collectFallbackSubjects,
   createBookFallbackGrant,
   createGenerationCommandIdentity,
   type DirectChapterOptions,
@@ -649,11 +650,21 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(undecided.grant).toBeUndefined()
     expect(undecided.approvals).toEqual([])
 
+    const storedBook = await app.repository.findBook(bookId)
+    if (storedBook === undefined) throw new Error('directed fixture book missing')
+    const subjects = collectFallbackSubjects(storedBook).map((subject) => ({
+      segmentId: subject.segment.id,
+      speakerId: subject.speakerId,
+      fallbackReason: subject.fallbackReason,
+      voiceProfileId: subject.voiceProfileId,
+      sourceTextSha256: subject.sourceTextSha256,
+    }))
     await app.approvals.saveBookGrant(
       createBookFallbackGrant({
         bookId,
         decidedBy: REVIEWER,
         decidedAt: DECIDED_AT.toISOString(),
+        subjects,
       }),
     )
     const result = await app.useCase.execute(command)

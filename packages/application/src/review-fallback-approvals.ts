@@ -8,6 +8,7 @@ import { type ApprovalCatalogAccess, approvalCatalogAccessFor } from './complete
 import {
   approvalStillDescribes,
   type BookFallbackGrant,
+  type BookFallbackGrantSubject,
   collectFallbackSubjects,
   createBookFallbackGrant,
   createFallbackApprovalRecord,
@@ -118,6 +119,9 @@ export class ReviewFallbackApprovals {
     const excludedBy = new Map(
       catalog.exclusions.map((exclusion) => [exclusion.segmentId, exclusion.decidedBy]),
     )
+    const grantedSubjects = new Map(
+      catalog.grant?.subjects.map((subject) => [subject.segmentId, subject]) ?? [],
+    )
 
     const approved: PersistedFallbackApproval[] = []
     const created: PersistedFallbackApproval[] = []
@@ -170,7 +174,12 @@ export class ReviewFallbackApprovals {
         )
         continue
       }
-      if (catalog.grant === undefined) {
+      const grantedSubject = grantedSubjects.get(subject.segment.id)
+      if (
+        catalog.grant === undefined ||
+        grantedSubject === undefined ||
+        !grantSubjectStillDescribes(grantedSubject, subject)
+      ) {
         pending.push(pendingFrom(subject, {}, speakerReasons.get(subject.segment.id)))
         continue
       }
@@ -254,13 +263,28 @@ export class ReviewFallbackApprovals {
     return this.catalogAccess.runExclusive(book.id, async () => {
       this.assertNoRenderOwns(job)
       await this.reopenIfCompleted(job)
-      await this.approvals.saveBookGrant(
-        createBookFallbackGrant({
-          bookId: book.id,
-          decidedBy: request.decidedBy,
-          decidedAt: this.decidedAt(),
-        }),
-      )
+      const catalog = await this.approvals.readCatalog(book.id)
+      const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
+      const excluded = new Set(catalog.exclusions.map((record) => record.segmentId))
+      const subjects = collectFallbackSubjects(book).filter((subject) => {
+        if (excluded.has(subject.segment.id)) return false
+        const existing = live.get(subject.segment.id)
+        return existing === undefined || !approvalStillDescribes(existing, subject)
+      })
+      if (subjects.length === 0) {
+        if (catalog.grant === undefined) {
+          throw new DomainError('A fallback grant requires at least one pending reviewed subject')
+        }
+      } else {
+        await this.approvals.saveBookGrant(
+          createBookFallbackGrant({
+            bookId: book.id,
+            decidedBy: request.decidedBy,
+            decidedAt: this.decidedAt(),
+            subjects: subjects.map(grantSubjectFrom),
+          }),
+        )
+      }
       const reconciliation = await this.reconcileUnlocked({ book, warnings: job.warnings })
       await this.reopenIfCompletedSince(request.jobId)
       return reconciliation
@@ -391,6 +415,29 @@ export class ReviewFallbackApprovals {
     if (Number.isNaN(instant.getTime())) throw new DomainError('Decision clock returned no time')
     return instant.toISOString()
   }
+}
+
+function grantSubjectFrom(subject: FallbackApprovalSubject): BookFallbackGrantSubject {
+  return {
+    segmentId: subject.segment.id,
+    speakerId: subject.speakerId,
+    fallbackReason: subject.fallbackReason,
+    voiceProfileId: subject.voiceProfileId,
+    sourceTextSha256: subject.sourceTextSha256,
+  }
+}
+
+function grantSubjectStillDescribes(
+  granted: BookFallbackGrantSubject,
+  subject: FallbackApprovalSubject,
+): boolean {
+  return (
+    granted.segmentId === subject.segment.id &&
+    granted.speakerId === subject.speakerId &&
+    granted.fallbackReason === subject.fallbackReason &&
+    granted.voiceProfileId === subject.voiceProfileId &&
+    granted.sourceTextSha256 === subject.sourceTextSha256
+  )
 }
 
 function pendingFrom(

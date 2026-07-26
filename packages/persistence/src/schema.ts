@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withTransaction } from './transaction.js'
 
-export const SCHEMA_VERSION = 3 satisfies number
+export const SCHEMA_VERSION = 4 satisfies number
 
 const migrations = new Map<number, string>()
 
@@ -204,6 +204,17 @@ migrations.set(
     m4b_path TEXT NOT NULL,
     chapters_json TEXT NOT NULL
   );
+`,
+)
+
+migrations.set(
+  4,
+  `
+  -- Grants created before scope binding authorized subjects that were never listed. Existing
+  -- per-segment approvals remain valid, but an unscoped grant must not create anything further.
+  DELETE FROM fallback_book_grants;
+  ALTER TABLE fallback_book_grants
+    ADD COLUMN subjects_json TEXT NOT NULL DEFAULT '[]';
 `,
 )
 

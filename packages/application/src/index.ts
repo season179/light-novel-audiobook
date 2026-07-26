@@ -17,6 +17,7 @@ export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   approvalStillDescribes,
   type BookFallbackGrant,
+  type BookFallbackGrantSubject,
   collectFallbackSubjects,
   createBookFallbackGrant,
   createFallbackApprovalRecord,

@@ -10,6 +10,7 @@ import { normalizeReviewerIdentity } from './reviewer-identity.js'
 
 /** Bumped only when the hashed decision fields change; every existing approval then restales. */
 const APPROVAL_SCHEMA_VERSION = 2
+const BOOK_GRANT_SCHEMA_VERSION = 3
 
 /** The identity shape `QwenTtsSpeechEngine` validates before it will render a fallback segment. */
 const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
@@ -64,20 +65,27 @@ export interface PersistedFallbackApproval extends FallbackApprovalDecision {
   readonly approvalSha256: string
 }
 
+/** One exact fallback subject included in the human's announced book-grant scope. */
+export interface BookFallbackGrantSubject {
+  readonly segmentId: string
+  readonly speakerId: string | null
+  readonly fallbackReason: FallbackReason
+  readonly voiceProfileId: string
+  readonly sourceTextSha256: string
+}
+
 /**
- * One human decision authorizing the fallback voice for **every** unresolved speaker in one book.
+ * One human decision authorizing the fallback voice for a listed set of subjects in one book.
  *
- * This is the M1 answer to a 2,328-passage book that must not stop for a click per line, and it is
- * a durable, actor-attributed act of its own — created only by `ReviewFallbackApprovals`, never by
- * a generation run and never by composition wiring. `GenerateAudiobook` can apply a grant that
- * already exists; it cannot create one, and there is no command field through which one could be
- * defaulted in. It still produces one record per segment, so revoking one speaker's approval
- * invalidates only that speaker's audio.
+ * This is the M1 answer to a large review queue that must not stop for a click per line, and it is a
+ * durable, actor-attributed act of its own. The exact subject set is part of its identity, so later
+ * reconciliation cannot extend the human's decision to a segment or decision tuple they never saw.
  */
 export interface BookFallbackGrant {
   readonly bookId: string
   readonly decidedBy: string
   readonly decidedAt: string
+  readonly subjects: readonly BookFallbackGrantSubject[]
   readonly grantId: string
   readonly grantSha256: string
 }
@@ -131,17 +139,27 @@ export const createBookFallbackGrant = (input: {
   readonly bookId: string
   readonly decidedBy: string
   readonly decidedAt: string
+  readonly subjects: readonly BookFallbackGrantSubject[]
 }): BookFallbackGrant => {
   if (input.bookId.length === 0) throw new DomainError('A fallback grant requires a book')
   validateActor(input.decidedBy)
   validateDecidedAt(input.decidedAt)
+  if (input.subjects.length === 0) {
+    throw new DomainError('A fallback grant requires at least one reviewed subject')
+  }
+  const subjects = input.subjects.map((subject) => canonicalGrantSubject(input.bookId, subject))
+  subjects.sort((left, right) => (left.segmentId < right.segmentId ? -1 : 1))
+  if (new Set(subjects.map((subject) => subject.segmentId)).size !== subjects.length) {
+    throw new DomainError('A fallback grant cannot contain the same segment twice')
+  }
   const grantSha256 = createHash('sha256')
     .update(
       JSON.stringify({
-        schema: `book-fallback-grant@${APPROVAL_SCHEMA_VERSION}`,
+        schema: `book-fallback-grant@${BOOK_GRANT_SCHEMA_VERSION}`,
         bookId: input.bookId,
         decidedBy: input.decidedBy,
         decidedAt: input.decidedAt,
+        subjects,
       }),
       'utf8',
     )
@@ -150,6 +168,7 @@ export const createBookFallbackGrant = (input: {
     bookId: input.bookId,
     decidedBy: input.decidedBy,
     decidedAt: input.decidedAt,
+    subjects: Object.freeze(subjects),
     grantId: `grant-${grantSha256.slice(0, 16)}`,
     grantSha256,
   })
@@ -284,6 +303,34 @@ export const fallbackApprovalExcerpt = (sourceText: string): string => {
   const collapsed = sourceText.replace(/\s+/gu, ' ').trim()
   if (collapsed.length <= FALLBACK_EXCERPT_MAX_LENGTH) return collapsed
   return `${collapsed.slice(0, FALLBACK_EXCERPT_MAX_LENGTH - 1)}…`
+}
+
+function canonicalGrantSubject(
+  bookId: string,
+  subject: BookFallbackGrantSubject,
+): BookFallbackGrantSubject {
+  if (subject.segmentId.length === 0 || !subject.segmentId.startsWith(`${bookId}-`)) {
+    throw new DomainError('A fallback grant subject must belong to its book')
+  }
+  if (subject.speakerId !== null && subject.speakerId.length === 0) {
+    throw new DomainError('A fallback grant speaker cannot be empty')
+  }
+  if (!FALLBACK_REASONS.includes(subject.fallbackReason)) {
+    throw new DomainError(`Unsupported fallback reason: ${subject.fallbackReason}`)
+  }
+  if ((subject.fallbackReason === 'unresolved_speaker') !== (subject.speakerId === null)) {
+    throw new DomainError('A fallback grant subject pairs its reason with the wrong speaker')
+  }
+  if (subject.voiceProfileId.length === 0 || !SHA256.test(subject.sourceTextSha256)) {
+    throw new DomainError('A fallback grant subject requires a voice and source digest')
+  }
+  return Object.freeze({
+    segmentId: subject.segmentId,
+    speakerId: subject.speakerId,
+    fallbackReason: subject.fallbackReason,
+    voiceProfileId: subject.voiceProfileId,
+    sourceTextSha256: subject.sourceTextSha256.toLowerCase(),
+  })
 }
 
 function validateDecision(decision: FallbackApprovalDecision): void {

@@ -234,6 +234,22 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     expect(result.grant?.decidedBy).toBe(REVIEWER)
   })
 
+  it('does not replay a grant onto a fallback subject outside its original scope', async () => {
+    const initiallyListed = bookOf(DEFAULT_LINES.slice(0, 3))
+    directedJob(app.jobs, initiallyListed)
+    const granted = await app.review.grantBookFallback({
+      jobId: 'job-review',
+      decidedBy: REVIEWER,
+    })
+    expect(granted.created).toHaveLength(1)
+
+    const afterScriptChange = await app.review.reconcile({ book: bookOf() })
+    expect(afterScriptChange.created).toEqual([])
+    expect(afterScriptChange.pending.map((item) => item.segmentId)).toEqual([
+      StableIds.segment(PASSAGE_ID, 4),
+    ])
+  })
+
   it('creates nothing at all without a human grant, and reports every speaker as pending', async () => {
     // THE regression test for round 2's HIGH: with no grant there is no policy, default or argument
     // that can cause an approval to exist. `reconcile` is the only creator and it needs a grant.
@@ -342,8 +358,10 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     })
 
     expect(rewritten.invalidated.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
-    expect(rewritten.created.map((record) => record.segmentId)).toEqual([MIRA_SEGMENT])
-    expect(app.approvals.approvals.get(`${BOOK_ID}:${MIRA_SEGMENT}`)?.approvalId).not.toBe(before)
+    expect(rewritten.created).toEqual([])
+    expect(rewritten.pending.map((item) => item.segmentId)).toEqual([MIRA_SEGMENT])
+    expect(app.approvals.approvals.get(`${BOOK_ID}:${MIRA_SEGMENT}`)?.approvalId).toBeUndefined()
+    expect(before).toBeDefined()
     // The other speaker's decision was untouched.
     expect(rewritten.unchanged.map((record) => record.segmentId)).toEqual([UNRESOLVED_SEGMENT])
   })
