@@ -32,6 +32,7 @@ interface PromptPassage {
 
 interface PromptInput {
   readonly chapterId: string
+  readonly speakers: readonly { readonly speaker_id: string; readonly aliases: readonly string[] }[]
   readonly passages: readonly PromptPassage[]
 }
 
@@ -48,12 +49,14 @@ function findPromptInput(messages: readonly { content?: unknown }[]): PromptInpu
     if (parsed === null || typeof parsed !== 'object') continue
     const candidate = parsed as {
       passages?: unknown
+      speakers?: unknown
       chapter?: { chapter_id?: unknown }
     }
-    if (!Array.isArray(candidate.passages)) continue
+    if (!Array.isArray(candidate.passages) || !Array.isArray(candidate.speakers)) continue
     return {
       chapterId:
         typeof candidate.chapter?.chapter_id === 'string' ? candidate.chapter.chapter_id : '',
+      speakers: candidate.speakers as PromptInput['speakers'],
       passages: candidate.passages as readonly PromptPassage[],
     }
   }
@@ -64,6 +67,8 @@ export class NarrationEchoDirectorServer {
   #server: Server | undefined
   #port = 0
   readonly requests: FakeDirectorRequest[] = []
+
+  constructor(private readonly characterKind?: 'dialogue' | 'thought') {}
 
   get baseUrl(): string {
     if (this.#port === 0) throw new Error('Fake director server is not running')
@@ -110,10 +115,19 @@ export class NarrationEchoDirectorServer {
           chapterId: input.chapterId,
           passageCount: passages.length,
         })
+        const selectedSpeaker = input.speakers[0]
+        if (this.characterKind !== undefined && selectedSpeaker === undefined) {
+          response.writeHead(400, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ error: { message: 'character mode requires a roster' } }))
+          return
+        }
         const segments = passages.map((passage) => ({
           source_passage_id: passage.source_passage_id,
           source_text: passage.source_text,
-          kind: 'narration',
+          kind: this.characterKind ?? 'narration',
+          ...(selectedSpeaker === undefined || this.characterKind === undefined
+            ? {}
+            : { speaker_id: selectedSpeaker.speaker_id, speaker_reason: null }),
           confidence: 1,
           delivery: {
             emotion: 'neutral',
