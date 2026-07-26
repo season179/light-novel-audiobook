@@ -56,6 +56,7 @@ export class FakeLlamaServer {
   private server: Server | undefined
   private mode: FakeMode = 'success'
   private responseValue: unknown
+  private responseSequence: unknown[] = []
   readonly requests: CapturedRequest[] = []
   abortedRequests = 0
   port = 0
@@ -71,6 +72,14 @@ export class FakeLlamaServer {
 
   respondWith(value: unknown): void {
     this.responseValue = value
+    this.responseSequence = []
+  }
+
+  /** One response per request; the final value is reused if more requests arrive. */
+  respondInSequence(values: readonly unknown[]): void {
+    if (values.length === 0) throw new Error('Fake response sequence cannot be empty')
+    this.responseSequence = [...values]
+    this.responseValue = values[values.length - 1]
   }
 
   async start(): Promise<void> {
@@ -125,9 +134,11 @@ export class FakeLlamaServer {
     })
 
     switch (this.mode) {
-      case 'success':
-        sendSse(response, JSON.stringify(this.responseValue))
+      case 'success': {
+        const sequenced = this.responseSequence.shift()
+        sendSse(response, JSON.stringify(sequenced ?? this.responseValue))
         break
+      }
       case 'malformed':
         sendSse(response, '{"segments":[')
         break

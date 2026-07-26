@@ -25,13 +25,13 @@ export interface FidelityFinding {
 }
 
 export class DirectorFidelityError extends DirectorError {
-  override readonly name = 'DirectorFidelityError'
+  override readonly name: string = 'DirectorFidelityError'
 
-  constructor(readonly findings: readonly FidelityFinding[]) {
-    super(
-      'fidelity',
-      `Gemma Director output failed deterministic fidelity validation (${[...new Set(findings.map((item) => item.code))].join(', ')})`,
-    )
+  constructor(
+    readonly findings: readonly FidelityFinding[],
+    message = `Gemma Director output failed deterministic fidelity validation (${[...new Set(findings.map((item) => item.code))].join(', ')})`,
+  ) {
+    super('fidelity', message)
   }
 }
 

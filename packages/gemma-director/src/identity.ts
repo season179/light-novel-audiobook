@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { z } from 'zod'
 import { canonicalSha256 } from './canonical-json.js'
 import { type DirectionChunkingSettings, resolveChunkingSettings } from './chunking.js'
+import { FIDELITY_RECOVERY_POLICY } from './fidelity-recovery.js'
 import {
   GEMMA_DIRECTOR_PROMPT_VERSION,
   GEMMA_DIRECTOR_SCHEMA_VERSION,
@@ -10,7 +11,7 @@ import {
 } from './profile.js'
 import { directionWireOutputIdentitySchema } from './schema.js'
 
-export const GEMMA_DIRECTOR_IDENTITY_SCHEMA = 'gemma-director-identity@1'
+export const GEMMA_DIRECTOR_IDENTITY_SCHEMA = 'gemma-director-identity@2'
 export const GPU_LEASE_PROTOCOL = 'flock-exclusive-nonblock@1'
 
 export interface GemmaDirectorIdentitySettings {
@@ -80,6 +81,7 @@ export function gemmaDirectorIdentityMaterial(settings: GemmaDirectorIdentitySet
       confidenceThreshold: settings.confidenceThreshold,
     },
     chunking: resolveChunkingSettings(settings.chunking),
+    fidelityRecovery: FIDELITY_RECOVERY_POLICY,
   } as const
 }
 
