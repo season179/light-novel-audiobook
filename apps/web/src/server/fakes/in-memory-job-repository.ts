@@ -10,6 +10,7 @@ import type {
 import {
   AudiobookJob,
   type AudiobookJobSnapshot,
+  type AudiobookOutput,
   Book,
   Chapter,
   type DeliveryDirection,
@@ -41,6 +42,13 @@ const chapterNumber = (chapterId: string): string => {
 const segmentKey = (segmentId: string, inputIdentity: string): string =>
   `${segmentId}::${inputIdentity}`
 
+const cloneOutput = (output: AudiobookOutput): AudiobookOutput =>
+  Object.freeze({
+    version: new OutputVersion(output.version.value),
+    m4bPath: output.m4bPath,
+    chapters: Object.freeze(output.chapters.map((chapter) => Object.freeze({ ...chapter }))),
+  })
+
 /**
  * FAKE repository. It stores jobs as `AudiobookJob` snapshots rather than object references, so the
  * whole flow behaves like the persisted contract issue #27 will implement in SQLite: job state is
@@ -51,6 +59,7 @@ export class InMemoryJobRepository implements JobRepository {
   private readonly workspace: LocalWorkspace
   private readonly jobSnapshots = new Map<string, AudiobookJobSnapshot>()
   private readonly completedSegments = new Map<string, CompletedSegmentAudio>()
+  readonly #completedOutputs = new Map<string, AudiobookOutput>()
   private readonly reservedPaths = new Set<string>()
   private readonly latestVersionByBook = new Map<string, number>()
   private readonly approvedScripts = new Map<string, StoredBook>()
@@ -65,7 +74,20 @@ export class InMemoryJobRepository implements JobRepository {
   }
 
   async saveJob(job: AudiobookJob): Promise<void> {
+    if (job.state === 'completed') throw new DomainError('Completed job requires separate output')
     this.jobSnapshots.set(job.id, job.snapshot())
+    this.#completedOutputs.delete(job.id)
+  }
+
+  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    if (job.state !== 'completed') throw new DomainError('Completed output requires completed job')
+    this.jobSnapshots.set(job.id, job.snapshot())
+    this.#completedOutputs.set(job.id, cloneOutput(output))
+  }
+
+  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    const output = this.#completedOutputs.get(jobId)
+    return output === undefined ? undefined : cloneOutput(output)
   }
 
   /**

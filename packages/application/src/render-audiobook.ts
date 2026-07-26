@@ -131,7 +131,8 @@ export class RenderAudiobook {
     this.jobs = dependencies.jobs
     this.approvals = dependencies.approvals
     this.completedOutputs =
-      dependencies.completedOutputs ?? new CompletedOutputAuthority(dependencies.approvals)
+      dependencies.completedOutputs ??
+      new CompletedOutputAuthority(dependencies.approvals, dependencies.jobs)
   }
 
   async execute(command: RenderAudiobookCommand): Promise<RenderAudiobookResult> {
@@ -246,7 +247,7 @@ export class RenderAudiobook {
       // than silently authoritative — see the completed-job path above.
       await this.assertCatalogUnmoved(book.id, claimed.revision)
       job.complete(output, claimed.revision)
-      await this.jobs.saveJob(job)
+      await this.jobs.saveCompletedJob(job, output)
       return { job, output, generatedSegments, reusedSegments }
     } catch (error) {
       if (job.state === 'running') {

@@ -89,7 +89,8 @@ export class GenerateAudiobook {
       jobs: dependencies.jobs,
     })
     this.completedOutputs =
-      dependencies.completedOutputs ?? new CompletedOutputAuthority(dependencies.approvals)
+      dependencies.completedOutputs ??
+      new CompletedOutputAuthority(dependencies.approvals, dependencies.jobs)
     this.rendering = new RenderAudiobook({
       speechEngineFactory: dependencies.speechEngineFactory,
       audioAssembler: dependencies.audioAssembler,

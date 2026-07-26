@@ -133,7 +133,7 @@ export const createAudiobookWebApi = async (
   // final catalog check and, for files, descriptor acquisition; review mutations hold it through the
   // catalog commit. Streams themselves never hold it.
   const catalogAccess = new ApprovalCatalogAccess()
-  const completedOutputs = new CompletedOutputAuthority(approvals, catalogAccess)
+  const completedOutputs = new CompletedOutputAuthority(approvals, jobs, catalogAccess)
 
   // One use case per run, with adapters that have not been released or batched yet.
   //

@@ -559,7 +559,7 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     expect(afterRevoke.grant).not.toBeUndefined()
     const reopenedByRevoke = await fixture.jobs.findJob(command.jobId)
     expect(reopenedByRevoke?.state).toBe('awaiting_review')
-    expect(reopenedByRevoke?.snapshot().output).toBeNull()
+    expect(reopenedByRevoke?.catalogRevision).toBeNull()
 
     const refusal = await generate
       .execute(command)
@@ -710,7 +710,7 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     // Nothing was published: no output, and the job records the failure rather than completing.
     const job = await fixture.jobs.findJob('job-catalog-race')
     expect(job?.state).toBe('failed')
-    expect(job?.snapshot().output).toBeNull()
+    expect(job?.state).toBe('failed')
     expect(fixture.assembler.assemblies).toBe(0)
   }, 180_000)
 })

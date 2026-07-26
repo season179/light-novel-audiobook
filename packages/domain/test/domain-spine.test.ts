@@ -430,7 +430,8 @@ describe('audiobook job and numbered output lifecycle', () => {
       JSON.parse(JSON.stringify(completed.snapshot())),
     )
     expect(completedReloaded.snapshot()).toEqual(completed.snapshot())
-    expect(completedReloaded.snapshot().output?.version).toBe(3)
+    expect(completedReloaded.state).toBe('completed')
+    expect(completedReloaded.catalogRevision).toBe(0)
 
     const failed = new AudiobookJob('job-snapshot-failed')
     failed.bindCommand(commandIdentity)
@@ -529,7 +530,7 @@ describe('audiobook job and numbered output lifecycle', () => {
       reason: 'unresolved_speaker' as const,
     }
     const impossible: readonly [string, unknown][] = [
-      ['old schema', { ...pending, schemaVersion: 1 }],
+      ['old embedded-output schema', { ...pending, schemaVersion: 3 }],
       ['pending with book', { ...pending, bookId }],
       [
         'pending with progress',
@@ -600,86 +601,6 @@ describe('audiobook job and numbered output lifecycle', () => {
         {
           ...completedSnapshot,
           progress: { ...completedSnapshot.progress, latestMessage: 'Not done' },
-        },
-      ],
-      ['completed without output', { ...completedSnapshot, output: null }],
-      [
-        'completed invalid version',
-        { ...completedSnapshot, output: { ...completedSnapshot.output, version: 0 } },
-      ],
-      [
-        'completed empty path',
-        { ...completedSnapshot, output: { ...completedSnapshot.output, m4bPath: '' } },
-      ],
-      [
-        'completed duplicate paths',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [{ chapterId, path: completedSnapshot.output?.m4bPath }],
-          },
-        },
-      ],
-      [
-        'completed foreign chapter',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [
-              {
-                chapterId: StableIds.chapter(StableIds.book('b'.repeat(64)), 1),
-                path: '/output/foreign.flac',
-              },
-            ],
-          },
-        },
-      ],
-      [
-        'completed malformed chapter',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [{ chapterId: `${bookId}-ch1`, path: '/output/malformed.flac' }],
-          },
-        },
-      ],
-      [
-        'completed zero chapter position',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [{ chapterId: `${bookId}-ch0000`, path: '/output/zero.flac' }],
-          },
-        },
-      ],
-      [
-        'completed duplicate chapter IDs',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [
-              { chapterId, path: '/output/duplicate-one.flac' },
-              { chapterId, path: '/output/duplicate-two.flac' },
-            ],
-          },
-        },
-      ],
-      [
-        'completed more chapters than segments',
-        {
-          ...completedSnapshot,
-          output: {
-            ...completedSnapshot.output,
-            chapters: [1, 2, 3].map((position) => ({
-              chapterId: StableIds.chapter(bookId, position),
-              path: `/output/chapter-${position}.flac`,
-            })),
-          },
         },
       ],
     ]

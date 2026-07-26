@@ -409,6 +409,7 @@ class InMemoryJobRepository implements JobRepository {
   readonly jobs = new Map<string, AudiobookJob>()
   readonly books = new Map<string, Book>()
   readonly audio = new Map<string, CompletedSegmentAudio>()
+  readonly completedOutputs = new Map<string, AudiobookOutput>()
   readonly reservations: OutputReservation[] = []
   returnInvalidReusableMetadata = false
   reserveDuplicatePaths = false
@@ -423,6 +424,16 @@ class InMemoryJobRepository implements JobRepository {
 
   async saveJob(job: AudiobookJob): Promise<void> {
     this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
+    if (job.state !== 'completed') this.completedOutputs.delete(job.id)
+  }
+
+  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
+    this.completedOutputs.set(job.id, output)
+  }
+
+  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    return this.completedOutputs.get(jobId)
   }
 
   async saveBook(book: Book): Promise<void> {
@@ -720,7 +731,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
     const reopened = await app.repository.findJob(command.jobId)
     expect(reopened?.state).toBe('awaiting_review')
-    expect(reopened?.snapshot().output).toBeNull()
+    expect(reopened?.catalogRevision).toBeNull()
     expect(app.assembler.calls).toHaveLength(assembliesBeforeRevocation)
   })
 

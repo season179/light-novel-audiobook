@@ -101,13 +101,13 @@ describe('awaiting-review job lifecycle (issue #45)', () => {
 
   it('reopens a completed job for review, keeping its directed script and dropping its output', () => {
     const job = completedJob()
-    expect(job.snapshot().output).not.toBeNull()
+    expect(job.state).toBe('completed')
 
     job.reopenForReview()
 
     expect(job.state).toBe('awaiting_review')
     expect(job.stage).toBe('directing')
-    expect(job.snapshot().output).toBeNull()
+    expect(job.catalogRevision).toBeNull()
     expect(job.error).toBeNull()
     expect(job.progress.completedSegments).toBe(0)
     expect(job.progress.totalSegments).toBe(0)

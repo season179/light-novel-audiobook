@@ -132,6 +132,14 @@ class SanitizedJobRepository implements JobRepository {
     return sanitize('jobs.saveJob', () => this.inner.saveJob(job))
   }
 
+  saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    return sanitize('jobs.saveCompletedJob', () => this.inner.saveCompletedJob(job, output))
+  }
+
+  findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    return sanitize('jobs.findCompletedOutput', () => this.inner.findCompletedOutput(jobId))
+  }
+
   saveBook(book: Book): Promise<void> {
     return sanitize('jobs.saveBook', () => this.inner.saveBook(book))
   }

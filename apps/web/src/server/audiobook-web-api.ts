@@ -7,7 +7,12 @@ import type {
   ReviewFallbackApprovals,
 } from '@light-novel-audiobook/application'
 import { RenderInProgressError } from '@light-novel-audiobook/application'
-import type { AudiobookJob, AudiobookJobSnapshot, VoiceCast } from '@light-novel-audiobook/domain'
+import type {
+  AudiobookJob,
+  AudiobookJobSnapshot,
+  AudiobookOutput,
+  VoiceCast,
+} from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
@@ -58,6 +63,11 @@ export interface OpenAudioFile {
   readonly descriptor: AudioFileDescriptor
   body(): ReadableStream<Uint8Array>
   close(): Promise<void>
+}
+
+interface AuthorizedJobProjection {
+  readonly snapshot: AudiobookJobSnapshot
+  readonly output?: AudiobookOutput | undefined
 }
 
 export interface AudiobookWebApiDependencies {
@@ -336,30 +346,33 @@ export class AudiobookWebApi {
       const failure = this.runner.startupFailure(input.jobId)
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
     }
-    const snapshot = await this.authorizedSnapshot(job)
-    const view = buildJobStateView(snapshot, this.books.find(job.bookId))
+    const projection = await this.authorizedSnapshot(job)
+    const view = buildJobStateView(
+      projection.snapshot,
+      this.books.find(job.bookId),
+      projection.output,
+    )
     return this.withRunnerStatus(view)
   }
 
   /**
-   * The job snapshot as a reader may see it: a completed output whose fallback approvals have since
-   * changed is stripped, so the page, the chapter listing and the download link all disappear
-   * together. `listChapterAudio` needs no gate of its own because it reads this projection.
-   *
-   * On a denial the job is also reopened, so the UI says "awaiting review" rather than "completed
-   * with nothing to play" — but the strip above does not depend on that save succeeding. Round 3's
-   * reopen was best-effort and a single failed save left an audiobook downloadable indefinitely;
-   * recomputing the gate on every read is what makes the denial durable instead.
+   * Public job snapshots never contain output. The authority may add the separately persisted output
+   * to this one projection while its live approval catalog still stands, so the page, chapter list,
+   * and download link agree. On denial the best-effort reopen improves the displayed state, but
+   * withholding output does not depend on that write succeeding.
    */
-  private async authorizedSnapshot(job: AudiobookJob): Promise<AudiobookJobSnapshot> {
-    if (job.state !== 'completed') return job.snapshot()
-    const authorization = await this.completedOutputs.authorize(job, () => job.snapshot())
+  private async authorizedSnapshot(job: AudiobookJob): Promise<AuthorizedJobProjection> {
+    if (job.state !== 'completed') return { snapshot: job.snapshot() }
+    const authorization = await this.completedOutputs.authorize(job, (output) => ({
+      snapshot: job.snapshot(),
+      output,
+    }))
     if (authorization.exposable) return authorization.value
     const deniedSnapshot = job.snapshot()
     // When the reopen lands, report the reopened job: saying `completed` with nothing to download
     // would tell the page the run finished successfully and then offer it no audio. When it does not
     // land, the output is still stripped, so the file is withheld either way.
-    return (await this.reopenStaleOutput(job)) ?? { ...deniedSnapshot, output: null }
+    return { snapshot: (await this.reopenStaleOutput(job)) ?? deniedSnapshot }
   }
 
   /**

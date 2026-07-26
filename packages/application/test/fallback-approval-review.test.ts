@@ -6,6 +6,7 @@
  */
 import {
   AudiobookJob,
+  type AudiobookOutput,
   Book,
   Chapter,
   DomainError,
@@ -126,6 +127,7 @@ const MIRA_SEGMENT = StableIds.segment(PASSAGE_ID, 4)
 class StubJobRepository implements JobRepository {
   book: Book | undefined
   readonly jobs = new Map<string, AudiobookJob>()
+  readonly completedOutputs = new Map<string, AudiobookOutput>()
   savedJobs: string[] = []
 
   async findJob(jobId: string): Promise<AudiobookJob | undefined> {
@@ -135,6 +137,17 @@ class StubJobRepository implements JobRepository {
   async saveJob(job: AudiobookJob): Promise<void> {
     this.savedJobs.push(`${job.id}:${job.state}`)
     this.jobs.set(job.id, job)
+    if (job.state !== 'completed') this.completedOutputs.delete(job.id)
+  }
+
+  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    this.savedJobs.push(`${job.id}:${job.state}`)
+    this.jobs.set(job.id, job)
+    this.completedOutputs.set(job.id, output)
+  }
+
+  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    return this.completedOutputs.get(jobId)
   }
 
   async saveBook(): Promise<void> {}
@@ -440,7 +453,7 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
       }),
     ).toBe(true)
     expect(job.state).toBe('awaiting_review')
-    expect(job.snapshot().output).toBeNull()
+    expect(job.catalogRevision).toBeNull()
     // The reuse ledger is untouched: only the revoked segment's content address became unreachable.
     expect(app.approvals.approvals.has(`${BOOK_ID}:${UNRESOLVED_SEGMENT}`)).toBe(true)
 
@@ -639,15 +652,20 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     job.beginRendering(4)
     for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
     job.beginAssembly()
-    job.complete(
-      {
-        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-        m4bPath: '/workspace/review-v001.m4b',
-        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
-      },
-      claimed,
+    job.bindRenderContract(
+      createRenderContract({
+        voices: cast,
+        speechEngineIdentity: 'speech-1',
+        audioAssemblerIdentity: 'assembly-1',
+      }),
     )
-    await app.jobs.saveJob(job)
+    const output = {
+      version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+      m4bPath: '/workspace/review-v001.m4b',
+      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+    }
+    job.complete(output, claimed)
+    await app.jobs.saveCompletedJob(job, output)
     expect(job.catalogRevision).toBe(claimed)
 
     // The lost revocation: it lands on the ledger without the job being reopened, which is what a
@@ -671,17 +689,6 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
       jobs: app.jobs,
       approvals: app.approvals,
     })
-    const stored = await app.jobs.findJob('job-review')
-    if (stored === undefined) throw new Error('job vanished')
-    stored.bindRenderContract(
-      createRenderContract({
-        voices: cast,
-        speechEngineIdentity: 'speech-1',
-        audioAssemblerIdentity: 'assembly-1',
-      }),
-    )
-    await app.jobs.saveJob(stored)
-
     const refusal = await render
       .execute({ jobId: 'job-review', voices: cast })
       .then(() => undefined)
@@ -692,7 +699,6 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     // And the stale output is gone rather than still downloadable.
     const after = await app.jobs.findJob('job-review')
     expect(after?.state).toBe('awaiting_review')
-    expect(after?.snapshot().output).toBeNull()
     expect(after?.catalogRevision).toBeNull()
   })
 
@@ -707,15 +713,13 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     job.beginRendering(4)
     for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
     job.beginAssembly()
-    job.complete(
-      {
-        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-        m4bPath: '/workspace/review-v001.m4b',
-        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
-      },
-      claimed,
-    )
-    await app.jobs.saveJob(job)
+    const output = {
+      version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+      m4bPath: '/workspace/review-v001.m4b',
+      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+    }
+    job.complete(output, claimed)
+    await app.jobs.saveCompletedJob(job, output)
 
     const render = new RenderAudiobook({
       speechEngineFactory: { identity: 'speech-1', create: () => neverRenders1 },
@@ -741,15 +745,14 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     job.beginRendering(4)
     for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
     job.beginAssembly()
-    job.complete(
-      {
-        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-        m4bPath: '/workspace/review-v001.m4b',
-        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
-      },
-      claimed,
-    )
-    const authority = new CompletedOutputAuthority(app.approvals)
+    const output = {
+      version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+      m4bPath: '/workspace/review-v001.m4b',
+      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+    }
+    job.complete(output, claimed)
+    await app.jobs.saveCompletedJob(job, output)
+    const authority = new CompletedOutputAuthority(app.approvals, app.jobs)
     const nested = authority.authorize(job, () =>
       authority.authorize(job, (output) => output.m4bPath),
     )
@@ -839,15 +842,13 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
           for (const segment of book.chapters[0]?.segments ?? [])
             job.recordSegmentCompleted(segment.id)
           job.beginAssembly()
-          job.complete(
-            {
-              version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
-              m4bPath: '/workspace/review-v001.m4b',
-              chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
-            },
-            claimed,
-          )
-          await app.jobs.saveJob(job)
+          const output = {
+            version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+            m4bPath: '/workspace/review-v001.m4b',
+            chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+          }
+          job.complete(output, claimed)
+          await app.jobs.saveCompletedJob(job, output)
           return app.approvals.revoke(bookId, segmentId, revocation)
         },
       } as typeof app.approvals,
@@ -861,7 +862,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     // The post-write re-read caught the completion and put the job back into review.
     const after = await app.jobs.findJob('job-review')
     expect(after?.state).toBe('awaiting_review')
-    expect(after?.snapshot().output).toBeNull()
+    expect(after?.catalogRevision).toBeNull()
   })
 })
 

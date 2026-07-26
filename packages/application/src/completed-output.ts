@@ -4,7 +4,7 @@ import {
   type AudiobookOutput,
   OutputVersion,
 } from '@light-novel-audiobook/domain'
-import type { FallbackApprovalRepository } from './ports.js'
+import type { FallbackApprovalRepository, JobRepository } from './ports.js'
 
 export type CompletedOutputDenial =
   /** The job has not produced an output, so there is nothing to expose. */
@@ -27,9 +27,11 @@ export class ApprovalCatalogReentryError extends Error {
   override readonly name = 'ApprovalCatalogReentryError'
   readonly bookId: string
 
-  constructor(bookId: string) {
+  constructor(bookId: string, heldBookId: string) {
     super(
-      `Approval catalog callback for ${bookId} must not re-enter output authorization or approval mutation for the same book`,
+      bookId === heldBookId
+        ? `Approval catalog callback for ${bookId} must not re-enter output authorization or approval mutation for the same book`
+        : `Approval catalog callback holding ${heldBookId} must not nest catalog access for ${bookId}`,
     )
     this.bookId = bookId
   }
@@ -56,11 +58,9 @@ export class ApprovalCatalogAccess {
   async runExclusive<T>(bookId: string, operation: () => T | Promise<T>): Promise<T> {
     if (bookId.trim().length === 0) throw new Error('Approval catalog access requires a book ID')
     let ancestor = this.ownership.getStore()
-    while (ancestor !== undefined) {
-      if (ancestor.active && ancestor.bookId === bookId) {
-        throw new ApprovalCatalogReentryError(bookId)
-      }
-      ancestor = ancestor.parent
+    while (ancestor !== undefined && !ancestor.active) ancestor = ancestor.parent
+    if (ancestor !== undefined) {
+      throw new ApprovalCatalogReentryError(bookId, ancestor.bookId)
     }
     const previous = this.tails.get(bookId) ?? Promise.resolve()
     let release: (() => void) | undefined
@@ -111,21 +111,24 @@ class LiveCatalogRead {
     this.#output = output
   }
 
-  static mint(job: AudiobookJob, liveRevision: number): LiveCatalogRead | undefined {
-    const snapshot = job.snapshot()
+  static mint(
+    job: AudiobookJob,
+    liveRevision: number,
+    persistedOutput: AudiobookOutput | undefined,
+  ): LiveCatalogRead | undefined {
     if (
-      snapshot.state !== 'completed' ||
-      snapshot.catalogRevision !== liveRevision ||
-      snapshot.output === null
+      job.state !== 'completed' ||
+      job.catalogRevision !== liveRevision ||
+      persistedOutput === undefined
     ) {
       return undefined
     }
     return new LiveCatalogRead(
       Object.freeze({
-        version: new OutputVersion(snapshot.output.version),
-        m4bPath: snapshot.output.m4bPath,
+        version: new OutputVersion(persistedOutput.version.value),
+        m4bPath: persistedOutput.m4bPath,
         chapters: Object.freeze(
-          snapshot.output.chapters.map((chapter) => Object.freeze({ ...chapter })),
+          persistedOutput.chapters.map((chapter) => Object.freeze({ ...chapter })),
         ),
       }),
     )
@@ -146,20 +149,23 @@ class LiveCatalogRead {
  */
 export class CompletedOutputAuthority {
   private readonly approvals: FallbackApprovalRepository
+  private readonly jobs: JobRepository
   readonly catalogAccess: ApprovalCatalogAccess
 
   constructor(
     approvals: FallbackApprovalRepository,
+    jobs: JobRepository,
     catalogAccess: ApprovalCatalogAccess = approvalCatalogAccessFor(approvals),
   ) {
     this.approvals = approvals
+    this.jobs = jobs
     this.catalogAccess = catalogAccess
   }
 
   /**
    * @param consume Runs while this book's catalog section is held. It must not call this authority
-   * again or mutate approvals for the same book; same-book re-entry throws
-   * `ApprovalCatalogReentryError` rather than waiting behind itself. It may authorize another book.
+   * again or acquire any approval catalog; all nested catalog access throws
+   * `ApprovalCatalogReentryError` before it can wait behind itself or form a cross-book cycle.
    */
   async authorize<T>(
     job: AudiobookJob,
@@ -174,7 +180,7 @@ export class CompletedOutputAuthority {
     // by consumption. If a withdrawal commits after this read returns a stale snapshot but before
     // the critical section is acquired, the final read observes it and no descriptor is opened.
     const preliminary = await this.approvals.readCatalog(bookId)
-    if (LiveCatalogRead.mint(job, preliminary.revision) === undefined) {
+    if (job.catalogRevision !== preliminary.revision) {
       return Object.freeze({
         exposable: false as const,
         denial: 'approval-catalog-moved' as const,
@@ -182,7 +188,8 @@ export class CompletedOutputAuthority {
     }
     return this.catalogAccess.runExclusive(bookId, async () => {
       const { revision } = await this.approvals.readCatalog(bookId)
-      const proof = LiveCatalogRead.mint(job, revision)
+      const persistedOutput = await this.jobs.findCompletedOutput(job.id)
+      const proof = LiveCatalogRead.mint(job, revision, persistedOutput)
       if (proof === undefined) {
         return Object.freeze({
           exposable: false as const,

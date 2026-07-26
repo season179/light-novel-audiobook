@@ -26,6 +26,7 @@ import {
   type DirectedSegment,
   DomainError,
   ExactSourceCoverage,
+  OutputVersion,
   type Segment,
   SourcePassage,
   StableIds,
@@ -310,6 +311,40 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     }
 
     expect(await harness.repo.findJob(job.id)).toBeDefined()
+  })
+
+  it('stores completed output separately from public job state across restart and reopen', async () => {
+    const job = new AudiobookJob('job-separated-output')
+    job.bindCommand(COMMAND_IDENTITY)
+    job.start()
+    job.attachBook(BOOK_ID)
+    job.beginDirection()
+    job.beginRendering(1)
+    job.recordSegmentCompleted('segment-1')
+    job.beginAssembly()
+    const output = {
+      version: new OutputVersion(7),
+      m4bPath: '/workspace/private-v007.m4b',
+      chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/private-v007-ch01.flac' }],
+    }
+    job.complete(output, 11)
+    await harness.repo.saveCompletedJob(job, output)
+
+    const storedJob = await harness.repo.findJob(job.id)
+    expect(storedJob?.state).toBe('completed')
+    expect(Reflect.get(storedJob as object, 'completedOutput')).toBeUndefined()
+    expect(JSON.stringify(storedJob?.snapshot())).not.toContain(output.m4bPath)
+    expect((await harness.repo.findCompletedOutput(job.id))?.m4bPath).toBe(output.m4bPath)
+
+    harness.reopen()
+    const restarted = await harness.repo.findJob(job.id)
+    expect(restarted?.state).toBe('completed')
+    expect((await harness.repo.findCompletedOutput(job.id))?.version.value).toBe(7)
+
+    restarted?.reopenForReview()
+    if (restarted === undefined) throw new Error('completed job disappeared after restart')
+    await harness.repo.saveJob(restarted)
+    expect(await harness.repo.findCompletedOutput(job.id)).toBeUndefined()
   })
 
   it('resumes a restarted job by reusing its previously completed segment audio', async () => {
