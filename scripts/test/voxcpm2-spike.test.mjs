@@ -15,6 +15,7 @@ import {
   parseExactPortListeners,
   parseWav,
   requireVoxCpm2PcmWav,
+  sha256,
   summarizeRequests,
   summarizeResourceCsv,
   validateLifecycleTimeline,
@@ -169,6 +170,19 @@ test('source identity is stable, ordered, and changes with a source hash', () =>
   assert.notEqual(
     deriveSourceIdentity({ config: one, shell: two }),
     deriveSourceIdentity({ config: one, shell: '3'.repeat(64) }),
+  )
+})
+
+test('source identity orders names by code point, not locale (#63)', () => {
+  const hyphen = 'a'.repeat(64)
+  const underscore = 'b'.repeat(64)
+  // 'typing-inspection' (- U+002D) < 'typing_extensions' (_ U+005F) by code point; on this Node
+  // 'typing-inspection'.localeCompare('typing_extensions') === 1, so localeCompare reverses them.
+  // A locale-dependent identity would hash these in the wrong order; assert the code-point order.
+  const expected = sha256(`typing-inspection:${hyphen}\ntyping_extensions:${underscore}\n`)
+  assert.equal(
+    deriveSourceIdentity({ 'typing-inspection': hyphen, typing_extensions: underscore }),
+    expected,
   )
 })
 

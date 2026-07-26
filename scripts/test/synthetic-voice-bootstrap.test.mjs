@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +10,7 @@ import {
   analyzePcm16Wav,
   createManualReview,
   deriveObjectiveReview,
+  directoryTreeHash,
   loadBootstrapLock,
   stableJsonHash,
   validateApprovedVoxIdentity,
@@ -506,4 +509,26 @@ test('latest committed evidence deeply recomputes historical provenance, matrice
     buildMetadataSha256: approval.buildMetadataSha256,
     serverBinarySha256: approval.serverBinarySha256,
   })
+})
+
+test('stableJsonHash orders keys by code point, not locale (#63)', () => {
+  // 'typing-inspection' (- U+002D) < 'typing_extensions' (_ U+005F) by code point; localeCompare
+  // reverses them, changing the canonical JSON and therefore the hash.
+  const value = { 'typing-inspection': 1, typing_extensions: 2 }
+  const expected = sha256(JSON.stringify({ 'typing-inspection': 1, typing_extensions: 2 }))
+  assert.equal(stableJsonHash(value), expected)
+})
+
+test('directoryTreeHash orders paths by code point, not locale (#63)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dth-locale-'))
+  await writeFile(join(dir, 'typing-inspection'), 'aaa')
+  await writeFile(join(dir, 'typing_extensions'), 'bbbbb')
+  // code-point order: typing-inspection (- U+002D) before typing_extensions (_ U+005F)
+  const first = createHash('sha256').update('aaa').digest('hex')
+  const second = createHash('sha256').update('bbbbb').digest('hex')
+  const expected = createHash('sha256')
+    .update(`typing-inspection\u0000${first}\n`)
+    .update(`typing_extensions\u0000${second}\n`)
+    .digest('hex')
+  assert.equal(await directoryTreeHash(dir), expected)
 })
