@@ -25,7 +25,9 @@ function required(name: string): string {
   return value
 }
 
-const action = process.argv[2]
+const positional = process.argv.slice(2)
+if (positional[0] === '--') positional.shift()
+const action = positional[0]
 if (action !== 'list' && action !== 'approve') {
   throw new Error('First argument must be the explicit review action: list or approve')
 }

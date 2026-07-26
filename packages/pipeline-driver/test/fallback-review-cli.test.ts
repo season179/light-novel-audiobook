@@ -197,7 +197,7 @@ describe('fallback review CLI', () => {
     const { root } = await preparedWorkspace('job-process-cli')
     const common = ['--workspace', root, '--job-id', 'job-process-cli']
 
-    const listed = await run(process.execPath, ['--import', 'tsx', CLI, 'list', ...common])
+    const listed = await run(process.execPath, ['--import', 'tsx', CLI, '--', 'list', ...common])
     expect(listed.stdout).toContain('"status":"pending-fallback-review"')
     expect(listed.stdout).toContain(`"sourcePassageId":"${passageId}"`)
     expect(listed.stdout).toContain(`"speakerReason":"${speakerReason}"`)
