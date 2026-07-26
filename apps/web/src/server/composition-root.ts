@@ -37,9 +37,10 @@ import { createWorkspace, type LocalWorkspace } from './workspace.js'
  * every book after it. A factory may still return a long-lived shared instance where the adapter
  * genuinely supports repeated use — see the per-field notes.
  *
- * Issue #21 replaces the fake factories with the real EPUB extractor (#28), Gemma director (#30),
- * Qwen speech engine (#31), FFmpeg assembler (#32), and SQLite job repository (#27). No page,
- * component, server function, or route changes.
+ * Issue #21 wires the real EPUB extractor (#28), Gemma director (#30), Qwen speech engine (#31),
+ * FFmpeg assembler (#32), and SQLite job repository (#27) behind `LNA_WEB_TRANSPORTS=real` (see
+ * `environment-composition.ts`); the fakes below remain the default. No page, component, server
+ * function, or route changes.
  */
 export interface AudiobookAdapterFactories {
   /**
@@ -57,7 +58,12 @@ export interface AudiobookAdapterFactories {
    *
    * Required alongside a custom `createDirectorModel`, because the generation command identity binds
    * it before direction runs while the model must not be constructed until direction actually
-   * happens. `#21` passes `createGemmaDirectorIdentity(settings)`.
+   * happens. `#21` passes `createDirectorContentIdentity(settings)` — the content identity, NOT the
+   * adapter's self-reported `createGemmaDirectorIdentity(settings)`. The raw hash folds in the
+   * baseUrl and the GPU lease lock path, so a port or lock-file move would wedge every resumable
+   * job (issue #54). It would not even run once: `createDirectorModel` is wrapped in the content
+   * identity, and `DirectAudiobook` releases any constructed director whose identity disagrees
+   * with the factory's advertised value, then fails the run. The two must be the same string.
    */
   readonly directorIdentity?: string | undefined
   /** Stateless in practice; a shared instance is fine. */
@@ -78,7 +84,12 @@ export interface AudiobookAdapterFactories {
   readonly approvals?: FallbackApprovalRepository | undefined
   /** Stateless in practice; a shared instance is fine. */
   readonly createAudioAssembler?: (() => AudioAssembler | Promise<AudioAssembler>) | undefined
-  /** Shared for the whole process: this is the persistence boundary, not a per-run resource. */
+  /**
+   * Shared for the whole process: this is the persistence boundary, not a per-run resource.
+   * `#21` supplies `new SqliteJobRepository(layout, db)` on the workspace's `layoutFor(root)`
+   * layout, the same database the pipeline driver writes, so a job from either side is visible
+   * to the other.
+   */
   readonly jobs?: JobRepository | undefined
   readonly voices?: VoiceCast | undefined
   /**
