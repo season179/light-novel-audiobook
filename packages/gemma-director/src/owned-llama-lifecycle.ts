@@ -22,7 +22,7 @@ export interface OwnedLlamaLifecycleOptions {
    *
    * Release reaps the child before it waits, so a startup blocked polling `/health` notices its
    * process is gone within one poll interval; this bound only covers a startup wedged somewhere
-   * release cannot unstick it, such as a hung filesystem write. Expiry is a release failure, never
+   * release cannot unstick it, such as a hung filesystem write. Expiry is a release *failure*, never
    * a quiet success — see `#awaitStartupSettled`.
    */
   readonly startupSettleTimeoutMs?: number
@@ -49,7 +49,12 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise
   })
 }
 
-/** True once `settling` has settled either way, false if the bound expired first. */
+/**
+ * True once `settling` has settled either way, false if the bound expired first. Rejections count as
+ * settled: the rejection belongs to whoever called the operation, not to the code waiting for it to
+ * be over. The timer is cleared but never unref'd, so a wait here cannot be cut short by an
+ * otherwise-idle event loop.
+ */
 async function settledWithin(settling: Promise<unknown>, timeoutMs: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined
   try {
@@ -112,7 +117,24 @@ async function waitForHealth(options: {
   throw new Error('Owned llama-server did not become healthy before the startup deadline')
 }
 
-/** Owns llama.cpp for exactly the span of the director's GPU lease. */
+/**
+ * Owns the llama.cpp process for exactly the span of the director's GPU lease.
+ *
+ * This has to be a real lifecycle, not a recorder. `GemmaDirectorModel` calls `start()` only while it
+ * already holds the exclusive lease and `release()` before the lease is dropped, so implementing those
+ * as process spawn and process reap is what makes VRAM residency inseparable from the lease. A
+ * recording no-op satisfies the *type* while leaving Gemma resident: the lease would then be handed to
+ * Qwen, which loads 16 GB beside a model that never unloaded, and the first real run OOMs.
+ *
+ * `release()` therefore does not return until the process has actually exited and its port is free.
+ * Those are the two externally observable facts a caller can check; neither can be faked by bookkeeping.
+ *
+ * That promise has to hold against a *concurrent* `release()`, not just a sequential one. A start that
+ * has not settled is a start that may still be about to put weights in VRAM: it may be inside the
+ * pre-spawn key-file writes with no child to find yet, one statement away from `spawn`. So release
+ * both waits for startup to settle and permanently prohibits a spawn from that moment on. Checking for
+ * a child once and returning would report the runtime gone while it was still arriving.
+ */
 export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   #child: ChildProcess | undefined
   #childError: Error | undefined
@@ -123,10 +145,12 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
 
   constructor(private readonly options: OwnedLlamaLifecycleOptions) {}
 
+  /** The owned process ID while it exists, so a caller can probe the kernel for it directly. */
   get processId(): number | undefined {
     return this.#child?.pid
   }
 
+  /** True only between a successful spawn and the process actually exiting. */
   get running(): boolean {
     const child = this.#child
     return child !== undefined && !childExited(child)
@@ -145,8 +169,13 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     this.#assertSpawnStillAllowed()
     await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
     await chmod(this.options.keyPath, 0o600)
-    // Read and coerce every caller-controlled spawn operand before the final synchronous check.
-    // Accessors, iterators, and coercions can run caller code, including a re-entrant release().
+    // Every spawn operand is read and coerced to a primitive *before* the final check, so the check and
+    // the spawn are separated by nothing the caller can hook. `OwnedLlamaLifecycleOptions` is an
+    // interface: these properties may legally be accessors, `args` may be any iterable, and a value may
+    // carry a `toString`. Reading them after the check would run caller code inside the one window that
+    // has to be closed — and a `binaryPath` getter that calls `release()` provably spawned a child after
+    // release had begun. The coercions look redundant against the declared types on purpose; the types
+    // are a promise from the caller, and this window is exactly where that promise must not be trusted.
     const binaryPath = String(this.options.binaryPath)
     const args = Array.from(this.options.args, (arg) => String(arg))
     this.#assertSpawnStillAllowed()
@@ -178,16 +207,20 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   }
 
   async #releaseOnce(): Promise<void> {
-    // Set synchronously before the first await; no later spawn may cross the matching assertion.
+    // Assigned before the first await, so it is set synchronously with the `release()` call itself and
+    // no `spawn` can be reached after it. This is the flag `#assertSpawnStillAllowed` reads.
     this.#releasing = true
     try {
-      // Reap first so a startup polling health observes its child gone and settles quickly.
+      // Reap before waiting. A startup polling `/health` sees its child gone within one poll interval
+      // and fails, so awaiting settlement below cannot stall for the whole startup deadline.
       await this.#reapChild()
       await this.#awaitStartupSettled()
-      // Reap again in case startup spawned between the first snapshot and settlement.
+      // Startup has settled and can no longer spawn, so this catches a child created in the window
+      // between the reap above and settlement — the one the old single snapshot of `#child` missed.
       await this.#reapChild()
     } finally {
       this.#child?.removeAllListeners('error')
+      // The per-run secret goes whatever else happened; a surviving 0600 key file is still a leak.
       await rm(this.options.keyPath, { force: true })
     }
     await waitForPortFree(this.options.port, this.options.portFreeTimeoutMs ?? 10_000)
@@ -205,6 +238,14 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     }
   }
 
+  /**
+   * The half of the contract that used to be missing. A failed start counts as settled — its rejection
+   * is the `start()` caller's to handle, and a start that failed is a start that will never spawn.
+   *
+   * The wait is bounded so a genuinely wedged startup cannot turn a co-residency bug into a hang. But
+   * expiry means the runtime's state is *unknown*, so it throws rather than resolving: `cleanupComplete`
+   * stays false and the caller must fail closed instead of handing the GPU on.
+   */
   async #awaitStartupSettled(): Promise<void> {
     const startPromise = this.#startPromise
     if (startPromise === undefined) return
@@ -216,6 +257,7 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   }
 }
 
+/** Filesystem layout of a built brain runtime, matching Gemma's real smoke exactly. */
 export function llamaRuntimePaths(runtimeRoot: string): {
   readonly binaryPath: string
   readonly modelPath: string
@@ -226,6 +268,11 @@ export function llamaRuntimePaths(runtimeRoot: string): {
   }
 }
 
+/**
+ * The pinned server arguments for the selected profile. Every value comes from
+ * `SELECTED_GEMMA_PROFILE` rather than being restated here, so the driver cannot drift from the
+ * profile the director adapter validates against.
+ */
 export function llamaServerArgs(options: {
   readonly modelPath: string
   readonly host: string

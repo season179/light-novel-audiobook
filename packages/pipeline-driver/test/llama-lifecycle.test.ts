@@ -3,9 +3,9 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { OwnedLlamaLifecycle } from '@light-novel-audiobook/gemma-director'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
-import { OwnedLlamaLifecycle } from '../src/llama-lifecycle.js'
 
 const STUB = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

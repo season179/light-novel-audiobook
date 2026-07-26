@@ -5,6 +5,9 @@ import path from 'node:path'
 import {
   type DirectorRuntimeLifecycle,
   GemmaDirectorEndpoint,
+  llamaRuntimePaths,
+  llamaServerArgs,
+  OwnedLlamaLifecycle,
 } from '@light-novel-audiobook/gemma-director'
 import {
   type ExclusiveGpuLeaseCoordinator,
@@ -12,7 +15,6 @@ import {
   type GpuLease,
   type GpuOwner,
 } from '@light-novel-audiobook/gpu-lease'
-import { llamaRuntimePaths, llamaServerArgs, OwnedLlamaLifecycle } from './llama-lifecycle.js'
 
 /**
  * Everything about a run that is a *transport* rather than an adapter: where the director's HTTP
