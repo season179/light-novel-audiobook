@@ -963,11 +963,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     // brain-port move or lock-file move between crash and resume must not wedge the job.
     const voices = makeCast()
     const contentIdentity = 'gemma-content:model-1:prompt-1:schema-1:settings-1'
-    const wrapped = (adapterIdentity: string): FakeDirector => {
+    const wrapped = (adapterIdentity: string): DirectorModel & { inner: FakeDirector } => {
       const inner = new FakeDirector(app.events, false, adapterIdentity)
-      const model = withDirectorContentIdentity(inner, contentIdentity)
-      // Keep the test's call counting on the wrapper's inner adapter.
-      return Object.assign(model, { inner }) as unknown as FakeDirector
+      return Object.assign(withDirectorContentIdentity(inner, contentIdentity), { inner })
     }
     const makeUseCase = (directorModel: DirectorModel): GenerateAudiobook =>
       new GenerateAudiobook({
@@ -985,12 +983,16 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices,
+      directorOptions: { timeoutMs: 42_000 },
     }
-    const firstUseCase = makeUseCase(
-      wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock'),
-    )
+    const firstDirector = wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock')
+    const firstUseCase = makeUseCase(firstDirector)
     // The review gate stops the first attempt; the human decision lets the run reach rendering.
     await expect(firstUseCase.execute(command)).rejects.toThrow(PendingFallbackReviewError)
+    expect(firstDirector.inner.receivedOptions).toHaveLength(2)
+    expect(firstDirector.inner.receivedOptions.every((item) => item?.timeoutMs === 42_000)).toBe(
+      true,
+    )
     await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
     await expect(firstUseCase.execute(command)).rejects.toThrow('synthetic speech failure')
 
@@ -1027,6 +1029,11 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const directCalls = app.events.filter((event) => event.startsWith('direct:')).length
     const extractCalls = app.extractor.calls.length
     const directorBuilds = app.directorFactory.created.length
+    expect({ directCalls, extractCalls, directorBuilds }).toEqual({
+      directCalls: 2,
+      extractCalls: 1,
+      directorBuilds: 1,
+    })
 
     const resumed = await generate(app, command)
 
@@ -1037,9 +1044,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     // extractions — and the terminal, GPU-owning adapter is not even constructed, because
     // direction's output is hashed into every segment's content address and re-running it would
     // restale audio the ledger already holds (llama.cpp is not bit-deterministic run to run).
-    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(directCalls)
-    expect(app.extractor.calls).toHaveLength(extractCalls)
-    expect(app.directorFactory.created).toHaveLength(directorBuilds)
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(2)
+    expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(1)
   })
 
   // Issue #54 item 1, mid-direction axis: a crash while directing chapter 2 of 2 must resume by
@@ -1066,6 +1073,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       app.events.filter((event) => event === `direct:${StableIds.chapter(bookId, 1)}`),
     ).toHaveLength(1)
     expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(2)
   })
 
   // Issue #54 item 1 meets the review gate: the resumed direction must still STOP at
