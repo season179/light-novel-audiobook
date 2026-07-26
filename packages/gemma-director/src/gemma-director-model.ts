@@ -619,22 +619,27 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     }
 
     // Only fallback-bearing warnings drop the speaker; review-only warnings keep the voice.
-    const warningRanges = new Set(
+    const fallbackWarningByRange = new Map<string, DirectorWarning>(
       warnings
         .filter((warning) => warning.usesFallback)
         .map(
           (warning) =>
-            `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+            [
+              `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+              warning,
+            ] as const,
         ),
     )
     const segments = annotations.map((annotation): DomainDirectedSegment => {
       const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
       const useNarrator = annotation.kind === 'narration' || annotation.kind === 'sound_cue'
+      const fallbackWarning = fallbackWarningByRange.get(rangeKey)
       return Object.freeze({
         sourcePassageId: annotation.sourcePassageId,
         sourceText: annotation.sourceText,
         kind: annotation.kind,
-        speakerId: useNarrator || warningRanges.has(rangeKey) ? null : annotation.speakerId,
+        speakerId: useNarrator || fallbackWarning !== undefined ? null : annotation.speakerId,
+        speakerReason: fallbackWarning?.message ?? null,
         confidence: annotation.confidence,
         delivery: annotation.delivery,
       })

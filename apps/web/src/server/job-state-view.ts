@@ -155,7 +155,7 @@ export const buildJobStateView = (
       speakerId: warning.speakerId,
       voiceProfileId: warning.voiceProfileId,
       reason: warning.reason,
-      message: FALLBACK_REASON_MESSAGES[warning.reason],
+      message: warning.speakerReason ?? FALLBACK_REASON_MESSAGES[warning.reason],
     })),
     output,
   }

@@ -17,6 +17,8 @@ export interface DirectedSegment {
   readonly sourceText: string
   readonly kind: SegmentKind
   readonly speakerId: string | null
+  /** Director explanation for an unresolved speaker; null/absent otherwise. */
+  readonly speakerReason?: string | null
   readonly confidence: number
   readonly delivery: DeliveryDirection
 }
@@ -43,6 +45,7 @@ export class Segment {
   readonly sourceText: string
   readonly kind: SegmentKind
   readonly speakerId: string | null
+  readonly speakerReason: string | null
   readonly confidence: number
   readonly delivery: DeliveryDirection
   private assignment: VoiceAssignment | null = null
@@ -66,6 +69,13 @@ export class Segment {
     }
     if (props.speakerId !== null && props.speakerId.length === 0) {
       throw new DomainError('Speaker ID cannot be empty')
+    }
+    if (
+      props.speakerReason !== undefined &&
+      props.speakerReason !== null &&
+      (props.speakerReason.trim().length === 0 || props.speakerReason.length > 240)
+    ) {
+      throw new DomainError('Speaker reason must be nonempty and at most 240 characters')
     }
     if (!Number.isFinite(props.confidence) || props.confidence < 0 || props.confidence > 1) {
       throw new DomainError('Segment confidence must be between zero and one')
@@ -94,6 +104,7 @@ export class Segment {
     this.sourceText = props.sourceText
     this.kind = props.kind
     this.speakerId = props.speakerId
+    this.speakerReason = props.speakerReason ?? null
     this.confidence = props.confidence
     this.delivery = Object.freeze({ ...props.delivery })
   }

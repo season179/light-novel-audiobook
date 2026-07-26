@@ -73,7 +73,12 @@ describe('request-specific speaker role schema', () => {
     expect(validated.annotations[0]?.speakerId).toBe('fallback-role')
     expect('unresolvedSpeaker' in (validated.annotations[0] ?? {})).toBe(false)
     expect(validated.warnings).toMatchObject([
-      { code: 'unresolved_speaker', usesFallback: true, candidateSpeakerId: null },
+      {
+        code: 'unresolved_speaker',
+        usesFallback: true,
+        candidateSpeakerId: null,
+        message: 'No eligible character is present in the supplied roster.',
+      },
     ])
   })
 

@@ -214,6 +214,11 @@ export class DirectAudiobook {
               speakerId: segment.speakerId,
               voiceProfileId: resolved.profile.id,
               reason: resolved.assignment.fallbackReason,
+              speakerReason:
+                segment.speakerReason ??
+                (resolved.assignment.fallbackReason === 'unresolved_speaker'
+                  ? 'The director could not resolve a speaker from the supplied roster and context.'
+                  : `Speaker ${segment.speakerId ?? 'unknown'} has no approved cast voice.`),
             })
           }
         }

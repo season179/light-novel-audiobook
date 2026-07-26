@@ -163,6 +163,8 @@ export interface PendingFallbackApproval {
   readonly chapterTitle: string
   readonly speakerId: string | null
   readonly fallbackReason: FallbackReason
+  /** Why the director/cast could not assign a normal character voice. */
+  readonly speakerReason: string
   readonly proposedVoiceProfileId: string
   /**
    * Story text. Nobody can approve a voice for a line they cannot read, so the review read model
