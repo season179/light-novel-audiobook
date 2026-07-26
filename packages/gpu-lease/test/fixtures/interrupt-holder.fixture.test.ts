@@ -1,12 +1,14 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, expect, it } from 'vitest'
 import { FileGpuLeaseCoordinator } from '../../src/index.js'
-import { reapOrphanedHolders, registerHolder } from '../fixture-reaper.js'
+import { loadRegistry, reapOrphanedHolders } from '../fixture-reaper.js'
+import { hostileCoordinator } from '../hostile-coordinator.js'
 
 const phase = process.env.LNA_REAPER_PROBE_PHASE
-const markerPath = process.env.LNA_REAPER_PROBE_MARKER
+const probeDir = process.env.LNA_REAPER_PROBE_DIR
+const nonce = process.env.LNA_REAPER_PROBE_NONCE
 
 beforeAll(async () => {
   await reapOrphanedHolders()
@@ -15,48 +17,65 @@ beforeAll(async () => {
 it.skipIf(phase !== 'hold')(
   'holds a registered hostile flock subtree until worker SIGINT',
   async () => {
-    if (markerPath === undefined) throw new Error('probe marker path is required')
-    const nonce = `${process.pid}-${crypto.randomUUID()}`
+    if (probeDir === undefined || nonce === undefined) {
+      throw new Error('probe directory and nonce are required')
+    }
     const root = join(tmpdir(), `gpu-lease-interrupt-holder-${nonce}`)
     const scriptsRoot = join(tmpdir(), `gpu-lease-interrupt-scripts-${nonce}`)
-    const { mkdir } = await import('node:fs/promises')
-    await Promise.all([mkdir(root, { recursive: true }), mkdir(scriptsRoot, { recursive: true })])
-    const nested = join(scriptsRoot, 'holder.cjs')
-    await writeFile(
-      nested,
-      [
-        "process.stdout.write(process.argv[2] + '\\n')",
-        'process.stdin.resume()',
-        "process.on('SIGTERM', () => {})",
-        "process.on('SIGHUP', () => {})",
-        'setInterval(() => {}, 1_000)',
-        '',
-      ].join('\n'),
-      { mode: 0o600 },
-    )
-    const flockExecutable = join(scriptsRoot, 'wedged-flock')
-    await writeFile(
-      flockExecutable,
-      [
-        '#!/bin/sh',
-        `exec flock --exclusive --nonblock --conflict-exit-code 75 "$5" "$6" '${nested}' "$9"`,
-        '',
-      ].join('\n'),
-      { mode: 0o700 },
-    )
+    await Promise.all([
+      mkdir(root, { recursive: true }),
+      mkdir(scriptsRoot, { recursive: true }),
+      mkdir(probeDir, { recursive: true }),
+    ])
+    const startedPath = join(probeDir, 'started.json')
+    const registeredPath = join(probeDir, 'registered.json')
+    const violationPath = join(probeDir, 'ordering-violation.json')
+    const gatePath = join(probeDir, 'token-gate')
 
+    // The token gate keeps the handshake - and therefore `acquire()` - in flight until the outer
+    // test has seen registration begin, so the interrupt lands at a point only in-acquisition
+    // registration can survive.
     let holderPgid: number | undefined
+    let registeredAt: number | undefined
     const lockFilePath = join(root, 'exclusive.lock')
-    await new FileGpuLeaseCoordinator({
+    const coordinator = await hostileCoordinator({
       lockFilePath,
-      flockExecutable,
-      inspectExistingComputeProcesses: false,
-      onHolderStarted: async (pgid) => {
+      scriptsRoot,
+      gatePath,
+      beforeRegister: async (pgid) => {
         holderPgid = pgid
-        await registerHolder(pgid, root)
+        await writeFile(startedPath, JSON.stringify({ workerPid: process.pid }), 'utf8')
       },
-    }).acquire('gemma')
+      afterRegister: async (pgid) => {
+        registeredAt = performance.now()
+        const registered = (await loadRegistry()).some((entry) => entry.holderPgid === pgid)
+        await writeFile(
+          registeredPath,
+          JSON.stringify({
+            workerPid: process.pid,
+            holderPgid: pgid,
+            root,
+            scriptsRoot,
+            registered,
+            registeredAt,
+          }),
+          'utf8',
+        )
+      },
+    })
+    await coordinator.acquire('gemma')
     if (holderPgid === undefined) throw new Error('holder was not registered')
+    if (registeredAt === undefined) {
+      // `acquire()` returned while registration was still in flight (or never ran): the exact
+      // ordering defect #67 pins. Publish the violation so the outer test fails on the real
+      // cause rather than on a missing marker.
+      await writeFile(
+        violationPath,
+        JSON.stringify({ reason: 'acquire returned before holder registration completed' }),
+        'utf8',
+      )
+      throw new Error('acquire returned before holder registration completed')
+    }
 
     await expect(
       new FileGpuLeaseCoordinator({
@@ -64,11 +83,6 @@ it.skipIf(phase !== 'hold')(
         inspectExistingComputeProcesses: false,
       }).acquire('qwen3-tts'),
     ).rejects.toMatchObject({ code: 'busy' })
-    await writeFile(
-      markerPath,
-      JSON.stringify({ workerPid: process.pid, holderPgid, root, scriptsRoot }),
-      'utf8',
-    )
     await new Promise<void>(() => undefined)
   },
 )

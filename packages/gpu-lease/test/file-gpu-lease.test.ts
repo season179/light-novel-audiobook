@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { FileGpuLeaseCoordinator, type GpuLease } from '../src/index.js'
 import { clearOwnEntries, reapOrphanedHolders, registerHolder } from './fixture-reaper.js'
+import { hostileCoordinator } from './hostile-coordinator.js'
 
 const roots: string[] = []
 const children: ChildProcess[] = []
@@ -97,39 +98,6 @@ async function fakeStubbornFlock(root: string, body: string): Promise<string> {
     {
       mode: 0o700,
     },
-  )
-  return path
-}
-
-/**
- * Reproduces the real two-process subtree - `flock` holding the descriptor open for a nested Node
- * process - but with a nested holder that ignores stdin EOF and SIGTERM. Only a process-group
- * SIGKILL can end this holder, which is exactly the wedged holder the release path must bound.
- */
-async function wedgedHolderFlock(root: string): Promise<string> {
-  const holder = join(root, 'wedged-holder.cjs')
-  await writeFile(
-    holder,
-    [
-      "process.stdout.write(process.argv[2] + '\\n')",
-      'process.stdin.resume()',
-      "process.on('SIGTERM', () => {})",
-      "process.on('SIGHUP', () => {})",
-      'setInterval(() => {}, 1_000)',
-      '',
-    ].join('\n'),
-    { mode: 0o600 },
-  )
-  const path = join(root, 'wedged-flock')
-  await writeFile(
-    path,
-    [
-      '#!/bin/sh',
-      '# $5 is the lock file, $6 the node executable, $9 the handshake token.',
-      `exec flock --exclusive --nonblock --conflict-exit-code 75 "$5" "$6" '${holder}' "$9"`,
-      '',
-    ].join('\n'),
-    { mode: 0o700 },
   )
   return path
 }
@@ -348,9 +316,20 @@ afterEach(async () => {
 // Reap orphans left by a previous run that was interrupted by SIGINT (Ctrl-C). afterEach never
 // runs on SIGINT, so the deliberately-unkillable fixture holders survive as orphans. The durable
 // registry proves ownership via PID + start time (PIDs recycle), so concurrent live runs are
-// never touched. This runs once before the suite.
+// never touched. This runs once before the suite, and its outcome is surfaced by the test
+// below: a reaper failure must never be swallowed silently, because this mechanism is what
+// prevents leaks for exactly this issue.
+let startupReap: { readonly reaped: number } | { readonly error: unknown } | undefined
 beforeAll(async () => {
-  await reapOrphanedHolders().catch(() => undefined)
+  startupReap = await reapOrphanedHolders().then(
+    (reaped) => ({ reaped }),
+    (error: unknown) => ({ error }),
+  )
+})
+
+it('startup reaping of orphaned holders surfaced no failure (#67)', () => {
+  expect(startupReap, 'beforeAll must record the startup reap outcome').not.toBeUndefined()
+  if (startupReap !== undefined && 'error' in startupReap) throw startupReap.error
 })
 
 describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name', ({ base }) => {
@@ -407,13 +386,11 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
     const scripts = await makeRoot('gpu-flock-wedged-scripts')
     const root = await makeRoot('gpu-flock-wedged', base)
     const path = join(root, 'exclusive.lock')
-    const lease = await new FileGpuLeaseCoordinator({
+    const lease = await (await hostileCoordinator({
       lockFilePath: path,
-      flockExecutable: await wedgedHolderFlock(scripts),
-      inspectExistingComputeProcesses: false,
-      onHolderStarted: trackHolder(path),
+      scriptsRoot: scripts,
       releaseGraceMs: RELEASE_GRACE_MS,
-    }).acquire('gemma')
+    })).acquire('gemma')
     const directPid = await directHolderPid(path)
     // The wedged nested holder really owns the kernel lock, not just the pipe.
     await expect(coordinator(path).acquire('qwen3-tts')).rejects.toMatchObject({ code: 'busy' })
@@ -436,13 +413,11 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       const scripts = await makeRoot('gpu-flock-orphan-scripts')
       const root = await makeRoot('gpu-flock-orphan', base)
       const path = join(root, 'exclusive.lock')
-      const lease = await new FileGpuLeaseCoordinator({
+      const lease = await (await hostileCoordinator({
         lockFilePath: path,
-        flockExecutable: await wedgedHolderFlock(scripts),
-        inspectExistingComputeProcesses: false,
-        onHolderStarted: trackHolder(path),
+        scriptsRoot: scripts,
         releaseGraceMs: RELEASE_GRACE_MS,
-      }).acquire('gemma')
+      })).acquire('gemma')
 
       // The worst case from the issue: no direct child left to signal, and the descendant that
       // holds the descriptor ignores every EOF.
@@ -730,13 +705,11 @@ it('release deadline is monotonic: a backward-jumping wall clock does not extend
   const scripts = await makeRoot('gpu-flock-monotonic-scripts')
   const root = await makeRoot('gpu-flock-monotonic')
   const path = join(root, 'exclusive.lock')
-  const lease = await new FileGpuLeaseCoordinator({
+  const lease = await (await hostileCoordinator({
     lockFilePath: path,
-    flockExecutable: await wedgedHolderFlock(scripts),
-    inspectExistingComputeProcesses: false,
+    scriptsRoot: scripts,
     releaseGraceMs: RELEASE_GRACE_MS,
-    onHolderStarted: trackHolder(path),
-  }).acquire('gemma')
+  })).acquire('gemma')
   const directPid = await directHolderPid(path) // also records the group for afterEach
   process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
   expect(processGroupAlive(directPid)).toBe(true)
