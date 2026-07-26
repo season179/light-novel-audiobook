@@ -46,6 +46,7 @@ export {
   repairMechanicalSourceEcho,
 } from './fidelity-recovery.js'
 export {
+  type DirectorRequestReceipt,
   GemmaDirectorModel,
   type GemmaDirectorModelOptions,
 } from './gemma-director-model.js'

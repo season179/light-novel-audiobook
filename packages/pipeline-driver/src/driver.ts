@@ -12,6 +12,7 @@ import { DomainEpubExtractor } from '@light-novel-audiobook/epub-ingestion'
 import {
   createGemmaDirectorContentIdentity,
   type DirectorProgressEvent,
+  type DirectorRequestReceipt,
   GemmaDirectorModel,
 } from '@light-novel-audiobook/gemma-director'
 import {
@@ -43,6 +44,10 @@ export interface RunPipelineOptions {
   readonly ffmpegDirectory?: string
   /** Direction progress, which #21 needs to surface and a run needs in order to be diagnosable. */
   readonly onDirectorProgress?: (event: DirectorProgressEvent) => void
+  /** Content-free HTTP receipts for local provenance evidence; never receives model prose. */
+  readonly onDirectorRequestReceipt?:
+    | ((receipt: DirectorRequestReceipt) => void | Promise<void>)
+    | undefined
   /**
    * Fake-only roster override for review-gate acceptance. It lets the fake director name a speaker
    * deliberately absent from the render cast, producing a real `missing_speaker_voice` decision.
@@ -184,6 +189,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
                 options.onDirectorProgress?.(event)
               },
             },
+            onRequestReceipt: options.onDirectorRequestReceipt,
             lifecycle: runtime.lifecycle,
             gpuLeaseCoordinator: transports.gpu.coordinator,
             gpuLeaseLockFilePath: transports.gpu.lockFilePath,

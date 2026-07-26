@@ -64,6 +64,21 @@ import {
   validateDirectionOutput,
 } from './validation.js'
 
+/** Content-free proof that one HTTP direction request reached a model endpoint and settled. */
+export interface DirectorRequestReceipt {
+  readonly schema: 'gemma-director-request-receipt@1'
+  readonly ordinal: number
+  readonly requestId: string
+  readonly requestSha256: string
+  readonly passageIds: readonly string[]
+  readonly passageCount: number
+  readonly responseStatus: number
+  readonly responseCompleted: boolean
+  /** Linux monotonic clock values, comparable to `/proc` and flock observations in another process. */
+  readonly startedAtMonotonicNs: string
+  readonly completedAtMonotonicNs: string
+}
+
 export interface GemmaDirectorModelOptions {
   readonly baseUrl?: string
   /** Server-side credential. Never expose this adapter or key to browser code. */
@@ -80,6 +95,13 @@ export interface GemmaDirectorModelOptions {
   /** Must be the same stable file used by Qwen3-TTS (normally .../gpu/exclusive.lock). */
   readonly gpuLeaseLockFilePath: string
   readonly fetch?: typeof globalThis.fetch
+  /**
+   * Optional content-free provenance sink. It receives identifiers, hashes, counts, status, and
+   * monotonic timing only—never prompts, messages, source text, or response bodies.
+   */
+  readonly onRequestReceipt?:
+    | ((receipt: DirectorRequestReceipt) => void | Promise<void>)
+    | undefined
   /**
    * Per-request timeout for each underlying window request, in milliseconds. Defaults to 15
    * minutes. This bounds a single model call; the whole-chapter deadline is the `timeoutMs`
@@ -172,6 +194,9 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private readonly gpuLeaseCoordinator: ExclusiveGpuLeaseCoordinator
   private readonly gpuLeaseLockFilePath: string
   private readonly fetchImplementation: typeof globalThis.fetch
+  private readonly onRequestReceipt:
+    | ((receipt: DirectorRequestReceipt) => void | Promise<void>)
+    | undefined
   private readonly chunking: DirectionChunkingSettings
   private readonly requestTimeoutMs: number
   private readonly shutdownController = new AbortController()
@@ -181,6 +206,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   private runtimeReady: Promise<void> | undefined
   private releasePromise: Promise<void> | undefined
   private released = false
+  private requestOrdinal = 0
 
   constructor(options: GemmaDirectorModelOptions) {
     this.endpoint = new GemmaDirectorEndpoint(options.baseUrl)
@@ -205,6 +231,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       throw new Error('Gemma Director GPU lease lock file path is required')
     }
     this.fetchImplementation = options.fetch ?? globalThis.fetch
+    this.onRequestReceipt = options.onRequestReceipt
     if (
       options.requestTimeoutMs !== undefined &&
       (!Number.isSafeInteger(options.requestTimeoutMs) || options.requestTimeoutMs < 1)
@@ -874,6 +901,11 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       parameters,
       request: requestPayload,
     })
+    this.requestOrdinal += 1
+    const ordinal = this.requestOrdinal
+    const startedAtMonotonicNs = process.hrtime.bigint().toString()
+    let responseStatus: number | undefined
+    let responseCompleted = false
     const emitWindow = (
       state: DirectorRunState,
       windowCompletedPassages: number,
@@ -897,13 +929,21 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     )
     try {
       await emitWindow('requesting', 0, 'Waiting for the local Gemma director')
+      const receiptFetch: typeof globalThis.fetch = async (input, init) => {
+        const response = await this.fetchImplementation(input, init)
+        const requestUrl = input instanceof Request ? input.url : String(input)
+        if (new URL(requestUrl).pathname.endsWith('/chat/completions')) {
+          responseStatus = response.status
+        }
+        return response
+      }
       const adapter = openaiCompatibleText(this.modelIdentity.modelId, {
         name: 'llama.cpp-gemma-director',
         baseURL: this.endpoint.baseUrl,
         apiKey: this.apiKey,
         maxRetries: 0,
         defaultHeaders: { connection: 'close' },
-        fetch: this.fetchImplementation,
+        fetch: receiptFetch,
       })
       const outputSchema = directionWireOutputSchemaFor(request)
       const stream = chat({
@@ -975,6 +1015,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       if (output === undefined) {
         throw new DirectorError('malformed_output', 'Gemma Director response did not complete')
       }
+      responseCompleted = true
 
       await emitWindow(
         'validating',
@@ -1013,7 +1054,26 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         operation: 'Gemma Director direction request',
       })
     } finally {
-      control.dispose()
+      try {
+        if (responseStatus !== undefined) {
+          await this.onRequestReceipt?.(
+            Object.freeze({
+              schema: 'gemma-director-request-receipt@1',
+              ordinal,
+              requestId: request.requestId,
+              requestSha256,
+              passageIds: Object.freeze(request.passages.map((passage) => passage.id)),
+              passageCount: request.passages.length,
+              responseStatus,
+              responseCompleted,
+              startedAtMonotonicNs,
+              completedAtMonotonicNs: process.hrtime.bigint().toString(),
+            }),
+          )
+        }
+      } finally {
+        control.dispose()
+      }
     }
   }
 

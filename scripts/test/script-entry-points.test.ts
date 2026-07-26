@@ -20,7 +20,12 @@ import { describe, expect, it } from 'vitest'
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 /** Scripts that parse arguments before doing any work, so a bad flag is a safe probe. */
-const SCRIPTS = ['proof-m1.mjs', 'listening-run.mjs', 'proof-real-slice.mjs'] as const
+const SCRIPTS = [
+  'proof-m1.mjs',
+  'listening-run.mjs',
+  'proof-real-slice.mjs',
+  'proof-gemma-provenance.mjs',
+] as const
 
 const runWithBadFlag = (script: string) =>
   new Promise<{ code: number | null; output: string }>((resolve, reject) => {
