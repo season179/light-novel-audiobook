@@ -18,6 +18,12 @@ while (true) {
 
 await registry.registerHolder(process.pid, `/tmp/gpu-lease-registry-writer-${process.pid}`)
 process.stdout.write('registered\n')
-await new Promise((resolve) => process.once('SIGUSR1', resolve))
+await new Promise((resolve) => {
+  const keepAlive = setInterval(() => {}, 1_000)
+  process.once('SIGUSR1', () => {
+    clearInterval(keepAlive)
+    resolve()
+  })
+})
 await registry.clearOwnEntries()
 process.stdout.write('cleared\n')

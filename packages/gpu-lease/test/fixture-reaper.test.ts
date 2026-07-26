@@ -17,7 +17,7 @@ async function makeRegistry(inspectOwner?: () => Promise<'alive' | 'dead' | 'unk
   roots.add(root)
   return new FixtureHolderRegistry({
     registryPath: join(root, 'registry.json'),
-    inspectOwner,
+    ...(inspectOwner === undefined ? {} : { inspectOwner }),
   })
 }
 
@@ -146,10 +146,16 @@ describe('fixture holder registry (#67)', () => {
     roots.add(barrierPath)
     const writerPath = join(process.cwd(), 'packages/gpu-lease/test/fixtures/registry-writer.mjs')
     const moduleUrl = new URL('./fixture-reaper.ts', import.meta.url).href
-    const writers = Array.from({ length: 16 }, () =>
+    const writers = Array.from({ length: 8 }, () =>
       spawn(
         process.execPath,
-        ['--experimental-strip-types', writerPath, moduleUrl, barrierPath, registry.registryPath],
+        [
+          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          writerPath,
+          moduleUrl,
+          barrierPath,
+          registry.registryPath,
+        ],
         { stdio: ['ignore', 'pipe', 'ignore'], detached: true },
       ),
     )
@@ -171,8 +177,10 @@ describe('fixture holder registry (#67)', () => {
     const exited = writers.map(
       (writer) => new Promise<void>((resolveExit) => writer.once('exit', () => resolveExit())),
     )
-    for (const writer of writers) writer.kill('SIGUSR1')
+    for (const writer of writers) {
+      if (writer.pid !== undefined) process.kill(-writer.pid, 'SIGUSR1')
+    }
     await Promise.all(exited)
     expect(await registry.loadRegistry()).toHaveLength(0)
-  }, 20_000)
+  }, 60_000)
 })

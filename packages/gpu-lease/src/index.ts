@@ -19,6 +19,8 @@ const MAX_PROCESS_ANCESTRY_DEPTH = 64
 const HOLDER_GROUP_POLL_MS = 20
 /** Bounded wait for `flock`'s own diagnostics once it has exited, so failures stay explainable. */
 const HOLDER_STDERR_FLUSH_MS = 200
+/** Detached spawn must establish its process group before an observer records that group. */
+const HOLDER_GROUP_START_MS = 1_000
 
 const delay = async (ms: number): Promise<void> =>
   await new Promise<void>((resolveDelay) => {
@@ -70,6 +72,12 @@ export interface FileGpuLeaseCoordinatorConfig {
    */
   readonly residentGpuMemoryThresholdMiB?: number
   readonly releaseGraceMs?: number
+  /**
+   * Lifecycle observer invoked after the detached holder process group exists and before acquisition
+   * can settle. A rejected observer stops the holder and fails acquisition. Test infrastructure uses
+   * this to durably register deliberately hostile fixture groups before an interruptible test runs.
+   */
+  readonly onHolderStarted?: (holderPgid: number) => Promise<void>
 }
 
 interface HolderExit {
@@ -166,6 +174,7 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly #inspectExistingComputeProcesses: boolean
   readonly #residentGpuMemoryThresholdMiB: number
   readonly #releaseGraceMs: number
+  readonly #onHolderStarted: ((holderPgid: number) => Promise<void>) | undefined
 
   constructor(config: FileGpuLeaseCoordinatorConfig) {
     if (config.lockFilePath.length === 0)
@@ -178,6 +187,7 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     this.#residentGpuMemoryThresholdMiB =
       config.residentGpuMemoryThresholdMiB ?? DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB
     this.#releaseGraceMs = config.releaseGraceMs ?? 5_000
+    this.#onHolderStarted = config.onHolderStarted
     if (
       !Number.isSafeInteger(this.#residentGpuMemoryThresholdMiB) ||
       this.#residentGpuMemoryThresholdMiB < 1
@@ -249,6 +259,10 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
+      if (this.#onHolderStarted !== undefined) {
+        const holderPgid = await this.#waitForHolderProcessGroup(child)
+        if (holderPgid !== undefined) await this.#onHolderStarted(holderPgid)
+      }
       const handshake = await this.#waitForToken(child, exit, token)
       if (handshake === 'unusable') {
         throw new GpuLeaseError(
@@ -360,6 +374,29 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
       })
     } finally {
       await marker?.close()
+    }
+  }
+
+  async #waitForHolderProcessGroup(
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<number | undefined> {
+    const pid = child.pid
+    if (!isSignallableProcessId(pid)) {
+      throw new GpuLeaseError('unavailable', 'GPU lease holder did not expose a safe process group')
+    }
+    const deadline = performance.now() + HOLDER_GROUP_START_MS
+    for (;;) {
+      try {
+        process.kill(-pid, 0)
+        return pid
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return pid
+      }
+      if (child.exitCode !== null) return undefined
+      if (performance.now() >= deadline) {
+        throw new GpuLeaseError('unavailable', 'GPU lease holder process group did not start')
+      }
+      await delay(1)
     }
   }
 
