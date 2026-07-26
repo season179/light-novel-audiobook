@@ -156,10 +156,18 @@ describe('cast proposal and human approval', () => {
     const repository = new InMemoryCastApprovals()
     const review = new ReviewCastApprovals({
       approvals: repository,
-      allowedMaterialProfileIds: ['material-bright', 'material-low'],
+      allowedMaterialProfileIds: [
+        'material-bright',
+        'material-low',
+        'material-quiet',
+        'material-soft',
+      ],
     })
     // A proposal that names the same speaker twice would render as one voice in `VoiceCast` only after
     // every later run for this EPUB throws; approval must reject it before it is written to the ledger.
+    // The duplicate sits in the MIDDLE of the four sorted assignments, not at either end: with only
+    // two assignments (or a duplicate at an end) a `first === last` or `first-two` narrowing still
+    // throws, so the whole roster is needed to force a full set-based uniqueness check.
     const duplicateSpeakerProposal: CastProposal = {
       bookId: 'book-abc123',
       epubSha256: 'a'.repeat(64),
@@ -171,9 +179,21 @@ describe('cast proposal and human approval', () => {
           sharingGroupId: null,
         },
         {
-          speakerId: 'speaker-amber',
-          aliases: ['Captain Amber'],
+          speakerId: 'speaker-basil',
+          aliases: ['Basil'],
           materialProfileId: 'material-low',
+          sharingGroupId: null,
+        },
+        {
+          speakerId: 'speaker-basil',
+          aliases: ['Captain Basil'],
+          materialProfileId: 'material-quiet',
+          sharingGroupId: null,
+        },
+        {
+          speakerId: 'speaker-coral',
+          aliases: ['Coral'],
+          materialProfileId: 'material-soft',
           sharingGroupId: null,
         },
       ],
