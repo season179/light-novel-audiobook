@@ -121,6 +121,15 @@ describe('awaiting-review job lifecycle (issue #45)', () => {
     expect(job.stage).toBe('rendering')
   })
 
+  it('has no raw completed-output getter and requires an explicit catalog revision', () => {
+    const job = completedJob()
+
+    expect(Object.getOwnPropertyDescriptor(AudiobookJob.prototype, 'output')).toBeUndefined()
+    expect('output' in job).toBe(false)
+    expect(job.completedOutputAtCatalogRevision(1)).toBeNull()
+    expect(job.completedOutputAtCatalogRevision(0)?.m4bPath).toBe('/workspace/story-v001.m4b')
+  })
+
   it('only reopens a completed job', () => {
     const job = directedJob()
     expect(() => job.reopenForReview()).toThrow(InvalidStateTransitionError)
