@@ -47,12 +47,6 @@ export {
   gemmaDirectorIdentityMaterial,
 } from './identity.js'
 export {
-  llamaRuntimePaths,
-  llamaServerArgs,
-  OwnedLlamaLifecycle,
-  type OwnedLlamaLifecycleOptions,
-} from './owned-llama-lifecycle.js'
-export {
   DIRECTOR_SEGMENT_KINDS,
   type DirectedAnnotation,
   type DirectionOptions,

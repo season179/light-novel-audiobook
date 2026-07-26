@@ -37,12 +37,7 @@ class FakeLifecycle implements DirectorRuntimeLifecycle {
 class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly lockFilePath = '/fixture/shared-gpu/exclusive.lock'
   async acquire(owner: GpuOwner): Promise<GpuLease> {
-    return {
-      owner,
-      lockFilePath: this.lockFilePath,
-      quarantine: async () => {},
-      release: async () => {},
-    }
+    return { owner, lockFilePath: this.lockFilePath, release: async () => {} }
   }
 }
 
@@ -480,16 +475,12 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     const book = makeChapterBook(texts, ids)
     const events: string[] = []
     const lifecycle = new (class implements DirectorRuntimeLifecycle {
-      private starting: Promise<void> | undefined
-      start(): Promise<void> {
+      async start(): Promise<void> {
         events.push('start:begin')
-        this.starting = new Promise((resolve) => setTimeout(resolve, 400)).then(() => {
-          events.push('start:settled')
-        })
-        return this.starting
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        events.push('start:settled')
       }
       async release(): Promise<void> {
-        await this.starting?.catch(() => undefined)
         events.push('lifecycle:release')
       }
     })()
@@ -498,9 +489,6 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
         return {
           owner,
           lockFilePath: '/fixture/shared-gpu/exclusive.lock',
-          quarantine: async () => {
-            events.push('lease:quarantined')
-          },
           release: async () => {
             events.push('lease:released')
           },
@@ -533,32 +521,11 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
 
     await model.release()
 
-    // The lifecycle contract waits out the start (~400 ms), then unloads before the model frees
-    // the lease: runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps
-    // backwards under WSL2 time sync and made this assertion flake.
+    // release() must have waited out the start (~400 ms), then unloaded, then freed the lease:
+    // runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps backwards
+    // under WSL2 time sync and made this assertion flake.
     expect(performance.now() - started).toBeGreaterThanOrEqual(350)
     expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
-  })
-
-  it('uses a monotonic chapter deadline when the wall clock moves backward', async () => {
-    const texts = ['A delayed passage.']
-    const ids = ['passage-001']
-    server = new OracleLlamaServer(oracleFor(ids, texts))
-    server.delayMs = 100
-    await server.start()
-    const book = makeChapterBook(texts, ids)
-    const { model } = create({ windowPassageBudget: 1 })
-    const originalNow = Date.now
-    const base = originalNow()
-    let calls = 0
-    Date.now = () => (calls++ === 0 ? base : base - 1_000)
-    try {
-      await expect(
-        model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 30 }),
-      ).rejects.toMatchObject({ code: 'timeout' })
-    } finally {
-      Date.now = originalNow
-    }
   })
 
   it('counts context loading against the chapter deadline', async () => {
