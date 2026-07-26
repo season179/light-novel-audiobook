@@ -17,7 +17,10 @@ import {
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
-import { createFakeTransports, type PipelineTransports } from '@light-novel-audiobook/pipeline-driver'
+import {
+  createFakeTransports,
+  type PipelineTransports,
+} from '@light-novel-audiobook/pipeline-driver'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDirectorContentIdentity } from '../src/server/director-content-identity.js'
 import {

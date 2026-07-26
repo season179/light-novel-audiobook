@@ -13,7 +13,10 @@ import {
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { FakeAudioAssembler } from '../src/server/fakes/fake-audio-assembler.js'
-import { FAKE_DIRECTOR_IDENTITY, FakeDirectorModel } from '../src/server/fakes/fake-director-model.js'
+import {
+  FAKE_DIRECTOR_IDENTITY,
+  FakeDirectorModel,
+} from '../src/server/fakes/fake-director-model.js'
 import { FakeEpubExtractor } from '../src/server/fakes/fake-epub-extractor.js'
 import { createFakeSpeechEngineFactory } from '../src/server/fakes/fake-speech-engine.js'
 import {
@@ -82,12 +85,10 @@ describe('a SQLite job written by one side of the workspace', () => {
 
     // Stopping for review is signalled by throwing: the job is persisted as `awaiting_review`
     // first, then `PendingFallbackReviewError` carries the pending decisions to the caller.
-    const stopped = await useCase
-      .execute({ jobId: JOB_ID, epubPath, epubSha256, voices })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      )
+    const stopped = await useCase.execute({ jobId: JOB_ID, epubPath, epubSha256, voices }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
     expect(stopped).toBeInstanceOf(PendingFallbackReviewError)
     expect((stopped as PendingFallbackReviewError).pending.length).toBeGreaterThan(0)
     const persisted = await writerJobs.findJob(JOB_ID)

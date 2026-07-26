@@ -12,10 +12,7 @@ import {
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
 import type { PipelineTransports } from '@light-novel-audiobook/pipeline-driver'
-import {
-  createQwenSpeechEngineFactory,
-  QwenTtsSpeechEngine,
-} from '@light-novel-audiobook/qwen-tts'
+import { createQwenSpeechEngineFactory, QwenTtsSpeechEngine } from '@light-novel-audiobook/qwen-tts'
 import type { AudiobookAdapterFactories } from './composition-root.js'
 import { createDirectorContentIdentity } from './director-content-identity.js'
 import type { LocalWorkspace } from './workspace.js'
