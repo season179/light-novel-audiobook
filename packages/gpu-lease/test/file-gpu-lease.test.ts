@@ -385,6 +385,7 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       lockFilePath: path,
       inspectExistingComputeProcesses: false,
       releaseGraceMs: RELEASE_GRACE_MS,
+      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
 
     // The nested Node process, not this pid, is what holds the locked descriptor.
@@ -468,6 +469,7 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
         lockFilePath: path,
         inspectExistingComputeProcesses: false,
         releaseGraceMs: RELEASE_GRACE_MS,
+        onHolderStarted: trackHolder(path),
       }).acquire('gemma')
       const directPid = await directHolderPid(path)
 
@@ -574,6 +576,7 @@ describe('FileGpuLeaseCoordinator', () => {
     const diagnostic = new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable: '/bin/echo',
+      onHolderStarted: trackHolder(path),
     })
 
     await expect(diagnostic.acquire('qwen3-tts')).rejects.toMatchObject({ code: 'diagnostic' })
@@ -607,6 +610,7 @@ describe('FileGpuLeaseCoordinator', () => {
     const lease = await new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable,
+      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     expect(lease.lockFilePath).toBe(path)
     await lease.release()
@@ -621,7 +625,11 @@ describe('FileGpuLeaseCoordinator', () => {
     })
 
     await expect(
-      new FileGpuLeaseCoordinator({ lockFilePath: path, nvidiaSmiExecutable }).acquire('gemma'),
+      new FileGpuLeaseCoordinator({
+        lockFilePath: path,
+        nvidiaSmiExecutable,
+        onHolderStarted: trackHolder(path),
+      }).acquire('gemma'),
     ).rejects.toMatchObject({ code: 'diagnostic' })
     const lease = await coordinator(path).acquire('qwen3-tts')
     await lease.release()
@@ -635,6 +643,7 @@ describe('FileGpuLeaseCoordinator', () => {
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
         nvidiaSmiExecutable: loaded,
+        onHolderStarted: trackHolder(path),
       }).acquire('gemma'),
     ).rejects.toMatchObject({ code: 'diagnostic' })
 
@@ -643,6 +652,7 @@ describe('FileGpuLeaseCoordinator', () => {
     const lease = await new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable: idle,
+      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     await lease.release()
   })
@@ -705,6 +715,7 @@ describe('FileGpuLeaseCoordinator', () => {
       lockFilePath: path,
       nvidiaSmiExecutable,
       residentGpuMemoryThresholdMiB: 512,
+      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     await lease.release()
   })
