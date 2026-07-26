@@ -275,6 +275,7 @@ class FixtureAssembler implements AudioAssembler {
 
 class FixtureGpuGate implements ExclusiveGpuGate {
   acquisitions = 0
+  quarantines = 0
   releases = 0
 
   async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
@@ -284,6 +285,9 @@ class FixtureGpuGate implements ExclusiveGpuGate {
     return {
       owner,
       lockFilePath: '/fixture/gpu.lock',
+      quarantine: async () => {
+        this.quarantines += 1
+      },
       release: async () => {
         if (!released) this.releases += 1
         released = true

@@ -1,6 +1,7 @@
 import { extname } from 'node:path'
 import type {
   CompletedOutputAuthority,
+  DirectChapterOptions,
   JobRepository,
   PendingFallbackApproval,
   ReviewFallbackApprovals,
@@ -74,6 +75,8 @@ export interface AudiobookWebApiDependencies {
   readonly reviewer: string
   /** The only route to a stored output; shared with review so authorization and open are atomic. */
   readonly completedOutputs: CompletedOutputAuthority
+  /** Operational direction controls forwarded to each generation command; never persisted. */
+  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 /** The review queue for one job, plus whether a book-wide decision has already been made. */
@@ -127,6 +130,7 @@ export class AudiobookWebApi {
   private readonly review: ReviewFallbackApprovals
   private readonly reviewer: string
   private readonly completedOutputs: CompletedOutputAuthority
+  private readonly directorOptions: DirectChapterOptions | undefined
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -138,6 +142,7 @@ export class AudiobookWebApi {
     this.review = dependencies.review
     this.reviewer = dependencies.reviewer
     this.completedOutputs = dependencies.completedOutputs
+    this.directorOptions = dependencies.directorOptions
   }
 
   /**
@@ -238,6 +243,7 @@ export class AudiobookWebApi {
         epubPath: upload.epubPath,
         epubSha256: upload.sha256,
         voices: this.voices,
+        ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
       })
     }
     return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
@@ -312,6 +318,7 @@ export class AudiobookWebApi {
       epubPath: upload.epubPath,
       epubSha256: upload.sha256,
       voices: this.voices,
+      ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
       ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
     })
 

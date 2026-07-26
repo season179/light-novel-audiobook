@@ -46,6 +46,7 @@ export type {
   AssemblySegment,
   AudioAssembler,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
   DirectorModelFactory,

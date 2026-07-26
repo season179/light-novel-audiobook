@@ -8,18 +8,22 @@ import {
 import { createGenerationCommandIdentity } from './generation-command-identity.js'
 import type {
   AudioAssembler,
+  DirectChapterOptions,
   DirectorModelFactory,
   EpubExtractor,
   JobRepository,
   SpeechEngineFactory,
 } from './ports.js'
 import { createRenderContract } from './render-contract.js'
+import { splitDirectedSegments, splitterIdentity } from './split-directed-segments.js'
 
 export interface DirectAudiobookCommand {
   readonly jobId: string
   readonly epubPath: string
   readonly epubSha256: string
   readonly voices: VoiceCast
+  /** Operational cancellation/deadline controls; they affect failure, never content identity. */
+  readonly directorOptions?: DirectChapterOptions | undefined
   /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
   readonly recoverAbandoned?: boolean
 }
@@ -80,6 +84,7 @@ export class DirectAudiobook {
       directorIdentity: this.directorModelFactory.identity,
       speechEngineIdentity: this.speechEngineFactory.identity,
       audioAssemblerIdentity: this.audioAssembler.identity,
+      splitterIdentity: splitterIdentity(),
     })
   }
 
@@ -145,7 +150,7 @@ export class DirectAudiobook {
       job.beginDirection()
       await this.jobs.saveJob(job)
 
-      await this.directBook(book, command.voices, job)
+      await this.directBook(book, command.voices, job, command.directorOptions)
       book.assertGloballyUniqueSegmentIds()
       await this.jobs.saveBook(book)
 
@@ -165,7 +170,12 @@ export class DirectAudiobook {
     }
   }
 
-  private async directBook(book: Book, voices: VoiceCast, job: AudiobookJob): Promise<void> {
+  private async directBook(
+    book: Book,
+    voices: VoiceCast,
+    job: AudiobookJob,
+    directorOptions?: DirectChapterOptions,
+  ): Promise<void> {
     // Constructed here and not in the constructor: this is the only place a director is used, and a
     // render-only resume never reaches it.
     const directorModel = await this.directorModelFactory.create()
@@ -180,14 +190,21 @@ export class DirectAudiobook {
       for (const chapter of book.chapters) {
         job.report(chapter.id, `Directing ${chapter.title}`)
         await this.jobs.saveJob(job)
-        const directed = await directorModel.directChapter(book, chapter)
+        const directed = await directorModel.directChapter(
+          book,
+          chapter,
+          directorOptions === undefined ? undefined : { ...directorOptions },
+        )
         if (directed.chapterId !== chapter.id) {
           throw new DomainError(
             `Director returned chapter ${directed.chapterId} while directing ${chapter.id}`,
           )
         }
 
-        const segments = ExactSourceCoverage.createSegments(chapter, directed.segments)
+        // Split before source coverage maps positional segment IDs: splitter policy is required in
+        // command identity, so changed boundaries cannot reuse work from an older policy.
+        const fragments = splitDirectedSegments(directed.segments)
+        const segments = ExactSourceCoverage.createSegments(chapter, fragments)
         for (const segment of segments) {
           const resolved = voices.resolve(segment)
           segment.assignVoice(resolved.assignment)

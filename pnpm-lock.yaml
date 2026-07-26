@@ -208,6 +208,33 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/pipeline-driver:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/audio-assembly':
+        specifier: workspace:*
+        version: link:../audio-assembly
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@light-novel-audiobook/epub-ingestion':
+        specifier: workspace:*
+        version: link:../epub-ingestion
+      '@light-novel-audiobook/gemma-director':
+        specifier: workspace:*
+        version: link:../gemma-director
+      '@light-novel-audiobook/gpu-lease':
+        specifier: workspace:*
+        version: link:../gpu-lease
+      '@light-novel-audiobook/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@light-novel-audiobook/qwen-tts':
+        specifier: workspace:*
+        version: link:../qwen-tts
+
   packages/qwen-tts:
     dependencies:
       '@light-novel-audiobook/application':

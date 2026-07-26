@@ -18,6 +18,7 @@ import {
   type AudioAssembler,
   type CompletedSegmentAudio,
   createGenerationCommandIdentity,
+  type DirectChapterOptions,
   type DirectedChapter,
   type DirectorModel,
   type DirectorModelFactory,
@@ -36,6 +37,7 @@ import {
   type SpeechEngineFactory,
   type SpeechRenderRequest,
 } from '../src/index.js'
+import { splitterIdentity } from '../src/split-directed-segments.js'
 import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
 
 const sourceHash = 'b'.repeat(64)
@@ -175,6 +177,7 @@ class FakeDirector implements DirectorModel {
   readonly corrupt: boolean
   releaseCalls = 0
   failRelease = false
+  receivedOptions: (DirectChapterOptions | undefined)[] = []
 
   constructor(
     events: string[],
@@ -186,7 +189,12 @@ class FakeDirector implements DirectorModel {
     this.identity = identity
   }
 
-  async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
+  async directChapter(
+    _book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    this.receivedOptions.push(options)
     this.events.push(`direct:${chapter.id}`)
     const segments = directionFor(chapter)
     if (this.corrupt && chapter.position === 1) {
@@ -610,6 +618,27 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     )
   })
 
+  it('forwards operational director options to every chapter without changing identity', async () => {
+    const controller = new AbortController()
+    const command: GenerateAudiobookCommand = {
+      jobId: 'job-options',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+      directorOptions: { signal: controller.signal, timeoutMs: 42_000 },
+    }
+    const result = await generate(app, command)
+
+    expect(result.job.state).toBe('completed')
+    expect(app.director.receivedOptions).toHaveLength(2)
+    for (const received of app.director.receivedOptions) {
+      expect(received?.timeoutMs).toBe(42_000)
+      expect(received?.signal).toBe(controller.signal)
+    }
+    const repeat = await generate(app, { ...command, directorOptions: undefined })
+    expect(repeat.output.m4bPath).toBe(result.output.m4bPath)
+  })
+
   it('reuses every unchanged completed segment and reserves successive outputs without overwrite', async () => {
     const first = await generate(app, {
       jobId: 'job-first',
@@ -784,6 +813,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
         directorIdentity,
         speechEngineIdentity: app.speech.identity,
         audioAssemblerIdentity,
+        splitterIdentity: splitterIdentity(),
       })
     const original = identity(app.extractor.identity, app.director.identity, app.assembler.identity)
     expect(
@@ -807,6 +837,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       directorIdentity: app.director.identity,
       speechEngineIdentity: app.speech.identity,
       audioAssemblerIdentity: app.assembler.identity,
+      splitterIdentity: splitterIdentity(),
     })
     const active = new AudiobookJob('job-active')
     active.bindCommand(identity)

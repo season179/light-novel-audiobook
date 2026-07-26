@@ -5,6 +5,7 @@ import { DirectAudiobook } from './direct-audiobook.js'
 import type { PendingFallbackApproval } from './fallback-approval.js'
 import type {
   AudioAssembler,
+  DirectChapterOptions,
   DirectorModelFactory,
   EpubExtractor,
   FallbackApprovalRepository,
@@ -19,6 +20,8 @@ export interface GenerateAudiobookCommand {
   readonly epubPath: string
   readonly epubSha256: string
   readonly voices: VoiceCast
+  /** Operational cancellation/deadline controls; deliberately excluded from content identity. */
+  readonly directorOptions?: DirectChapterOptions | undefined
   /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
   readonly recoverAbandoned?: boolean
 }

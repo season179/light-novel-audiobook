@@ -2,6 +2,7 @@ import {
   ApprovalCatalogAccess,
   type AudioAssembler,
   CompletedOutputAuthority,
+  type DirectChapterOptions,
   type DirectorModel,
   type EpubExtractor,
   type FallbackApprovalRepository,
@@ -89,6 +90,8 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly workspace?: LocalWorkspace | undefined
   /** Overrides the pinned Qwen production configuration the default cast is derived from. */
   readonly qwenConfigPath?: string | undefined
+  /** Operational cancellation/deadline controls forwarded to every director call. */
+  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 export const createAudiobookWebApi = async (
@@ -169,6 +172,7 @@ export const createAudiobookWebApi = async (
     review: new ReviewFallbackApprovals({ jobs, approvals, catalogAccess }),
     completedOutputs,
     reviewer: options.reviewer ?? resolveReviewerIdentity(),
+    ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
   })
 }
 

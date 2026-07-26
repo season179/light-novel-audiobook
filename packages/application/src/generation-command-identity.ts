@@ -9,6 +9,13 @@ export interface GenerationCommandIdentityInput {
   readonly directorIdentity: string
   readonly speechEngineIdentity: string
   readonly audioAssemblerIdentity: string
+  /**
+   * Stable identity for the deterministic segment splitter (#55); changing it changes every segment
+   * id, source text, render identity, and assembled audio. Required (not defaulted) so a caller that
+   * builds a non-default splitter policy cannot forget to bind it -- two renders sharing one identity
+   * is the resume corruption this field exists to prevent.
+   */
+  readonly splitterIdentity: string
 }
 
 /** Binds a job/result to every immutable input that can change direction, speech, or assembly. */
@@ -22,9 +29,12 @@ export const createGenerationCommandIdentity = (input: GenerationCommandIdentity
     input.directorIdentity,
     input.speechEngineIdentity,
     input.audioAssemblerIdentity,
+    input.splitterIdentity,
   ]
   if (externalIdentities.some((identity) => identity.trim().length === 0)) {
-    throw new DomainError('Extractor, director, speech, and assembler identities are required')
+    throw new DomainError(
+      'Extractor, director, speech, assembler, and splitter identities are required',
+    )
   }
   const canonical = JSON.stringify({
     schema: 2,
@@ -35,6 +45,7 @@ export const createGenerationCommandIdentity = (input: GenerationCommandIdentity
     director: input.directorIdentity,
     speech: input.speechEngineIdentity,
     assembly: input.audioAssemblerIdentity,
+    splitter: input.splitterIdentity,
   })
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
 }

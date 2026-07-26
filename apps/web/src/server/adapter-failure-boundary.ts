@@ -3,6 +3,7 @@ import type {
   AudioAssembler,
   BookFallbackGrant,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
   DirectorModelFactory,
@@ -65,8 +66,14 @@ class SanitizedDirectorModel implements DirectorModel {
     this.identity = inner.identity
   }
 
-  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
-    return sanitize('directorModel.directChapter', () => this.inner.directChapter(book, chapter))
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    return sanitize('directorModel.directChapter', () =>
+      this.inner.directChapter(book, chapter, options),
+    )
   }
 
   release(): Promise<void> {
