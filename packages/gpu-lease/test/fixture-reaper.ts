@@ -7,7 +7,7 @@
 
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { FileGpuLeaseCoordinator, GpuLeaseError } from '../src/index.js'
 
 export interface HolderRegistryEntry {
@@ -27,10 +27,20 @@ export type OwnerState = 'alive' | 'dead' | 'unknown'
 
 type OwnerInspector = (ownerPid: number, ownerStartTime: number) => Promise<OwnerState>
 
+/**
+ * The raw contents of `/proc/<pid>/stat`. This is the fault-injection boundary for owner
+ * inspection: on a normal host `/proc/<pid>/stat` is world-readable and kernel-generated, so the
+ * non-ENOENT and malformed-content outcomes are unreachable for real, and injecting at the
+ * whole-inspector seam would leave the tri-state mapping itself untested.
+ */
+export type StatReader = (ownerPid: number) => Promise<string>
+
 export interface FixtureHolderRegistryConfig {
   readonly registryPath: string
   /** Fault-injection seam used to prove unknown state fails closed. */
   readonly inspectOwner?: OwnerInspector
+  /** Fault-injection seam at the `/proc` read boundary, so the tri-state mapping is tested. */
+  readonly readStat?: StatReader
 }
 
 const REGISTRY_SCHEMA = 1
@@ -112,8 +122,12 @@ function parseRegistry(raw: string): RegistryDocument {
   return { schema: REGISTRY_SCHEMA, entries }
 }
 
+const readProcStat: StatReader = async (ownerPid) =>
+  await readFile(`/proc/${ownerPid}/stat`, 'utf8')
+
 async function observeStartTime(
   pid: number,
+  readStat: StatReader,
 ): Promise<
   | { readonly state: 'present'; readonly startTime: number }
   | { readonly state: 'absent' }
@@ -121,7 +135,7 @@ async function observeStartTime(
 > {
   let raw: string
   try {
-    raw = await readFile(`/proc/${pid}/stat`, 'utf8')
+    raw = await readStat(pid)
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT'
       ? { state: 'absent' }
@@ -137,15 +151,19 @@ async function observeStartTime(
   return isSafeStartTime(startTime) ? { state: 'present', startTime } : { state: 'unknown' }
 }
 
-async function inspectOwner(ownerPid: number, ownerStartTime: number): Promise<OwnerState> {
-  const observation = await observeStartTime(ownerPid)
+async function inspectOwner(
+  ownerPid: number,
+  ownerStartTime: number,
+  readStat: StatReader,
+): Promise<OwnerState> {
+  const observation = await observeStartTime(ownerPid, readStat)
   if (observation.state === 'unknown') return 'unknown'
   if (observation.state === 'absent') return 'dead'
   return observation.startTime === ownerStartTime ? 'alive' : 'dead'
 }
 
 async function currentOwnerStartTime(): Promise<number> {
-  const observation = await observeStartTime(process.pid)
+  const observation = await observeStartTime(process.pid, readProcStat)
   if (observation.state !== 'present') {
     throw new Error('Could not prove the fixture registry owner process identity')
   }
@@ -168,6 +186,34 @@ async function waitForProcessGroupExit(groupId: number): Promise<void> {
   }
 }
 
+/** Kernel ceiling for pids; an entry claiming a pid at or above it cannot describe a process. */
+async function readPidMax(): Promise<number | undefined> {
+  const raw = await readFile('/proc/sys/kernel/pid_max', 'utf8').catch(() => undefined)
+  const value = Number(raw?.trim())
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+/** Directories a fixture may own: under the OS temp dir, or under this repository. */
+function containedRoots(): readonly string[] {
+  return [resolve(tmpdir()), process.cwd()]
+}
+
+/**
+ * The reaper turns a registry value into SIGKILL and `rm -rf`, so shape-valid is not enough:
+ * an entry whose root resolves outside every fixture root, or whose pids cannot exist, is
+ * retained but never acted on. This bounds the blast radius of a wrong entry without changing
+ * what happens to any entry a fixture actually wrote.
+ */
+function isContainedEntry(entry: HolderRegistryEntry, pidMax: number | undefined): boolean {
+  const root = resolve(entry.rootDir)
+  const contained = containedRoots().some(
+    (base) => root === base || root.startsWith(`${base}${sep}`),
+  )
+  if (!contained) return false
+  if (pidMax !== undefined && (entry.ownerPid >= pidMax || entry.holderPgid >= pidMax)) return false
+  return true
+}
+
 export class FixtureHolderRegistry {
   readonly registryPath: string
   readonly #lockPath: string
@@ -179,7 +225,10 @@ export class FixtureHolderRegistry {
     }
     this.registryPath = resolve(config.registryPath)
     this.#lockPath = `${this.registryPath}.lock`
-    this.#inspectOwner = config.inspectOwner ?? inspectOwner
+    this.#inspectOwner =
+      config.inspectOwner ??
+      ((ownerPid, ownerStartTime) =>
+        inspectOwner(ownerPid, ownerStartTime, config.readStat ?? readProcStat))
   }
 
   async loadRegistry(): Promise<readonly HolderRegistryEntry[]> {
@@ -213,9 +262,14 @@ export class FixtureHolderRegistry {
 
   async reapOrphanedHolders(): Promise<number> {
     let reaped = 0
+    const pidMax = await readPidMax()
     await this.#transaction(async (entries) => {
       const retained: HolderRegistryEntry[] = []
       for (const entry of entries) {
+        if (!isContainedEntry(entry, pidMax)) {
+          retained.push(entry)
+          continue
+        }
         const state = await this.#inspectOwner(entry.ownerPid, entry.ownerStartTime)
         if (state !== 'dead') {
           retained.push(entry)

@@ -386,11 +386,13 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
     const scripts = await makeRoot('gpu-flock-wedged-scripts')
     const root = await makeRoot('gpu-flock-wedged', base)
     const path = join(root, 'exclusive.lock')
-    const lease = await (await hostileCoordinator({
-      lockFilePath: path,
-      scriptsRoot: scripts,
-      releaseGraceMs: RELEASE_GRACE_MS,
-    })).acquire('gemma')
+    const lease = await (
+      await hostileCoordinator({
+        lockFilePath: path,
+        scriptsRoot: scripts,
+        releaseGraceMs: RELEASE_GRACE_MS,
+      })
+    ).acquire('gemma')
     const directPid = await directHolderPid(path)
     // The wedged nested holder really owns the kernel lock, not just the pipe.
     await expect(coordinator(path).acquire('qwen3-tts')).rejects.toMatchObject({ code: 'busy' })
@@ -413,11 +415,13 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       const scripts = await makeRoot('gpu-flock-orphan-scripts')
       const root = await makeRoot('gpu-flock-orphan', base)
       const path = join(root, 'exclusive.lock')
-      const lease = await (await hostileCoordinator({
-        lockFilePath: path,
-        scriptsRoot: scripts,
-        releaseGraceMs: RELEASE_GRACE_MS,
-      })).acquire('gemma')
+      const lease = await (
+        await hostileCoordinator({
+          lockFilePath: path,
+          scriptsRoot: scripts,
+          releaseGraceMs: RELEASE_GRACE_MS,
+        })
+      ).acquire('gemma')
 
       // The worst case from the issue: no direct child left to signal, and the descendant that
       // holds the descriptor ignores every EOF.
@@ -705,11 +709,13 @@ it('release deadline is monotonic: a backward-jumping wall clock does not extend
   const scripts = await makeRoot('gpu-flock-monotonic-scripts')
   const root = await makeRoot('gpu-flock-monotonic')
   const path = join(root, 'exclusive.lock')
-  const lease = await (await hostileCoordinator({
-    lockFilePath: path,
-    scriptsRoot: scripts,
-    releaseGraceMs: RELEASE_GRACE_MS,
-  })).acquire('gemma')
+  const lease = await (
+    await hostileCoordinator({
+      lockFilePath: path,
+      scriptsRoot: scripts,
+      releaseGraceMs: RELEASE_GRACE_MS,
+    })
+  ).acquire('gemma')
   const directPid = await directHolderPid(path) // also records the group for afterEach
   process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
   expect(processGroupAlive(directPid)).toBe(true)

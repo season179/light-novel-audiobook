@@ -26,7 +26,7 @@ async function wedgedHolderFlock(root: string, gatePath?: string): Promise<strin
     holder,
     [
       'const gate = process.argv[3]',
-      'const printToken = () => process.stdout.write(process.argv[2] + \'\\n\')',
+      "const printToken = () => process.stdout.write(process.argv[2] + '\\n')",
       'if (gate === undefined) {',
       '  printToken()',
       '} else {',
