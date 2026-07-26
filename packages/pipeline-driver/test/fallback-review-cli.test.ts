@@ -38,7 +38,10 @@ const bookId = StableIds.book(sourceHash)
 const chapterId = StableIds.chapter(bookId, 1)
 const passageId = StableIds.passage(chapterId, 1)
 const segmentId = StableIds.segment(passageId, 1)
+const secondPassageId = StableIds.passage(chapterId, 2)
+const secondSegmentId = StableIds.segment(secondPassageId, 1)
 const speakerReason = 'No eligible character was present in the synthetic fixture roster.'
+const secondSpeakerReason = 'The synthetic fixture speaker has no assigned voice.'
 
 const voice = (id: string, role: 'narrator' | 'fallback'): VoiceProfile =>
   new VoiceProfile({
@@ -52,7 +55,10 @@ const voice = (id: string, role: 'narrator' | 'fallback'): VoiceProfile =>
     revision: 1,
   })
 
-async function preparedWorkspace(jobId: string): Promise<{ root: string; book: Book }> {
+async function preparedWorkspace(
+  jobId: string,
+  options: { readonly heterogeneous?: boolean } = {},
+): Promise<{ root: string; book: Book }> {
   const root = await mkdtemp(path.join(tmpdir(), 'fallback-review-cli-'))
   roots.push(root)
   const chapter = new Chapter({
@@ -66,9 +72,18 @@ async function preparedWorkspace(jobId: string): Promise<{ root: string; book: B
         chapterId,
         sourceText: '“Is anyone there?”',
       }),
+      ...(options.heterogeneous === true
+        ? [
+            new SourcePassage({
+              id: secondPassageId,
+              chapterId,
+              sourceText: '“The second fixture line.”',
+            }),
+          ]
+        : []),
     ],
   })
-  const [segment] = ExactSourceCoverage.createSegments(chapter, [
+  const segments = ExactSourceCoverage.createSegments(chapter, [
     {
       sourcePassageId: passageId,
       sourceText: '“Is anyone there?”',
@@ -83,11 +98,28 @@ async function preparedWorkspace(jobId: string): Promise<{ root: string; book: B
         pauseAfterMs: 100,
       },
     },
+    ...(options.heterogeneous === true
+      ? [
+          {
+            sourcePassageId: secondPassageId,
+            sourceText: '“The second fixture line.”',
+            kind: 'dialogue' as const,
+            speakerId: 'fixture-unvoiced',
+            speakerReason: secondSpeakerReason,
+            confidence: 0.8,
+            delivery: {
+              emotion: 'calm',
+              pace: 'normal' as const,
+              volume: 'normal' as const,
+              pauseAfterMs: 100,
+            },
+          },
+        ]
+      : []),
   ])
-  if (segment === undefined) throw new Error('synthetic review segment missing')
   const cast = new VoiceCast(voice('narrator', 'narrator'), voice('fallback', 'fallback'), [])
-  segment.assignVoice(cast.resolve(segment).assignment)
-  chapter.submitForReview([segment])
+  for (const segment of segments) segment.assignVoice(cast.resolve(segment).assignment)
+  chapter.submitForReview(segments)
   chapter.approve()
   const book = new Book({
     id: bookId,
@@ -102,13 +134,16 @@ async function preparedWorkspace(jobId: string): Promise<{ root: string; book: B
   job.start()
   job.attachBook(book.id)
   job.beginDirection()
-  job.addFallbackWarning({
-    segmentId,
-    speakerId: null,
-    voiceProfileId: cast.fallback.id,
-    reason: 'unresolved_speaker',
-    speakerReason,
-  })
+  for (const segment of segments) {
+    const unresolved = segment.speakerId === null
+    job.addFallbackWarning({
+      segmentId: segment.id,
+      speakerId: segment.speakerId,
+      voiceProfileId: cast.fallback.id,
+      reason: unresolved ? 'unresolved_speaker' : 'missing_speaker_voice',
+      speakerReason: unresolved ? speakerReason : secondSpeakerReason,
+    })
+  }
   job.awaitReview()
 
   const layout = layoutFor(root)
@@ -151,7 +186,10 @@ describe('fallback review CLI', () => {
           segmentId,
           sourcePassageId: passageId,
           kind: 'dialogue',
+          speakerId: null,
+          fallbackReason: 'unresolved_speaker',
           speakerReason,
+          proposedVoiceProfileId: 'fallback',
         },
       ],
     })
@@ -179,13 +217,17 @@ describe('fallback review CLI', () => {
       {
         actor: 'Ada Lovelace',
         jobId: 'job-approve-fallbacks',
-        decision: 'approve the fallback voice for every listed pending segment',
+        decision:
+          'approve one homogeneous fallback decision group for every listed pending segment',
         items: [
           {
             segmentId,
             sourcePassageId: passageId,
             kind: 'dialogue',
+            speakerId: null,
+            fallbackReason: 'unresolved_speaker',
             speakerReason,
+            proposedVoiceProfileId: 'fallback',
           },
         ],
       },
@@ -203,6 +245,45 @@ describe('fallback review CLI', () => {
     expect(catalog.grant?.decidedBy).toBe('Ada Lovelace')
     expect(catalog.approvals).toHaveLength(1)
     expect(catalog.approvals[0]?.decidedBy).toBe('Ada Lovelace')
+  })
+
+  it('surfaces decision fields and refuses a heterogeneous book-wide grant', async () => {
+    const { root, book } = await preparedWorkspace('job-heterogeneous-fallbacks', {
+      heterogeneous: true,
+    })
+
+    const listed = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-heterogeneous-fallbacks',
+    })
+    expect(
+      listed.items.map((item) => [
+        item.segmentId,
+        item.speakerId,
+        item.fallbackReason,
+        item.proposedVoiceProfileId,
+      ]),
+    ).toEqual([
+      [segmentId, null, 'unresolved_speaker', 'fallback'],
+      [secondSegmentId, 'fixture-unvoiced', 'missing_speaker_voice', 'fallback'],
+    ])
+    expect(JSON.stringify(listed)).not.toContain('The second fixture line')
+
+    await expect(
+      runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-heterogeneous-fallbacks',
+        resolveReviewer: () => 'Synthetic Reviewer',
+      }),
+    ).rejects.toThrow('heterogeneous fallback decisions')
+
+    const database = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(database).readCatalog(book.id)
+    database.close()
+    expect(catalog.grant).toBeUndefined()
+    expect(catalog.approvals).toEqual([])
   })
 
   it('exposes separate list and approve CLI invocations without printing story text', async () => {

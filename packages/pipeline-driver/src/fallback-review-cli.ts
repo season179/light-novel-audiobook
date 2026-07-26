@@ -3,7 +3,7 @@ import {
   ReviewFallbackApprovals,
   resolveReviewerIdentity,
 } from '@light-novel-audiobook/application'
-import { DomainError, type SegmentKind } from '@light-novel-audiobook/domain'
+import { DomainError, type FallbackReason, type SegmentKind } from '@light-novel-audiobook/domain'
 import {
   layoutFor,
   migrateSchema,
@@ -16,13 +16,17 @@ export interface FallbackReviewItem {
   readonly segmentId: string
   readonly sourcePassageId: string
   readonly kind: SegmentKind
+  /** Stable identifier only; never source prose or a display name. */
+  readonly speakerId: string | null
+  readonly fallbackReason: FallbackReason
   readonly speakerReason: string
+  readonly proposedVoiceProfileId: string
 }
 
 export interface FallbackReviewApprovalNotice {
   readonly actor: string
   readonly jobId: string
-  readonly decision: 'approve the fallback voice for every listed pending segment'
+  readonly decision: 'approve one homogeneous fallback decision group for every listed pending segment'
   readonly items: readonly FallbackReviewItem[]
 }
 
@@ -103,10 +107,15 @@ export async function runFallbackReviewCommand(
     if (items.length === 0) {
       throw new DomainError(`Audiobook job ${jobId} has no pending fallback decisions to approve`)
     }
+    if (new Set(items.map(decisionGroupKey)).size !== 1) {
+      throw new DomainError(
+        `Audiobook job ${jobId} has heterogeneous fallback decisions; book-wide bulk approval requires one speaker, reason and proposed voice profile`,
+      )
+    }
     const notice: FallbackReviewApprovalNotice = Object.freeze({
       actor,
       jobId,
-      decision: 'approve the fallback voice for every listed pending segment',
+      decision: 'approve one homogeneous fallback decision group for every listed pending segment',
       items,
     })
     options.announceApproval?.(notice)
@@ -139,6 +148,13 @@ function reviewItem(item: PendingFallbackApproval): FallbackReviewItem {
     segmentId: item.segmentId,
     sourcePassageId: item.sourcePassageId,
     kind: item.kind,
+    speakerId: item.speakerId,
+    fallbackReason: item.fallbackReason,
     speakerReason: item.speakerReason,
+    proposedVoiceProfileId: item.proposedVoiceProfileId,
   })
+}
+
+function decisionGroupKey(item: FallbackReviewItem): string {
+  return JSON.stringify([item.speakerId, item.fallbackReason, item.proposedVoiceProfileId])
 }
