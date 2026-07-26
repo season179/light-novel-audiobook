@@ -77,11 +77,7 @@ describe('deterministic source ranges', () => {
     const request = requestFor('Alpha beta.')
     expect(
       findingCodes(() =>
-        validateDirectionOutput(
-          { segments: [segment('passage-1', 'Alpha zeta.')] },
-          request,
-          0.5,
-        ),
+        validateDirectionOutput({ segments: [segment('passage-1', 'Alpha zeta.')] }, request, 0.5),
       ),
     ).toContain('text_substitution')
   })
@@ -90,11 +86,7 @@ describe('deterministic source ranges', () => {
     const request = requestFor('Alpha beta.')
     expect(
       findingCodes(() =>
-        validateDirectionOutput(
-          { segments: [segment('passage-1', 'Alpha  beta.')] },
-          request,
-          0.5,
-        ),
+        validateDirectionOutput({ segments: [segment('passage-1', 'Alpha xbeta.')] }, request, 0.5),
       ),
     ).toContain('text_insertion')
   })
@@ -103,11 +95,7 @@ describe('deterministic source ranges', () => {
     const request = requestFor('Alpha beta.')
     expect(
       findingCodes(() =>
-        validateDirectionOutput(
-          { segments: [segment('passage-1', 'Alpha bet.')] },
-          request,
-          0.5,
-        ),
+        validateDirectionOutput({ segments: [segment('passage-1', 'Alpha bet.')] }, request, 0.5),
       ),
     ).toContain('text_omission')
   })
@@ -137,10 +125,7 @@ describe('deterministic source ranges', () => {
       findingCodes(() =>
         validateDirectionOutput(
           {
-            segments: [
-              segment('passage-2', 'Second.'),
-              segment('passage-1', 'First.'),
-            ],
+            segments: [segment('passage-2', 'Second.'), segment('passage-1', 'First.')],
           },
           request,
           0.5,
@@ -181,19 +166,18 @@ describe('deterministic source ranges', () => {
       request,
       0.5,
     )
-    expect(valid.annotations.map(({ sourceStart, sourceEnd }) => [sourceStart, sourceEnd])).toEqual([
-      [0, 3],
-      [3, 4],
-    ])
+    expect(valid.annotations.map(({ sourceStart, sourceEnd }) => [sourceStart, sourceEnd])).toEqual(
+      [
+        [0, 3],
+        [3, 4],
+      ],
+    )
 
     expect(
       findingCodes(() =>
         validateDirectionOutput(
           {
-            segments: [
-              segment('passage-1', text.slice(0, 2)),
-              segment('passage-1', text.slice(2)),
-            ],
+            segments: [segment('passage-1', text.slice(0, 2)), segment('passage-1', text.slice(2))],
           },
           request,
           0.5,

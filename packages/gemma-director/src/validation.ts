@@ -3,18 +3,17 @@ import type { DirectedAnnotation, DirectionRequest, DirectorWarning } from './po
 import {
   type DirectedWireSegment,
   type DirectionWireOutput,
-  directionWireOutputSchema,
+  parseDirectionOutputForValidation,
 } from './schema.js'
 
+/** Codes describe actual model text/identity defects, never discarded model range arithmetic. */
 export type FidelityFindingCode =
-  | 'omission'
-  | 'duplicate'
-  | 'invention'
-  | 'reorder'
-  | 'gap'
-  | 'overlap'
-  | 'invalid_range'
-  | 'text_mismatch'
+  | 'text_omission'
+  | 'text_insertion'
+  | 'text_duplication'
+  | 'text_substitution'
+  | 'passage_reorder'
+  | 'unknown_passage'
   | 'split_grapheme'
   | 'unknown_speaker'
   | 'speaker_semantics'
@@ -101,135 +100,155 @@ function splitsSurrogatePair(text: string, offset: number): boolean {
   return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff
 }
 
-function fidelityFindings(
-  output: DirectionWireOutput,
-  request: DirectionRequest,
-): FidelityFinding[] {
+interface DerivedWireSegment {
+  readonly item: DirectedWireSegment
+  readonly sourceStart: number
+  readonly sourceEnd: number
+  readonly sourceText: string
+}
+
+interface FidelityAnalysis {
+  readonly findings: readonly FidelityFinding[]
+  readonly segments: readonly DerivedWireSegment[]
+}
+
+function textDifferenceFinding(
+  expected: string,
+  actual: string,
+  sourcePassageId: string,
+): FidelityFinding {
+  let prefix = 0
+  while (
+    prefix < expected.length &&
+    prefix < actual.length &&
+    expected[prefix] === actual[prefix]
+  ) {
+    prefix += 1
+  }
+  let suffix = 0
+  while (
+    suffix < expected.length - prefix &&
+    suffix < actual.length - prefix &&
+    expected[expected.length - 1 - suffix] === actual[actual.length - 1 - suffix]
+  ) {
+    suffix += 1
+  }
+  const expectedMiddle = expected.slice(prefix, expected.length - suffix)
+  const actualMiddle = actual.slice(prefix, actual.length - suffix)
+  if (expectedMiddle.length === 0) {
+    const before = expected.slice(Math.max(0, prefix - actualMiddle.length), prefix)
+    const after = expected.slice(prefix, prefix + actualMiddle.length)
+    const duplicated =
+      actualMiddle.length > 0 && (actualMiddle === before || actualMiddle === after)
+    return {
+      code: duplicated ? 'text_duplication' : 'text_insertion',
+      sourcePassageId,
+      message: duplicated
+        ? 'Model output duplicates immutable source text'
+        : 'Model output inserts text absent from the immutable source passage',
+    }
+  }
+  if (actualMiddle.length === 0) {
+    return {
+      code: 'text_omission',
+      sourcePassageId,
+      message: 'Model output omits text from the immutable source passage',
+    }
+  }
+  return {
+    code: 'text_substitution',
+    sourcePassageId,
+    message: 'Model output substitutes or reorders immutable source text',
+  }
+}
+
+/**
+ * The model supplies exact fragment text and semantic annotations; this function owns coordinates.
+ * A per-passage sequential cursor derives UTF-16 ranges only after the concatenated model text equals
+ * the immutable source exactly. Model-reported @2 offsets have already been stripped by the parser.
+ */
+function analyzeFidelity(output: DirectionWireOutput, request: DirectionRequest): FidelityAnalysis {
   const findings: FidelityFinding[] = []
+  const derived: DerivedWireSegment[] = []
   const passageIndex = new Map(request.passages.map((passage, index) => [passage.id, index]))
-  const passageById = new Map(request.passages.map((passage) => [passage.id, passage]))
-  const cursors = new Map(request.passages.map((passage) => [passage.id, 0]))
-  const fragmentCounts = new Map(request.passages.map((passage) => [passage.id, 0]))
-  const fragmentKeys = new Set<string>()
+  const fragmentsByPassage = new Map(
+    request.passages.map((passage) => [passage.id, [] as DirectedWireSegment[]]),
+  )
   let lastPassageIndex = -1
 
   for (const item of output.segments) {
-    const expectedPassage = passageById.get(item.source_passage_id)
     const currentPassageIndex = passageIndex.get(item.source_passage_id)
-    if (expectedPassage === undefined || currentPassageIndex === undefined) {
+    if (currentPassageIndex === undefined) {
       findings.push({
-        code: 'invention',
+        code: 'unknown_passage',
         sourcePassageId: item.source_passage_id,
-        message: 'Directed output contains an unknown source passage ID',
+        message: 'Model output references a passage ID absent from the request',
       })
       findings.push(...speakerFindings(item, request))
       continue
     }
-
     if (currentPassageIndex < lastPassageIndex) {
       findings.push({
-        code: 'reorder',
+        code: 'passage_reorder',
         sourcePassageId: item.source_passage_id,
-        message: 'A source passage fragment appears after a later passage',
+        message: 'Model output places a source passage after a later passage',
       })
     }
     lastPassageIndex = Math.max(lastPassageIndex, currentPassageIndex)
-    fragmentCounts.set(
-      item.source_passage_id,
-      (fragmentCounts.get(item.source_passage_id) ?? 0) + 1,
-    )
-
-    const fragmentKey = `${item.source_passage_id}\u0000${item.source_start}\u0000${item.source_end}`
-    if (fragmentKeys.has(fragmentKey)) {
-      findings.push({
-        code: 'duplicate',
-        sourcePassageId: item.source_passage_id,
-        message: 'The same source range occurs more than once',
-      })
-    }
-    fragmentKeys.add(fragmentKey)
-
-    const cursor = cursors.get(item.source_passage_id) ?? 0
-    if (item.source_end <= item.source_start) {
-      findings.push({
-        code: 'invalid_range',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment source_end must be greater than source_start',
-      })
-    }
-    if (item.source_start > cursor) {
-      findings.push({
-        code: 'gap',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment starts after the next uncovered source offset',
-      })
-    } else if (item.source_start < cursor) {
-      findings.push({
-        code: 'overlap',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment overlaps an earlier source range',
-      })
-    }
-    if (item.source_end > expectedPassage.text.length) {
-      findings.push({
-        code: 'invention',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment range extends beyond the immutable source passage',
-      })
-    }
-    if (
-      splitsSurrogatePair(expectedPassage.text, item.source_start) ||
-      splitsSurrogatePair(expectedPassage.text, item.source_end)
-    ) {
-      findings.push({
-        code: 'split_grapheme',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment boundary splits a UTF-16 surrogate pair inside one source character',
-      })
-    }
-    const expectedText = expectedPassage.text.slice(item.source_start, item.source_end)
-    if (item.source_text !== expectedText) {
-      findings.push({
-        code: 'text_mismatch',
-        sourcePassageId: item.source_passage_id,
-        message: 'Fragment text differs from its declared immutable source range',
-      })
-    }
-    cursors.set(item.source_passage_id, Math.max(cursor, item.source_end))
+    fragmentsByPassage.get(item.source_passage_id)?.push(item)
     findings.push(...speakerFindings(item, request))
   }
 
   for (const passage of request.passages) {
-    const count = fragmentCounts.get(passage.id) ?? 0
-    const cursor = cursors.get(passage.id) ?? 0
-    if (count === 0) {
+    const fragments = fragmentsByPassage.get(passage.id) ?? []
+    if (fragments.length === 0) {
       findings.push({
-        code: 'omission',
+        code: 'text_omission',
         sourcePassageId: passage.id,
-        message: 'Source passage has no directed fragments',
+        message: 'Model output omits the entire immutable source passage',
       })
-    } else if (cursor < passage.text.length) {
-      findings.push({
-        code: 'gap',
-        sourcePassageId: passage.id,
-        message: 'Source passage has uncovered trailing text',
-      })
+      continue
+    }
+    const combined = fragments.map((item) => item.source_text).join('')
+    if (combined !== passage.text) {
+      findings.push(textDifferenceFinding(passage.text, combined, passage.id))
+      continue
+    }
+
+    let cursor = 0
+    for (const item of fragments) {
+      const sourceStart = cursor
+      const sourceEnd = sourceStart + item.source_text.length
+      if (
+        splitsSurrogatePair(passage.text, sourceStart) ||
+        splitsSurrogatePair(passage.text, sourceEnd)
+      ) {
+        findings.push({
+          code: 'split_grapheme',
+          sourcePassageId: passage.id,
+          message: 'A model fragment boundary splits a UTF-16 surrogate pair',
+        })
+      }
+      const sourceText = passage.text.slice(sourceStart, sourceEnd)
+      derived.push({ item, sourceStart, sourceEnd, sourceText })
+      cursor = sourceEnd
     }
   }
-  return findings
+  return { findings, segments: derived }
 }
 
 function warningFor(
-  item: DirectedWireSegment,
+  segment: DerivedWireSegment,
   request: DirectionRequest,
   confidenceThreshold: number,
 ): DirectorWarning | undefined {
+  const { item, sourceStart, sourceEnd } = segment
   if (item.speaker_id === request.fallbackSpeakerId) {
     return {
       code: 'unresolved_speaker',
       sourcePassageId: item.source_passage_id,
-      sourceStart: item.source_start,
-      sourceEnd: item.source_end,
+      sourceStart,
+      sourceEnd,
       candidateSpeakerId: null,
       confidence: item.confidence,
       confidenceThreshold,
@@ -241,8 +260,8 @@ function warningFor(
   if (item.confidence >= confidenceThreshold) return undefined
   const range = {
     sourcePassageId: item.source_passage_id,
-    sourceStart: item.source_start,
-    sourceEnd: item.source_end,
+    sourceStart,
+    sourceEnd,
     candidateSpeakerId: item.speaker_id,
     confidence: item.confidence,
     confidenceThreshold,
@@ -275,24 +294,29 @@ export function validateDirectionOutput(
   if (!Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
     throw new Error('Director confidence threshold must be between zero and one')
   }
-  const parsed = directionWireOutputSchema.safeParse(input)
-  if (!parsed.success) {
+  let parsed: DirectionWireOutput
+  try {
+    parsed = parseDirectionOutputForValidation(input)
+  } catch (cause: unknown) {
     throw new DirectorError(
       'schema_validation',
       'Gemma Director output failed the direction schema',
       false,
-      { cause: parsed.error },
+      { cause },
     )
   }
-  const findings = fidelityFindings(parsed.data, request)
-  if (findings.length > 0) throw new DirectorFidelityError(Object.freeze(findings))
+  const analysis = analyzeFidelity(parsed, request)
+  if (analysis.findings.length > 0) {
+    throw new DirectorFidelityError(Object.freeze(analysis.findings))
+  }
 
-  const annotations = parsed.data.segments.map(
-    (item): DirectedAnnotation => ({
+  const annotations = analysis.segments.map(
+    ({ item, sourceStart, sourceEnd, sourceText }): DirectedAnnotation => ({
       sourcePassageId: item.source_passage_id,
-      sourceStart: item.source_start,
-      sourceEnd: item.source_end,
-      sourceText: item.source_text,
+      sourceStart,
+      sourceEnd,
+      // Always comes from the immutable request passage slice, never the model-owned string.
+      sourceText,
       kind: item.kind,
       speakerId: item.speaker_id,
       confidence: item.confidence,
@@ -306,8 +330,8 @@ export function validateDirectionOutput(
       speakerReason: item.speaker_reason,
     }),
   )
-  const warnings = parsed.data.segments.flatMap((item): DirectorWarning[] => {
-    const warning = warningFor(item, request, confidenceThreshold)
+  const warnings = analysis.segments.flatMap((segment): DirectorWarning[] => {
+    const warning = warningFor(segment, request, confidenceThreshold)
     return warning === undefined ? [] : [warning]
   })
   return { annotations: Object.freeze(annotations), warnings: Object.freeze(warnings) }

@@ -180,15 +180,13 @@ const validationRequest: DirectionRequest = {
 
 function wireSegment(
   id: string,
-  start: number,
-  end: number,
+  _start: number,
+  _end: number,
   text: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
     source_passage_id: id,
-    source_start: start,
-    source_end: end,
     source_text: text,
     kind: 'narration',
     speaker_id: 'narrator',
@@ -408,9 +406,9 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
         revision: SELECTED_GEMMA_PROFILE.revision,
         sha256: SELECTED_GEMMA_PROFILE.sha256,
       },
-      prompt: { version: 'gemma-director@2', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      prompt: { version: 'gemma-director@3', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
       outputSchema: {
-        version: 'gemma-direction-output@2',
+        version: 'gemma-direction-output@3',
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
       runtime: {
@@ -428,7 +426,7 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     })
   })
 
-  it('sends exact source passages, split-range schema, fixed parameters, and system prompt', async () => {
+  it('sends exact source passages, fragment schema, fixed parameters, and system prompt', async () => {
     const book = makeBook()
     const { model } = create()
     await model.directChapter(book, book.chapters[0] as Chapter)
@@ -458,12 +456,20 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     })
     const schema = (
       captured.body.response_format as {
-        json_schema: { schema: { properties: { segments: { items: { required: string[] } } } } }
+        json_schema: {
+          schema: {
+            properties: {
+              segments: { items: { required: string[]; properties: Record<string, unknown> } }
+            }
+          }
+        }
       }
     ).json_schema.schema
     expect(schema.properties.segments.items.required).toEqual(
-      expect.arrayContaining(['source_passage_id', 'source_start', 'source_end', 'source_text']),
+      expect.arrayContaining(['source_passage_id', 'source_text']),
     )
+    expect(schema.properties.segments.items.properties).not.toHaveProperty('source_start')
+    expect(schema.properties.segments.items.properties).not.toHaveProperty('source_end')
     const messages = captured.body.messages as Array<{ role: string; content: string }>
     const userInput = JSON.parse(
       messages.find((message) => message.role === 'user')?.content ?? '{}',
@@ -842,31 +848,31 @@ describe('deterministic split-fragment validation', () => {
 
   it.each([
     {
-      name: 'gap',
+      name: 'text omission',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments[1] = wireSegment('passage-001', 7, 12, 'Run!”', {
           kind: 'dialogue',
           speaker_id: 'mira',
         })
       },
-      code: 'gap',
+      code: 'text_omission',
     },
     {
-      name: 'overlap',
+      name: 'text duplication',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments[1] = wireSegment('passage-001', 5, 12, ' “Run!”', {
           kind: 'dialogue',
           speaker_id: 'mira',
         })
       },
-      code: 'overlap',
+      code: 'text_duplication',
     },
     {
-      name: 'duplicate range',
+      name: 'duplicate fragment',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments.splice(1, 0, wireSegment('passage-001', 0, 6, 'Rain. '))
       },
-      code: 'duplicate',
+      code: 'text_duplication',
     },
     {
       name: 'passage reorder',
@@ -875,28 +881,28 @@ describe('deterministic split-fragment validation', () => {
         if (final === undefined) throw new Error('Missing final fixture segment')
         output.segments.unshift(final)
       },
-      code: 'reorder',
+      code: 'passage_reorder',
     },
     {
-      name: 'invented passage',
+      name: 'unknown passage',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments[2] = wireSegment('passage-invented', 0, 6, 'Made up')
       },
-      code: 'invention',
+      code: 'unknown_passage',
     },
     {
       name: 'omitted passage',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments.pop()
       },
-      code: 'omission',
+      code: 'text_omission',
     },
     {
       name: 'rewritten fragment',
       mutate: (output: ReturnType<typeof validWireOutput>) => {
         output.segments[0] = wireSegment('passage-001', 0, 6, 'Storm ')
       },
-      code: 'text_mismatch',
+      code: 'text_substitution',
     },
   ])('rejects $name', ({ mutate, code }) => {
     const output = validWireOutput()
