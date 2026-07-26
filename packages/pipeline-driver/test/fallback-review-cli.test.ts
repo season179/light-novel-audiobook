@@ -254,6 +254,51 @@ describe('fallback review CLI', () => {
     expect(catalog.approvals[0]?.decidedBy).toBe('Ada Lovelace')
   })
 
+  it('announces the attributed decision before any durable approval write', async () => {
+    const { root, book } = await preparedWorkspace('job-announcement-order')
+
+    await expect(
+      runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-announcement-order',
+        resolveReviewer: () => 'Synthetic Announcing Reviewer',
+        announceApproval: () => {
+          throw new Error('synthetic announcement interruption')
+        },
+      }),
+    ).rejects.toThrow('synthetic announcement interruption')
+
+    const database = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(database).readCatalog(book.id)
+    database.close()
+    expect(catalog.grant).toBeUndefined()
+    expect(catalog.approvals).toEqual([])
+  })
+
+  it('refuses a repeated bulk command when no pending decision remains', async () => {
+    const { root, book } = await preparedWorkspace('job-no-pending-fallbacks')
+    const request = {
+      action: 'approve' as const,
+      workspaceRoot: root,
+      jobId: 'job-no-pending-fallbacks',
+      resolveReviewer: () => 'Synthetic Repeat Reviewer',
+    }
+    await runFallbackReviewCommand(request)
+    const beforeDatabase = openWorkspace(layoutFor(root))
+    const before = await new SqliteFallbackApprovalRepository(beforeDatabase).readCatalog(book.id)
+    beforeDatabase.close()
+
+    await expect(runFallbackReviewCommand(request)).rejects.toThrow(
+      'no pending fallback decisions to approve',
+    )
+
+    const afterDatabase = openWorkspace(layoutFor(root))
+    const after = await new SqliteFallbackApprovalRepository(afterDatabase).readCatalog(book.id)
+    afterDatabase.close()
+    expect(after).toEqual(before)
+  })
+
   it('carries the default resolver actor from the environment into notice, report and SQLite', async () => {
     const { root, book } = await preparedWorkspace('job-default-reviewer')
     const previous = process.env.LNA_REVIEWER
