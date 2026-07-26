@@ -20,19 +20,10 @@ const requestFor = (...passages: readonly string[]): DirectionRequest => ({
   fallbackSpeakerId: 'fallback',
 })
 
-const segment = (
-  sourcePassageId: string,
-  sourceText: string,
-  sourceStart = 999,
-  sourceEnd = 1,
-) => ({
+const segment = (sourcePassageId: string, sourceText: string) => ({
   source_passage_id: sourcePassageId,
-  // Legacy @2 fields are deliberately wrong. They are model arithmetic, not source authority.
-  source_start: sourceStart,
-  source_end: sourceEnd,
   source_text: sourceText,
   kind: 'narration' as const,
-  speaker_id: 'narrator',
   confidence: 1,
   delivery: {
     emotion: 'neutral' as const,
@@ -40,8 +31,6 @@ const segment = (
     volume: 'normal' as const,
     pause_after_ms: 0,
   },
-  unresolved_speaker: false,
-  speaker_reason: null,
 })
 
 const findingCodes = (run: () => unknown): readonly string[] => {
@@ -55,10 +44,10 @@ const findingCodes = (run: () => unknown): readonly string[] => {
 }
 
 describe('deterministic source ranges', () => {
-  it('ignores wrong model offsets and derives the range from exact immutable text', () => {
+  it('derives the range from exact immutable text without model offsets', () => {
     const request = requestFor('Alpha beta.')
     const validated = validateDirectionOutput(
-      { segments: [segment('passage-1', 'Alpha beta.', 0, 3)] },
+      { segments: [segment('passage-1', 'Alpha beta.')] },
       request,
       0.5,
     )
@@ -138,7 +127,7 @@ describe('deterministic source ranges', () => {
     const request = requestFor('Echo Echo')
     const validated = validateDirectionOutput(
       {
-        segments: [segment('passage-1', 'Echo ', 20, 2), segment('passage-1', 'Echo', 0, 99)],
+        segments: [segment('passage-1', 'Echo '), segment('passage-1', 'Echo')],
       },
       request,
       0.5,
@@ -161,7 +150,7 @@ describe('deterministic source ranges', () => {
     const request = requestFor(text)
     const valid = validateDirectionOutput(
       {
-        segments: [segment('passage-1', 'A\u{1f600}', 7, 1), segment('passage-1', 'B', 0, 50)],
+        segments: [segment('passage-1', 'A\u{1f600}'), segment('passage-1', 'B')],
       },
       request,
       0.5,

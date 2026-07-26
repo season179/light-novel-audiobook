@@ -193,11 +193,10 @@ function wireSegment(
   text: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return {
+  const item: Record<string, unknown> = {
     source_passage_id: id,
     source_text: text,
     kind: 'narration',
-    speaker_id: 'narrator',
     confidence: 0.98,
     delivery: {
       emotion: 'calm',
@@ -205,10 +204,18 @@ function wireSegment(
       volume: 'normal',
       pause_after_ms: 250,
     },
-    unresolved_speaker: false,
-    speaker_reason: null,
     ...overrides,
   }
+  const kind = item.kind
+  if (kind === 'narration' || kind === 'sound_cue') {
+    delete item.speaker_id
+    delete item.speaker_reason
+  } else {
+    if (item.unresolved_speaker === true) item.speaker_id = null
+    if (!('speaker_reason' in item)) item.speaker_reason = null
+  }
+  delete item.unresolved_speaker
+  return item
 }
 
 function validWireOutput(): { segments: Array<Record<string, unknown>> } {
@@ -414,9 +421,9 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
         revision: SELECTED_GEMMA_PROFILE.revision,
         sha256: SELECTED_GEMMA_PROFILE.sha256,
       },
-      prompt: { version: 'gemma-director@3', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      prompt: { version: 'gemma-director@4', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
       outputSchema: {
-        version: 'gemma-direction-output@3',
+        version: 'gemma-direction-output@4',
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
       runtime: {
@@ -463,21 +470,16 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       },
     })
     const schema = (
-      captured.body.response_format as {
-        json_schema: {
-          schema: {
-            properties: {
-              segments: { items: { required: string[]; properties: Record<string, unknown> } }
-            }
-          }
-        }
-      }
+      captured.body.response_format as { json_schema: { schema: Record<string, unknown> } }
     ).json_schema.schema
-    expect(schema.properties.segments.items.required).toEqual(
-      expect.arrayContaining(['source_passage_id', 'source_text']),
-    )
-    expect(schema.properties.segments.items.properties).not.toHaveProperty('source_start')
-    expect(schema.properties.segments.items.properties).not.toHaveProperty('source_end')
+    const schemaText = JSON.stringify(schema)
+    expect(schemaText).toContain('source_passage_id')
+    expect(schemaText).toContain('source_text')
+    expect(schemaText).not.toContain('source_start')
+    expect(schemaText).not.toContain('source_end')
+    expect(schemaText).not.toContain('unresolved_speaker')
+    expect(schemaText).not.toContain(validationRequest.narratorSpeakerId)
+    expect(schemaText).not.toContain(validationRequest.fallbackSpeakerId)
     const messages = captured.body.messages as Array<{ role: string; content: string }>
     const userInput = JSON.parse(
       messages.find((message) => message.role === 'user')?.content ?? '{}',
@@ -486,6 +488,8 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       { source_passage_id: 'passage-001', source_text: 'Rain. “Run!”' },
       { source_passage_id: 'passage-002', source_text: '“Who?”' },
     ])
+    expect(userInput).not.toHaveProperty('narrator_speaker_id')
+    expect(userInput).not.toHaveProperty('fallback_speaker_id')
     expect(messages.find((message) => message.role === 'system')?.content).toContain(
       'one or more ordered fragments',
     )
@@ -793,10 +797,10 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     if (narration === undefined || cue === undefined) throw new Error('Missing fixture segments')
     narration.confidence = 0
     cue.kind = 'sound_cue'
-    cue.speaker_id = 'narrator'
+    delete cue.speaker_id
     cue.confidence = 0.1
-    cue.unresolved_speaker = false
-    cue.speaker_reason = null
+    delete cue.unresolved_speaker
+    delete cue.speaker_reason
     server.respondWith(output)
     const book = makeBook()
     const { model } = create()
@@ -933,14 +937,14 @@ describe('deterministic split-fragment validation', () => {
     throw new Error('Expected deterministic validation failure')
   })
 
-  it('rejects invented speakers and inconsistent fallback semantics', () => {
+  it('rejects invented and special-role dialogue speakers at the schema boundary', () => {
     const output = validWireOutput()
     output.segments[1] = wireSegment('passage-001', 6, 12, '“Run!”', {
       kind: 'dialogue',
       speaker_id: 'invented-character',
     })
     expect(() => validateDirectionOutput(output, validationRequest, CONFIDENCE_THRESHOLD)).toThrow(
-      DirectorFidelityError,
+      DirectorError,
     )
 
     output.segments[1] = wireSegment('passage-001', 6, 12, '“Run!”', {
@@ -948,7 +952,7 @@ describe('deterministic split-fragment validation', () => {
       speaker_id: 'fallback-dialogue',
     })
     expect(() => validateDirectionOutput(output, validationRequest, CONFIDENCE_THRESHOLD)).toThrow(
-      DirectorFidelityError,
+      DirectorError,
     )
 
     output.segments[1] = wireSegment('passage-001', 6, 12, '“Run!”', {
@@ -956,7 +960,7 @@ describe('deterministic split-fragment validation', () => {
       speaker_id: 'narrator',
     })
     expect(() => validateDirectionOutput(output, validationRequest, CONFIDENCE_THRESHOLD)).toThrow(
-      DirectorFidelityError,
+      DirectorError,
     )
   })
 

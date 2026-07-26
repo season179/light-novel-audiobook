@@ -8,7 +8,7 @@ import {
   GEMMA_DIRECTOR_SYSTEM_PROMPT,
   SELECTED_GEMMA_PROFILE,
 } from './profile.js'
-import { directionWireOutputSchema } from './schema.js'
+import { directionWireOutputIdentitySchema } from './schema.js'
 
 export const GEMMA_DIRECTOR_IDENTITY_SCHEMA = 'gemma-director-identity@1'
 export const GPU_LEASE_PROTOCOL = 'flock-exclusive-nonblock@1'
@@ -48,7 +48,7 @@ export function gemmaDirectorIdentityMaterial(settings: GemmaDirectorIdentitySet
     },
     outputSchema: {
       version: GEMMA_DIRECTOR_SCHEMA_VERSION,
-      sha256: canonicalSha256(z.toJSONSchema(directionWireOutputSchema)),
+      sha256: canonicalSha256(z.toJSONSchema(directionWireOutputIdentitySchema)),
     },
     runtime: {
       provider: 'llama.cpp',

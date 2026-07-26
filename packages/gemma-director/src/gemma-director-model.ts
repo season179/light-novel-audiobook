@@ -46,7 +46,7 @@ import {
 } from './profile.js'
 import {
   type DirectionWireOutput,
-  directionWireOutputSchema,
+  directionWireOutputSchemaFor,
   parseDirectionRequest,
 } from './schema.js'
 import { type ValidatedDirection, validateDirectionOutput } from './validation.js'
@@ -770,11 +770,12 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         defaultHeaders: { connection: 'close' },
         fetch: this.fetchImplementation,
       })
+      const outputSchema = directionWireOutputSchemaFor(request)
       const stream = chat({
         adapter,
         messages: requestPayload.messages,
         systemPrompts: requestPayload.systemPrompts,
-        outputSchema: directionWireOutputSchema,
+        outputSchema,
         stream: true,
         abortController: control.controller,
         debug: false,
@@ -830,7 +831,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
           throw event
         }
         if (event.type === 'CUSTOM' && event.name === 'structured-output.complete') {
-          output = directionWireOutputSchema.parse(event.value.object)
+          output = outputSchema.parse(event.value.object) as DirectionWireOutput
         }
       }
       if (control.controller.signal.aborted) {
@@ -875,8 +876,6 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         title: request.chapterTitle,
       },
       story_context: request.storyContext ?? '',
-      narrator_speaker_id: request.narratorSpeakerId,
-      fallback_speaker_id: request.fallbackSpeakerId,
       speakers: request.speakers.map((speaker) => ({
         speaker_id: speaker.id,
         aliases: speaker.aliases,

@@ -137,7 +137,6 @@ export class OracleLlamaServer {
               source_passage_id: passage.source_passage_id,
               source_text: passage.source_text.slice(fragment.start, fragment.end),
               kind: fragment.kind,
-              speaker_id: fragment.speaker,
               confidence: fragment.confidence,
               delivery: {
                 emotion: 'calm',
@@ -145,8 +144,11 @@ export class OracleLlamaServer {
                 volume: 'normal',
                 pause_after_ms: 200,
               },
-              unresolved_speaker: fragment.unresolved,
-              speaker_reason: fragment.unresolved ? 'Not identified in context.' : null,
+              ...(fragment.kind === 'narration' || fragment.kind === 'sound_cue'
+                ? {}
+                : fragment.unresolved
+                  ? { speaker_id: null, speaker_reason: 'Not identified in context.' }
+                  : { speaker_id: fragment.speaker, speaker_reason: null }),
             }))
           }),
         })

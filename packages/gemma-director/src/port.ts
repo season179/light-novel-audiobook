@@ -72,8 +72,6 @@ export interface DirectedAnnotation extends DomainDirectedSegment {
   readonly sourceStart: number
   readonly sourceEnd: number
   readonly speakerId: string
-  readonly unresolvedSpeaker: boolean
-  readonly speakerReason: string | null
 }
 
 export type DirectorWarningCode =

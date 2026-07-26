@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { DIRECTOR_SEGMENT_KINDS, type DirectionRequest } from './port.js'
+import type { DIRECTOR_SEGMENT_KINDS, DirectionRequest } from './port.js'
 
 const opaqueIdSchema = z.string().min(1).max(256)
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
@@ -39,56 +39,133 @@ const deliverySchema = z.strictObject({
   pause_after_ms: z.int().min(0).max(10_000),
 })
 
-const directedWireContentShape = {
+const directedWireBaseShape = {
   source_passage_id: opaqueIdSchema,
   source_text: z.string().min(1),
-  kind: z.enum(DIRECTOR_SEGMENT_KINDS),
-  speaker_id: opaqueIdSchema,
   confidence: z.number().min(0).max(1),
   delivery: deliverySchema,
-  unresolved_speaker: z.boolean(),
-  speaker_reason: z.string().min(1).max(240).nullable(),
 } as const
 
+const narratorOwnedWireSegmentSchema = z.strictObject({
+  ...directedWireBaseShape,
+  kind: z.enum(['narration', 'sound_cue']),
+})
+
+const unresolvedWireSegmentSchema = z.strictObject({
+  ...directedWireBaseShape,
+  kind: z.enum(['dialogue', 'thought', 'message']),
+  speaker_id: z.null(),
+  speaker_reason: z.string().min(1).max(240),
+})
+
+const resolvedWireSegmentSchemaFor = (speakerIds: readonly string[]) =>
+  z.strictObject({
+    ...directedWireBaseShape,
+    kind: z.enum(['dialogue', 'thought', 'message']),
+    speaker_id: z.enum(speakerIds as [string, ...string[]]),
+    speaker_reason: z.null(),
+  })
+
 /**
- * The model classifies exact fragments; it does not calculate source coordinates. Range arithmetic is
- * derived deterministically after validation, because JSON schema can constrain an integer's shape but
- * cannot make an LLM count UTF-16 code units correctly.
+ * Builds the exact provider schema for one request.
+ *
+ * Narrator/fallback roles are deliberately absent from the model's choices. Narrator ownership is
+ * derived from kind; unresolved character-bearing content is represented by `speaker_id: null` and
+ * a required reason. With an empty roster, the resolved branch does not exist in the JSON schema.
  */
-export const directedWireSegmentSchema = z.strictObject(directedWireContentShape)
+export function directionWireOutputSchemaFor(request: DirectionRequest) {
+  const speakerIds = request.speakers.map((speaker) => speaker.id)
+  if (
+    new Set(speakerIds).size !== speakerIds.length ||
+    speakerIds.includes(request.narratorSpeakerId) ||
+    speakerIds.includes(request.fallbackSpeakerId)
+  ) {
+    throw new Error('Direction output schema requires distinct character-only speaker IDs')
+  }
+  const segmentSchema =
+    speakerIds.length === 0
+      ? z.union([narratorOwnedWireSegmentSchema, unresolvedWireSegmentSchema])
+      : z.union([
+          narratorOwnedWireSegmentSchema,
+          unresolvedWireSegmentSchema,
+          resolvedWireSegmentSchemaFor(speakerIds),
+        ])
+  return z.strictObject({ segments: z.array(segmentSchema).min(1) })
+}
 
-export const directionWireOutputSchema = z.strictObject({
-  segments: z.array(directedWireSegmentSchema).min(1),
-})
+export type NarratorOwnedWireSegment = z.infer<typeof narratorOwnedWireSegmentSchema>
+export type UnresolvedWireSegment = z.infer<typeof unresolvedWireSegmentSchema>
+export type ResolvedWireSegment = z.infer<ReturnType<typeof resolvedWireSegmentSchemaFor>>
+export type ModelDirectedWireSegment =
+  | NarratorOwnedWireSegment
+  | UnresolvedWireSegment
+  | ResolvedWireSegment
+export interface DirectionWireOutput {
+  readonly segments: readonly ModelDirectedWireSegment[]
+}
+
+/** Internal semantic form. Every role here was derived or admitted by the request-specific schema. */
+export interface DirectedWireSegment {
+  readonly source_passage_id: string
+  readonly source_text: string
+  readonly kind: (typeof DIRECTOR_SEGMENT_KINDS)[number]
+  readonly speaker_id: string
+  readonly confidence: number
+  readonly delivery: z.infer<typeof deliverySchema>
+  readonly unresolved_speaker: boolean
+  readonly speaker_reason: string | null
+}
+
+export interface NormalizedDirectionWireOutput {
+  readonly segments: readonly DirectedWireSegment[]
+}
 
 /**
- * Read compatibility for captured `gemma-direction-output@2` responses. The two coordinates are
- * accepted only by `validateDirectionOutput`; they are stripped and never become source authority.
- * New provider requests use `directionWireOutputSchema`, whose JSON schema contains neither field.
+ * Parses model output through the request-specific schema and derives the two special speaker roles.
+ * This is a clean @4 boundary: old role-ID/boolean wire objects are intentionally rejected.
  */
-const legacyDirectedWireSegmentSchema = z.strictObject({
-  ...directedWireContentShape,
-  source_start: z.int().min(0),
-  source_end: z.int().min(1),
-})
-const legacyDirectionWireOutputSchema = z.strictObject({
-  segments: z.array(legacyDirectedWireSegmentSchema).min(1),
-})
-
-export type DirectionWireOutput = z.infer<typeof directionWireOutputSchema>
-export type DirectedWireSegment = z.infer<typeof directedWireSegmentSchema>
-
-export function parseDirectionOutputForValidation(input: unknown): DirectionWireOutput {
-  const current = directionWireOutputSchema.safeParse(input)
-  if (current.success) return current.data
-  const legacy = legacyDirectionWireOutputSchema.safeParse(input)
-  if (!legacy.success) throw current.error
+export function parseDirectionOutputForValidation(
+  input: unknown,
+  request: DirectionRequest,
+): NormalizedDirectionWireOutput {
+  const parsed = directionWireOutputSchemaFor(request).parse(input) as DirectionWireOutput
   return {
-    segments: legacy.data.segments.map(
-      ({ source_start: _start, source_end: _end, ...item }) => item,
-    ),
+    segments: parsed.segments.map((item): DirectedWireSegment => {
+      if (!('speaker_id' in item)) {
+        return {
+          ...item,
+          speaker_id: request.narratorSpeakerId,
+          unresolved_speaker: false,
+          speaker_reason: null,
+        }
+      }
+      if (item.speaker_id === null) {
+        return {
+          ...item,
+          speaker_id: request.fallbackSpeakerId,
+          unresolved_speaker: true,
+        }
+      }
+      return { ...item, unresolved_speaker: false }
+    }),
   }
 }
+
+/** Representative policy schema used only for stable adapter-identity hashing. */
+export const directionWireOutputIdentitySchema = directionWireOutputSchemaFor({
+  requestId: 'identity-request',
+  bookId: 'identity-book',
+  bookTitle: 'Identity Book',
+  bookAuthor: null,
+  bookSourceSha256: '0'.repeat(64),
+  chapterId: 'identity-chapter',
+  chapterPosition: 1,
+  chapterTitle: 'Identity Chapter',
+  passages: [{ id: 'identity-passage', text: 'Identity text.' }],
+  speakers: [{ id: 'request-character-speaker-id', aliases: [] }],
+  narratorSpeakerId: 'adapter-derived-narrator-role',
+  fallbackSpeakerId: 'adapter-derived-fallback-role',
+})
 
 /** Rejects duplicate input identities before any private text reaches the model endpoint. */
 export function parseDirectionRequest(input: unknown): DirectionRequest {

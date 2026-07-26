@@ -119,11 +119,10 @@ interface WireSegment {
   source_passage_id: string
   source_text: string
   kind: string
-  speaker_id: string
+  speaker_id?: string | null
   confidence: number
   delivery: { emotion: string; pace: string; volume: string; pause_after_ms: number }
-  unresolved_speaker: boolean
-  speaker_reason: string | null
+  speaker_reason?: string | null
 }
 
 function wireOutput(
@@ -138,11 +137,13 @@ function wireOutput(
         source_passage_id: id,
         source_text: text.slice(fragment.start, fragment.end),
         kind: fragment.kind,
-        speaker_id: fragment.speaker,
         confidence: fragment.confidence,
         delivery: { emotion: 'calm', pace: 'normal', volume: 'normal', pause_after_ms: 200 },
-        unresolved_speaker: fragment.unresolved,
-        speaker_reason: fragment.unresolved ? 'Not identified in context.' : null,
+        ...(fragment.kind === 'narration' || fragment.kind === 'sound_cue'
+          ? {}
+          : fragment.unresolved
+            ? { speaker_id: null, speaker_reason: 'Not identified in context.' }
+            : { speaker_id: fragment.speaker, speaker_reason: null }),
       }))
     }),
   }

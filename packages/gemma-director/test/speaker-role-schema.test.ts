@@ -1,10 +1,7 @@
-import type { DirectionRequest } from '../src/port.js'
-import {
-  directionWireOutputSchemaFor,
-  parseDirectionOutputForValidation,
-} from '../src/schema.js'
-import { validateDirectionOutput } from '../src/validation.js'
 import { describe, expect, it } from 'vitest'
+import type { DirectionRequest } from '../src/port.js'
+import { directionWireOutputSchemaFor, parseDirectionOutputForValidation } from '../src/schema.js'
+import { validateDirectionOutput } from '../src/validation.js'
 
 const request = (speakerIds: readonly string[]): DirectionRequest => ({
   requestId: 'speaker-schema-request',
@@ -96,9 +93,7 @@ describe('request-specific speaker role schema', () => {
     ).toBe(false)
     expect(
       schema.safeParse({
-        segments: [
-          { ...common, kind: 'dialogue', speaker_id: 'mira', speaker_reason: null },
-        ],
+        segments: [{ ...common, kind: 'dialogue', speaker_id: 'mira', speaker_reason: null }],
       }).success,
     ).toBe(true)
   })
@@ -119,12 +114,12 @@ describe('request-specific speaker role schema', () => {
         ],
       }).success,
     ).toBe(false)
-    expect(parseDirectionOutputForValidation(narration, request(['mira'])).segments[0]).toMatchObject(
-      {
-        speaker_id: 'narrator-role',
-        unresolved_speaker: false,
-      },
-    )
+    expect(
+      parseDirectionOutputForValidation(narration, request(['mira'])).segments[0],
+    ).toMatchObject({
+      speaker_id: 'narrator-role',
+      unresolved_speaker: false,
+    })
   })
 
   it('requires a non-empty reason for unresolved character-bearing content', () => {
