@@ -2,8 +2,9 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { FileGpuLeaseCoordinator, type GpuLease } from '../src/index.js'
+import { clearOwnEntries, reapOrphanedHolders, registerHolder } from './fixture-reaper.js'
 
 const roots: string[] = []
 const children: ChildProcess[] = []
@@ -293,6 +294,9 @@ async function reapDetachedHolderGroups(): Promise<void> {
     } catch {
       // Already gone, which is the expected outcome of a clean test.
     }
+    // Register in the durable registry so a SIGINT-interrupted run can be reaped next time.
+    const rootForEntry = roots.find((r) => r.length > 0)
+    if (rootForEntry !== undefined) await registerHolder(pid, rootForEntry).catch(() => undefined)
   }
 }
 
@@ -331,7 +335,17 @@ afterEach(async () => {
   // Catch holders no array tracks: a test that fails or times out before release leaves a
   // coordinator-spawned holder alive, so reap every detached group leader this process parented.
   await reapDetachedHolderGroups()
+  // Clear this run's own entries from the durable registry: afterEach reaped them in-process.
+  await clearOwnEntries().catch(() => undefined)
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
+})
+
+// Reap orphans left by a previous run that was interrupted by SIGINT (Ctrl-C). afterEach never
+// runs on SIGINT, so the deliberately-unkillable fixture holders survive as orphans. The durable
+// registry proves ownership via PID + start time (PIDs recycle), so concurrent live runs are
+// never touched. This runs once before the suite.
+beforeAll(async () => {
+  await reapOrphanedHolders().catch(() => undefined)
 })
 
 describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name', ({ base }) => {
