@@ -8,6 +8,8 @@ export interface VoiceProfileProps {
   readonly displayName: string
   readonly role: VoiceRole
   readonly speakerId: string | null
+  /** Canonical names the director may use to identify this character. Never positional metadata. */
+  readonly speakerAliases?: readonly string[] | undefined
   /** Adapter-facing built-in synthetic speaker name, not a provider model ID. */
   readonly syntheticSpeaker: string
   readonly instruction: string
@@ -21,6 +23,7 @@ export class VoiceProfile {
   readonly displayName: string
   readonly role: VoiceRole
   readonly speakerId: string | null
+  readonly speakerAliases: readonly string[]
   readonly syntheticSpeaker: string
   readonly instruction: string
   readonly seed: number
@@ -48,11 +51,23 @@ export class VoiceProfile {
     if (props.role !== 'character' && props.speakerId !== null) {
       throw new DomainError('Narrator and fallback voices cannot name a character speaker')
     }
+    const aliases = props.speakerAliases ?? []
+    if (props.role !== 'character' && aliases.length > 0) {
+      throw new DomainError('Narrator and fallback voices cannot carry character aliases')
+    }
+    const normalizedAliases = aliases.map((alias) => alias.trim())
+    if (
+      normalizedAliases.some((alias) => alias.length === 0 || alias.length > 256) ||
+      new Set(normalizedAliases).size !== normalizedAliases.length
+    ) {
+      throw new DomainError('Character voice aliases must be non-empty, bounded, and unique')
+    }
 
     this.id = props.id
     this.displayName = props.displayName
     this.role = props.role
     this.speakerId = props.speakerId
+    this.speakerAliases = Object.freeze(normalizedAliases)
     this.syntheticSpeaker = props.syntheticSpeaker
     this.instruction = props.instruction
     this.seed = props.seed
@@ -148,7 +163,11 @@ export class VoiceCast {
   get generationIdentity(): string {
     const characters = [...this.profilesBySpeaker.entries()]
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([speakerId, profile]) => [speakerId, profile.renderIdentity])
+      .map(([speakerId, profile]) => [
+        speakerId,
+        profile.renderIdentity,
+        [...profile.speakerAliases].sort(),
+      ])
     return JSON.stringify({
       narrator: this.narrator.renderIdentity,
       fallback: this.fallback.renderIdentity,

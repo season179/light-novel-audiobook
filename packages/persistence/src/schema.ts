@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withTransaction } from './transaction.js'
 
-export const SCHEMA_VERSION = 4 satisfies number
+export const SCHEMA_VERSION = 5 satisfies number
 
 const migrations = new Map<number, string>()
 
@@ -215,6 +215,24 @@ migrations.set(
   DELETE FROM fallback_book_grants;
   ALTER TABLE fallback_book_grants
     ADD COLUMN subjects_json TEXT NOT NULL DEFAULT '[]';
+`,
+)
+
+migrations.set(
+  5,
+  `
+  -- Issue #83. One active, human-approved cast per exact EPUB. The assignments JSON may contain
+  -- private character names/aliases, so it belongs in the gitignored workspace database beside the
+  -- approved script, never in repository configuration or logs.
+  CREATE TABLE cast_approvals (
+    epub_sha256 TEXT PRIMARY KEY NOT NULL,
+    book_id TEXT NOT NULL,
+    assignments_json TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    approval_id TEXT NOT NULL,
+    approval_sha256 TEXT NOT NULL
+  );
 `,
 )
 
