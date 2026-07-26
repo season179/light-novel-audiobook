@@ -401,6 +401,23 @@ const listFilesRecursive = async (directory, suffix) => {
   return found.sort()
 }
 
+/** Refuses both vacuous boundaries of a restart proof, and malformed counters. */
+const assertMidRenderStop = (completed, total) => {
+  if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total) || total <= 0) {
+    fail(`forced stop: invalid segment counts ${String(completed)}/${String(total)}`)
+  }
+  if (completed === 0) {
+    fail('forced stop: no segment completed before the stop; there is nothing to reuse')
+  }
+  if (completed >= total) {
+    fail('forced stop: every segment completed before the stop; not a mid-render stop')
+  }
+}
+
+/** A same-byte rewrite is still a re-render; mtime makes that observable in the fake proof. */
+const artifactSnapshotUnchanged = (before, after) =>
+  before.sha256 === after.sha256 && before.mtimeMs === after.mtimeMs
+
 // ------------------------------------------------------------------ step 6: forced stop (fake)
 
 /**
@@ -450,12 +467,7 @@ const fakeForcedStop = async (config, client, jobId, armed, remainingMs) => {
       before.set(entry, { sha256: await sha256File(full), mtimeMs: stats.mtimeMs })
     }
   }
-  if (before.size === 0) {
-    fail('forced stop: no segment completed before the stop; there is nothing to reuse')
-  }
-  if (before.size >= stopped.totalSegments) {
-    fail('forced stop: every segment completed before the stop; not a mid-render stop')
-  }
+  assertMidRenderStop(before.size, stopped.totalSegments)
   log(
     `[step 6] render stopped at ${before.size}/${stopped.totalSegments} segments ` +
       `(job state: ${stopped.state})`,
@@ -492,7 +504,7 @@ const fakeForcedStop = async (config, client, jobId, armed, remainingMs) => {
     const full = path.join(armed.segmentsDir, name)
     const stats = await stat(full)
     const now = { sha256: await sha256File(full), mtimeMs: stats.mtimeMs }
-    if (now.sha256 === previous.sha256 && now.mtimeMs === previous.mtimeMs) reused += 1
+    if (artifactSnapshotUnchanged(previous, now)) reused += 1
     else rerendered.push(name)
   }
   const after = (await readdir(armed.segmentsDir)).filter((entry) => entry.endsWith('.wav'))
@@ -600,9 +612,7 @@ const realForcedStop = async (config, serverRef, clientRef, jobId, baseUrl, rema
   const artifactsAtKill = readArtifacts(db)
   const scriptAtKill = scriptDigest(db)
   db.close()
-  if (artifactsAtKill.length === 0) {
-    fail('forced stop: no completed segment artifacts at kill time')
-  }
+  assertMidRenderStop(artifactsAtKill.length, killView.totalSegments)
   log(
     `[step 6] database at kill: state=running, ${artifactsAtKill.length} completed segment artifact(s)`,
   )
@@ -959,15 +969,21 @@ const main = async () => {
   const serverRef = { current: startDevServer(childEnv, serverLog, config.port) }
   const clientRef = { current: undefined }
   const cleanup = async () => {
-    await stopDevServer(serverRef.current).catch(() => undefined)
+    await stopDevServer(serverRef.current)
   }
   process.on('SIGINT', async () => {
-    await cleanup()
-    process.exit(130)
+    try {
+      await cleanup()
+    } finally {
+      process.exit(130)
+    }
   })
   process.on('SIGTERM', async () => {
-    await cleanup()
-    process.exit(143)
+    try {
+      await cleanup()
+    } finally {
+      process.exit(143)
+    }
   })
 
   const evidence = {
@@ -1115,13 +1131,16 @@ const main = async () => {
     const evidencePath = await writeEvidence(options.evidence, mode, evidence)
     log(`[step 7] evidence written: ${evidencePath}`)
     log(`workspace (uploads, segment audio, outputs) kept at: ${config.workspace}`)
-    log('PROOF GREEN: all seven steps completed')
   } finally {
     await cleanup()
   }
+  // Cleanup is part of success: a proof that leaves its server (or model children) behind is red.
+  log('PROOF GREEN: all seven steps completed')
 }
 
 export {
+  artifactSnapshotUnchanged,
+  assertMidRenderStop,
   createServerFnClient,
   discoverServerFunctions,
   loadSeroval,
@@ -1131,6 +1150,7 @@ export {
   runPreflight,
   startDevServer,
   stopDevServer,
+  verifyOutput,
   waitForHttp,
 }
 

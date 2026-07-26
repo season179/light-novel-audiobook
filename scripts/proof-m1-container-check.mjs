@@ -31,6 +31,9 @@ const finiteMs = (value, label) => {
  */
 export const assertContainerProbe = (probe, expectations) => {
   const { expectedChapters, expectCover, expectCreator } = expectations
+  if (!Number.isSafeInteger(expectedChapters) || expectedChapters <= 0) {
+    fail(`expected chapter count must be positive, got ${String(expectedChapters)}`)
+  }
   const streams = Array.isArray(probe?.streams) ? probe.streams : []
   const audio = streams.find((stream) => stream.codec_type === 'audio')
   if (audio === undefined) fail('the M4B has no audio stream')
@@ -49,10 +52,10 @@ export const assertContainerProbe = (probe, expectations) => {
   const durationMs = finiteMs(probe?.format?.duration, 'container duration')
   let cursor = 0
   for (const [index, marker] of markers.entries()) {
-    if (marker.startMs < cursor || marker.endMs <= marker.startMs) {
+    if (marker.startMs !== cursor || marker.endMs <= marker.startMs) {
       fail(
         `chapter marker ${index + 1} spans ${marker.startMs}..${marker.endMs}ms, ` +
-          'not an ordered positive span',
+          `not a contiguous positive span beginning at ${cursor}ms`,
       )
     }
     cursor = marker.endMs
