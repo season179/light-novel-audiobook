@@ -13,8 +13,10 @@ pnpm --filter @light-novel-audiobook/web dev   # http://localhost:3000
 | --- | --- |
 | `src/server/audiobook-web-api.ts` | The whole local API surface. Depends on the application ports only. |
 | `src/server/composition-root.ts` | The single place adapters are chosen and injected. |
+| `src/server/environment-composition.ts` | `LNA_WEB_TRANSPORTS` mode selection and real-mode environment resolution (#21). |
+| `src/server/real-adapter-factories.ts` | Builds the real adapter factories over a caller-supplied transport set (#21). |
 | `src/server/generation-runner.ts` | Runs generation outside the request, one run at a time. |
-| `src/server/fakes/` | Offline fake adapters — no GPU, no models. Replaced by the real ones in #21. |
+| `src/server/fakes/` | Offline fake adapters — no GPU, no models. The default; the real ones are selected explicitly (#21). |
 | `src/api/audiobook-server-fns.ts` | TanStack Start server functions; thin wrappers over the API. |
 | `src/routes/api.jobs.*` | Server routes that stream generated audio and the M4B. |
 | `src/client/audiobook-client.ts` | The interface pages depend on, so components never know the transport. |
@@ -30,8 +32,9 @@ import { createAudiobookWebApi } from './server/composition-root.js'
 
 const api = await createAudiobookWebApi({
   createEpubExtractor: () => sharedExtractor,          // may be shared
-  createDirectorModel: () => new GemmaDirectorModel(config),  // MUST be fresh per run, and lazy
-  directorIdentity: createGemmaDirectorIdentity(config),      // from config, never from a live model
+  // MUST be fresh per run and lazy, wrapped in the content identity (issue #54)
+  createDirectorModel: () => withDirectorContentIdentity(new GemmaDirectorModel(config), contentIdentity),
+  directorIdentity: contentIdentity,  // createDirectorContentIdentity(config): pure config, never a live model
   speechEngineFactory: createQwenSpeechEngineFactory(sharedQwenEngine), // built per book, post-review
   approvals: new SqliteFallbackApprovalRepository(db),  // shared: the review ledger
   createAudioAssembler: () => sharedFfmpegAssembler,   // may be shared
@@ -169,6 +172,51 @@ verified when it is served; `AudiobookOutput` carries no hashes today, so that i
 EPUBs, segment WAVs, and exports live outside the repository, by default in
 `~/.local/share/light-novel-audiobook/workspace`. Override it with `AUDIOBOOK_WORKSPACE_DIR`. A path
 inside the repository is refused, and so is one that only *resolves* inside it through a symlink.
+
+## Real adapters (#21)
+
+Adapters are selected by `LNA_WEB_TRANSPORTS=fake|real`, and **`fake` is the default**: CI has no
+GPU, no model weights, and no ffmpeg guarantees beyond the pinned toolchain, so a default that
+loads Gemma would break every test in the repo. `pnpm dev` without the variable is exactly the
+fake app it has always been.
+
+The one start command for the real browser flow:
+
+```sh
+LNA_WEB_TRANSPORTS=real \
+LNA_REVIEWER='Ada Lovelace' \
+AUDIOBOOK_WORKSPACE_DIR=/absolute/path/outside/the/repo \
+LNA_DIRECTOR_URL=http://127.0.0.1:8080/v1 \
+LNA_QWEN_PYTHON="$HOME/.local/share/light-novel-audiobook/runtimes/tts/qwen3-tts/<uv-lock-sha256>/bin/python" \
+LNA_QWEN_WORKER="$PWD/packages/qwen-tts/python/qwen_batch_worker.py" \
+LNA_QWEN_RUNTIME_MANIFEST="$HOME/.local/share/light-novel-audiobook/runtimes/tts/qwen3-tts/<uv-lock-sha256>/manifest.json" \
+LNA_GPU_LOCK="$HOME/.local/share/light-novel-audiobook/gpu/exclusive.lock" \
+pnpm --filter @light-novel-audiobook/web dev
+```
+
+The environment it requires:
+
+- **The pinned runtimes, installed.** The issue-6 brain runtime (built `llama-server` plus the
+  pinned Gemma GGUF, at `LNA_LLAMA_RUNTIME_ROOT`, defaulting to the selected profile's
+  `~/.cache/light-novel-audiobook/issue-6-brain`) and the Qwen3-TTS runtime installed by
+  `scripts/qwen3-tts-extension.sh` (the `<uv-lock-sha256>` directory is keyed by the pinned
+  `scripts/qwen3-tts-runtime/uv.lock`). `LNA_QWEN_SNAPSHOT` may be set to override the model
+  snapshot; by default it is derived from `config/qwen3-tts-custom-voice.lock.json`, exactly as
+  the pipeline driver's real mode derives it.
+- **A free, dedicated director port.** The app *owns* its `llama-server`: it is spawned when
+  Gemma takes the GPU lease and reaped before the lease is released. The port in
+  `LNA_DIRECTOR_URL` must be free, and a `pipeline:demo -- --transports real` run must not be
+  using the same port at the same time — the GPU lease is a correct kernel flock, but two real
+  runs still collide on a fixed port.
+- **`LNA_REVIEWER`** — already required by `resolveReviewerIdentity`; unchanged.
+- **The GPU lock file** at `LNA_GPU_LOCK`, shared by Gemma and Qwen so the two models cannot hold
+  the card at the same time.
+
+Point `AUDIOBOOK_WORKSPACE_DIR` at the same root the pipeline driver used and the two share one
+SQLite workspace: a job the driver produced is visible in the browser, its pending fallback
+decisions are reviewable in the existing review panel, and a decision made in the browser is
+durable for the driver. `LNA_WEB_TRANSPORTS=real` with any required variable unset refuses to
+start and names the missing variable, rather than starting on half-real adapters.
 
 ## HTTP boundary
 

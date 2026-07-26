@@ -10,8 +10,12 @@
   },
   "dependencies": {
     "@light-novel-audiobook/application": "workspace:*",
+    "@light-novel-audiobook/audio-assembly": "workspace:*",
     "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/epub-ingestion": "workspace:*",
     "@light-novel-audiobook/gemma-director": "workspace:*",
+    "@light-novel-audiobook/persistence": "workspace:*",
+    "@light-novel-audiobook/pipeline-driver": "workspace:*",
     "@light-novel-audiobook/qwen-tts": "workspace:*",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-router": "1.170.18",
