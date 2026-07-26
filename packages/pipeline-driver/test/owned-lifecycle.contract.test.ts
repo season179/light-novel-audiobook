@@ -226,7 +226,16 @@ afterEach(async () => {
   chmodGate.reset()
   spawnProbe.reset()
   for (const lease of leases.splice(0)) await lease.release().catch(() => undefined)
-  for (const lifecycle of lifecycles.splice(0)) await lifecycle.release().catch(() => undefined)
+  for (const lifecycle of lifecycles.splice(0)) {
+    await lifecycle.release().catch(() => undefined)
+    const pid = lifecycle.processId
+    if (pid !== undefined && processAlive(pid)) {
+      process.kill(pid, 'SIGKILL')
+      await waitUntil(() => !processAlive(pid), `mutant child ${pid} to exit`).catch(
+        () => undefined,
+      )
+    }
+  }
   for (const server of servers.splice(0)) await closeServer(server).catch(() => undefined)
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
