@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { FileGpuLeaseCoordinator, type GpuLease } from '../src/index.js'
 import { clearOwnEntries, reapOrphanedHolders, registerHolder } from './fixture-reaper.js'
@@ -14,8 +14,16 @@ const RELEASE_GRACE_MS = 500
 /** Any release that outlives this is the unbounded wait the lease must never perform again. */
 const RELEASE_DEADLINE_MS = 6_000
 
+function trackHolder(path: string): (holderPgid: number) => Promise<void> {
+  return async (holderPgid) => await registerHolder(holderPgid, dirname(path))
+}
+
 function coordinator(path: string): FileGpuLeaseCoordinator {
-  return new FileGpuLeaseCoordinator({ lockFilePath: path, inspectExistingComputeProcesses: false })
+  return new FileGpuLeaseCoordinator({
+    lockFilePath: path,
+    inspectExistingComputeProcesses: false,
+    onHolderStarted: trackHolder(path),
+  })
 }
 
 async function makeRoot(name: string, base = tmpdir()): Promise<string> {
@@ -294,9 +302,6 @@ async function reapDetachedHolderGroups(): Promise<void> {
     } catch {
       // Already gone, which is the expected outcome of a clean test.
     }
-    // Register in the durable registry so a SIGINT-interrupted run can be reaped next time.
-    const rootForEntry = roots.find((r) => r.length > 0)
-    if (rootForEntry !== undefined) await registerHolder(pid, rootForEntry).catch(() => undefined)
   }
 }
 
@@ -405,6 +410,7 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       lockFilePath: path,
       flockExecutable: await wedgedHolderFlock(scripts),
       inspectExistingComputeProcesses: false,
+      onHolderStarted: trackHolder(path),
       releaseGraceMs: RELEASE_GRACE_MS,
     }).acquire('gemma')
     const directPid = await directHolderPid(path)
@@ -433,6 +439,7 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
         lockFilePath: path,
         flockExecutable: await wedgedHolderFlock(scripts),
         inspectExistingComputeProcesses: false,
+        onHolderStarted: trackHolder(path),
         releaseGraceMs: RELEASE_GRACE_MS,
       }).acquire('gemma')
 
@@ -655,6 +662,7 @@ describe('FileGpuLeaseCoordinator', () => {
         flockExecutable,
         nvidiaSmiExecutable,
         releaseGraceMs: 200,
+        onHolderStarted: trackHolder(path),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'diagnostic',
@@ -677,6 +685,7 @@ describe('FileGpuLeaseCoordinator', () => {
         flockExecutable,
         inspectExistingComputeProcesses: false,
         releaseGraceMs: 200,
+        onHolderStarted: trackHolder(path),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'unavailable',
@@ -715,6 +724,7 @@ it('release deadline is monotonic: a backward-jumping wall clock does not extend
     flockExecutable: await wedgedHolderFlock(scripts),
     inspectExistingComputeProcesses: false,
     releaseGraceMs: RELEASE_GRACE_MS,
+    onHolderStarted: trackHolder(path),
   }).acquire('gemma')
   const directPid = await directHolderPid(path) // also records the group for afterEach
   process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
