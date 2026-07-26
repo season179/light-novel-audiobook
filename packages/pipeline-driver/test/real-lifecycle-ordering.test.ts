@@ -15,6 +15,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
 import { OwnedLlamaLifecycle } from '../src/llama-lifecycle.js'
+import { createLivenessFilteringNvidiaSmi } from './helpers/liveness-filtering-nvidia-smi.js'
 
 const STUB = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -162,11 +163,12 @@ describe.skipIf(!GPU_PRESENT)(
       const coordinator = new ProcessProbingCoordinator(
         new FileGpuLeaseCoordinator({
           lockFilePath: path.join(runtimeRoot, 'exclusive.lock'),
-          // The kernel flock is the real cross-process guarantee; the nvidia-smi foreign-process
-          // diagnostic is advisory and under WSL2/GPU-PV can list dead PIDs as [Not Found]/[N/A]
-          // (#68). The #21 race tests disable it for the same reason. The ordering proof below is
-          // observed process state, not the diagnostic.
-          inspectExistingComputeProcesses: false,
+          // The kernel flock is the real cross-process guarantee and the nvidia-smi
+          // foreign-process diagnostic stays active, but under WSL2/GPU-PV the compute-apps
+          // table can list dead PIDs as [Not Found]/[N/A] (#68), and a dead PID is not an
+          // uncoordinated process. The wrapper drops only rows whose PID is provably dead in
+          // /proc; live and unknown rows still reach the guard and still trip it.
+          nvidiaSmiExecutable: await createLivenessFilteringNvidiaSmi(runtimeRoot),
         }),
         () => lifecycle.processId,
       )
@@ -248,7 +250,9 @@ describe.skipIf(!GPU_PRESENT)(
       const coordinator = new ProcessProbingCoordinator(
         new FileGpuLeaseCoordinator({
           lockFilePath: path.join(runtimeRoot, 'exclusive.lock'),
-          inspectExistingComputeProcesses: false,
+          // Same #68 liveness filter as the positive test above: the foreign-process diagnostic
+          // stays on, phantom dead PIDs are dropped, live and unknown rows still trip it.
+          nvidiaSmiExecutable: await createLivenessFilteringNvidiaSmi(runtimeRoot),
         }),
         () => pid,
       )
