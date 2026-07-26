@@ -254,6 +254,40 @@ describe('fallback review CLI', () => {
     expect(catalog.approvals[0]?.decidedBy).toBe('Ada Lovelace')
   })
 
+  it('carries the default resolver actor from the environment into notice, report and SQLite', async () => {
+    const { root, book } = await preparedWorkspace('job-default-reviewer')
+    const previous = process.env.LNA_REVIEWER
+    process.env.LNA_REVIEWER = 'Synthetic Environment Reviewer'
+    const notices: FallbackReviewApprovalNotice[] = []
+    let report: Awaited<ReturnType<typeof runFallbackReviewCommand>> | undefined
+    try {
+      report = await runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-default-reviewer',
+        announceApproval: (notice) => notices.push(notice),
+      })
+    } finally {
+      if (previous === undefined) delete process.env.LNA_REVIEWER
+      else process.env.LNA_REVIEWER = previous
+    }
+
+    expect(report).toMatchObject({
+      action: 'approve',
+      actor: 'Synthetic Environment Reviewer',
+    })
+    if (report === undefined) throw new Error('approve command returned no report')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]?.actor).toBe('Synthetic Environment Reviewer')
+    const database = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(database).readCatalog(book.id)
+    database.close()
+    expect(catalog.grant?.decidedBy).toBe('Synthetic Environment Reviewer')
+    expect(catalog.approvals.map((record) => record.decidedBy)).toEqual([
+      'Synthetic Environment Reviewer',
+    ])
+  })
+
   it('surfaces decision fields and refuses a heterogeneous book-wide grant', async () => {
     const { root, book } = await preparedWorkspace('job-heterogeneous-fallbacks', {
       heterogeneous: true,
