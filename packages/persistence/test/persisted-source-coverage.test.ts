@@ -28,7 +28,11 @@ const directedBook = (): Book => {
       return new SourcePassage({
         id: passageId(chapterPosition, passagePosition),
         chapterId: id,
-        sourceText: `Synthetic chapter ${chapterPosition} passage ${passagePosition}.`,
+        sourceText: [
+          `Synthetic chapter ${chapterPosition} `,
+          `passage ${passagePosition}`,
+          '.',
+        ].join(''),
       })
     })
     const chapter = new Chapter({
@@ -40,19 +44,23 @@ const directedBook = (): Book => {
     })
     const segments = ExactSourceCoverage.createSegments(
       chapter,
-      sourcePassages.map((passage) => ({
-        sourcePassageId: passage.id,
-        sourceText: passage.sourceText,
-        kind: 'narration' as const,
-        speakerId: null,
-        confidence: 1,
-        delivery: {
-          emotion: 'neutral',
-          pace: 'normal' as const,
-          volume: 'normal' as const,
-          pauseAfterMs: 0,
-        },
-      })),
+      sourcePassages.flatMap((passage, passageIndex) =>
+        [`Synthetic chapter ${chapterPosition} `, `passage ${passageIndex + 1}`, '.'].map(
+          (sourceText) => ({
+            sourcePassageId: passage.id,
+            sourceText,
+            kind: 'narration' as const,
+            speakerId: null,
+            confidence: 1,
+            delivery: {
+              emotion: 'neutral',
+              pace: 'normal' as const,
+              volume: 'normal' as const,
+              pauseAfterMs: 0,
+            },
+          }),
+        ),
+      ),
     )
     for (const segment of segments) {
       segment.assignVoice({
@@ -108,33 +116,41 @@ const resequenceAfterDrop = (db: DatabaseSync, ownerChapterId: string, position:
   for (const [index, row] of rows.entries()) setPosition.run(index + 1, row.id)
 }
 
-const duplicatePassage = (db: DatabaseSync, ownerChapterId: string): void => {
-  const source = db
+const duplicatePassageFragment = (db: DatabaseSync, ownerChapterId: string): void => {
+  const rows = db
     .prepare(
       `SELECT id, source_passage_id, source_text, kind, speaker_id, confidence, delivery,
               voice_profile_id, uses_fallback, fallback_reason
-         FROM segments WHERE chapter_id = ? AND position = 2`,
+         FROM segments WHERE chapter_id = ? ORDER BY position`,
     )
-    .get(ownerChapterId) as
-    | {
-        id: string
-        source_passage_id: string
-        source_text: string
-        kind: string
-        speaker_id: string | null
-        confidence: number
-        delivery: string
-        voice_profile_id: string
-        uses_fallback: number
-        fallback_reason: string | null
-      }
-    | undefined
+    .all(ownerChapterId) as unknown as {
+    id: string
+    source_passage_id: string
+    source_text: string
+    kind: string
+    speaker_id: string | null
+    confidence: number
+    delivery: string
+    voice_profile_id: string
+    uses_fallback: number
+    fallback_reason: string | null
+  }[]
+  const source = rows[4]
   if (source === undefined) throw new Error('synthetic segment missing')
+
+  db.prepare('UPDATE segments SET position = position + 100 WHERE chapter_id = ?').run(
+    ownerChapterId,
+  )
+  const setPosition = db.prepare('UPDATE segments SET position = ? WHERE id = ?')
+  for (const [index, row] of rows.entries()) {
+    const oldPosition = index + 1
+    setPosition.run(oldPosition <= 5 ? oldPosition : oldPosition + 1, row.id)
+  }
   db.prepare(
     `INSERT INTO segments
       (id, chapter_id, position, source_passage_id, source_text, kind, speaker_id, confidence,
        delivery, voice_profile_id, uses_fallback, fallback_reason)
-     VALUES (?, ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, 6, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     `${source.id}-duplicate`,
     ownerChapterId,
@@ -171,15 +187,15 @@ const COVERAGE_MUTATIONS: readonly CoverageMutation[] = [
   },
   {
     name: 'drop middle',
-    mutate: (db) => resequenceAfterDrop(db, chapterId(2), 2),
+    mutate: (db) => resequenceAfterDrop(db, chapterId(2), 8),
   },
   {
     name: 'drop last',
-    mutate: (db) => resequenceAfterDrop(db, chapterId(2), 4),
+    mutate: (db) => resequenceAfterDrop(db, chapterId(2), 12),
   },
   {
     name: 'duplicate under a fresh ID',
-    mutate: (db) => duplicatePassage(db, chapterId(2)),
+    mutate: (db) => duplicatePassageFragment(db, chapterId(2)),
   },
   {
     name: 'reorder adjacent',
@@ -187,7 +203,7 @@ const COVERAGE_MUTATIONS: readonly CoverageMutation[] = [
   },
   {
     name: 'drop immediately before a chapter boundary',
-    mutate: (db) => resequenceAfterDrop(db, chapterId(1), 4),
+    mutate: (db) => resequenceAfterDrop(db, chapterId(1), 12),
   },
   {
     name: 'drop immediately after a chapter boundary',
@@ -196,6 +212,19 @@ const COVERAGE_MUTATIONS: readonly CoverageMutation[] = [
 ]
 
 describe('persisted approved script exact source coverage (issue #88)', () => {
+  it('loads the unmodified multi-fragment fixture as approved', async () => {
+    const { jobs } = await workspace()
+    await jobs.saveBook(directedBook())
+
+    const loaded = await jobs.findBook(BOOK_ID)
+    expect(loaded?.chapters.map((chapter) => chapter.state)).toEqual([
+      'approved',
+      'approved',
+      'approved',
+    ])
+    expect(loaded?.chapters.map((chapter) => chapter.segments.length)).toEqual([12, 12, 12])
+  })
+
   it.each(COVERAGE_MUTATIONS)('rejects $name', async ({ mutate }) => {
     const { db, jobs } = await workspace()
     await jobs.saveBook(directedBook())
@@ -208,8 +237,8 @@ describe('persisted approved script exact source coverage (issue #88)', () => {
     const { db, jobs } = await workspace()
     await jobs.saveBook(directedBook())
     db.prepare('UPDATE segments SET source_text = ? WHERE id = ?').run(
-      'Synthetic chapter 2 passage 2!',
-      StableIds.segment(passageId(2, 2), 1),
+      'passage 7',
+      StableIds.segment(passageId(2, 2), 2),
     )
 
     await expect(jobs.findBook(BOOK_ID)).rejects.toThrow(SourceCoverageError)

@@ -171,8 +171,8 @@ export class SqliteJobRepository implements JobRepository {
 
   /**
    * Persist one chapter's immutable source passages. Required to read a `Chapter` back at all: it
-   * refuses to construct without at least one passage, and `submitForReview` re-proves that every
-   * segment belongs to the chapter in exact order against them.
+   * refuses to construct without at least one passage, and `submitForReview` re-proves byte-exact,
+   * once-only segment coverage in source order against them.
    */
   private saveChapterPassages(chapter: Chapter): void {
     const desired = chapter.sourcePassages.map((passage, index) => ({
@@ -286,10 +286,10 @@ export class SqliteJobRepository implements JobRepository {
    * Reads the approved script back for a render stage that did not direct it.
    *
    * Rebuilt through the domain constructors rather than by rehydrating private state, so the round
-   * trip re-proves what direction proved: segments cover each passage exactly once with byte-exact
-   * text and source order, belong to their chapter in exact contiguous order with unique IDs, and
-   * carry a voice before approval. A partial or reshuffled write therefore fails here instead of
-   * producing a book that renders to the wrong audio.
+   * trip re-proves direction's exact source-coverage property and the chapter's structural rules:
+   * byte-exact text in source order, exact contiguous segment positions with unique IDs, and a
+   * voice before approval. A partial or reshuffled write therefore fails here instead of producing
+   * a book that renders to the wrong audio.
    *
    * Chapter *render* state is deliberately not persisted or restored. What is stored is the
    * approved script; render progress belongs to the job and the artifact ledger, so a chapter
