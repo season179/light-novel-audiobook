@@ -1,0 +1,123 @@
+{
+  "schema": "issue-21-m1-proof@1",
+  "harness": "proof-m1@1",
+  "mode": "real",
+  "startedAt": "2026-07-26T18:00:14.885Z",
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "linux",
+    "arch": "x64",
+    "transports": "real",
+    "adapters": "real adapters (#28 EPUB, #30 Gemma, #31 Qwen, #32 FFmpeg, #27 SQLite)"
+  },
+  "epub": {
+    "fileName": "acceptance-m1.epub",
+    "bytes": 5662,
+    "sha256": "0a4e0e6723a788ca824b0aac6a2c3d641a6505eec4dfb0252bef61eb7a1af570"
+  },
+  "steps": [
+    {
+      "name": "1-preflight",
+      "atMonotonicMs": 159,
+      "mode": "real"
+    },
+    {
+      "name": "2-upload",
+      "atMonotonicMs": 2555,
+      "byteLength": 5662
+    },
+    {
+      "name": "2-start",
+      "atMonotonicMs": 2576
+    },
+    {
+      "name": "3-poll",
+      "atMonotonicMs": 84080,
+      "state": "awaiting_review"
+    },
+    {
+      "name": "4-review",
+      "atMonotonicMs": 84105,
+      "pendingBefore": 4,
+      "pendingAfter": 0,
+      "itemCount": 4
+    },
+    {
+      "name": "6-restart",
+      "atMonotonicMs": 343782,
+      "mechanism": "SIGKILL to the dev server process group mid-render, then an HTTP recoverAbandoned restart",
+      "stateAtStop": "running",
+      "segmentsCompletedAtStop": 1,
+      "totalSegments": 20,
+      "segmentsReused": 1,
+      "segmentsRenderedAfterRestart": 19,
+      "directorRequestsAfterRestart": 0,
+      "scriptUnchangedAcrossRestart": true
+    },
+    {
+      "name": "5-verify",
+      "atMonotonicMs": 343857,
+      "chapterCount": 2,
+      "m4bBytes": 957806
+    },
+    {
+      "name": "7-evidence",
+      "atMonotonicMs": 343858
+    }
+  ],
+  "job": {
+    "jobId": "job-0a4e0e6723a788ca824b0aac",
+    "uploadId": "0a4e0e6723a788ca824b0aac6a2c3d641a6505eec4dfb0252bef61eb7a1af570"
+  },
+  "restart": {
+    "mechanism": "SIGKILL to the dev server process group mid-render, then an HTTP recoverAbandoned restart",
+    "stateAtStop": "running",
+    "segmentsCompletedAtStop": 1,
+    "totalSegments": 20,
+    "segmentsReused": 1,
+    "segmentsRenderedAfterRestart": 19,
+    "directorRequestsAfterRestart": 0,
+    "scriptUnchangedAcrossRestart": true
+  },
+  "output": {
+    "chapterCount": 2,
+    "chapters": [
+      {
+        "chapterId": "book-4d5c4ce33ced0c0b7492f598-ch0001",
+        "bytes": 3816454,
+        "sha256": "2b19ecc7213b79ca44170bdc1b3970baaa44831c4cf129181a029ed00e662c70"
+      },
+      {
+        "chapterId": "book-4d5c4ce33ced0c0b7492f598-ch0002",
+        "bytes": 3497880,
+        "sha256": "bd59b8f0762430e8aaae79606aed5c3610cc33f05971bf85d8b101c3fabb3e53"
+      }
+    ],
+    "m4b": {
+      "fileName": "northlight-station-m1-acceptance-fixture-v001.m4b",
+      "bytes": 957806,
+      "sha256": "236a680c528d63ae78c976f1c9c49fe6157901892cf4cb074b3b9d87c5e638d3",
+      "workspacePath": "/tmp/lna-m1-proof-real-uJBL2b/output/northlight-station-m1-acceptance-fixture-v001.m4b"
+    },
+    "container": {
+      "kind": "mp4",
+      "formatName": "mov,mp4,m4a,3gp,3g2,mj2",
+      "codec": "aac",
+      "durationMs": 120080,
+      "chapterMarkers": 2,
+      "markerSpansOrdered": true,
+      "coverEmbedded": true,
+      "titlePresent": true,
+      "creatorPresent": true
+    }
+  },
+  "counts": {
+    "chapters": 2,
+    "segments": 20,
+    "passages": 20
+  },
+  "finishedAt": "2026-07-26T18:05:37.907Z",
+  "durationsMs": {
+    "total": 343858
+  }
+}
