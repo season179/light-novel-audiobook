@@ -38,28 +38,36 @@ const BOUND_NAMES = ['firstChapter', 'maxChapters', 'maxPassagesPerChapter'] as 
 
 type BoundName = (typeof BOUND_NAMES)[number]
 
-/** Decodes a canonical descriptor. Anything that is not `name=<positive int>` pairs is rejected. */
+/** Decodes only canonical descriptors. Any spelling `deriveJobId` would not mint is rejected. */
 const parseDescriptor = (descriptor: string): SliceLimits | null => {
   const limits: { -readonly [K in BoundName]?: number } = {}
   for (const pair of descriptor.split(',')) {
     const match = /^(?<name>[A-Za-z]+)=(?<value>\d+)$/.exec(pair)
-    const name = match?.groups?.['name'] as BoundName | undefined
-    const raw = match?.groups?.['value']
+    const name = match?.groups?.name as BoundName | undefined
+    const raw = match?.groups?.value
     if (name === undefined || raw === undefined || !BOUND_NAMES.includes(name)) return null
     const value = Number(raw)
     if (!Number.isSafeInteger(value) || value < 1 || limits[name] !== undefined) return null
     limits[name] = value
   }
-  return limits
+
+  // Parsing alone accepts aliases such as leading zeroes, reversed fields, or an explicitly stated
+  // default. Re-encoding through the one identity rule makes those fail closed instead of letting
+  // multiple externally supplied job IDs name one extractor identity.
+  try {
+    return canonicalSliceDescriptor(limits) === descriptor ? limits : null
+  } catch (_error: unknown) {
+    return null
+  }
 }
 
 /** `null` when the ID is not a web job ID at all (for example a pipeline-driver job ID). */
 export const parseJobId = (jobId: string): ParsedJobId | null => {
   const match = JOB_ID_PATTERN.exec(jobId)
   if (match === null) return null
-  const prefix = match.groups?.['prefix']
+  const prefix = match.groups?.prefix
   if (prefix === undefined) return null
-  const descriptor = match.groups?.['descriptor']
+  const descriptor = match.groups?.descriptor
   if (descriptor === undefined) return { uploadSha256Prefix: prefix, limits: {} }
   const limits = parseDescriptor(descriptor)
   if (limits === null) return null

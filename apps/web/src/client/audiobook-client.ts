@@ -17,14 +17,16 @@ import type { JobStateView } from '../server/job-state-view.js'
  * `ok: false` carries the documented `{ code, message }`. `getJobState` resolving to
  * `{ ok: true, value: null }` means the job does not exist.
  */
+export interface StartGenerationCommand {
+  readonly uploadId: string
+  readonly recoverAbandoned: boolean
+  /** Empty bounds generate the whole book; the property itself is required so it cannot be dropped. */
+  readonly slice: SliceLimits
+}
+
 export interface AudiobookClient {
   uploadEpub(input: { readonly file: File }): Promise<WebApiResult<EpubUploadView>>
-  startGeneration(input: {
-    readonly uploadId: string
-    readonly recoverAbandoned?: boolean
-    /** Bounds the render to a slice of the book. Absent, the whole book is generated. */
-    readonly slice?: SliceLimits
-  }): Promise<WebApiResult<StartedGeneration>>
+  startGeneration(input: StartGenerationCommand): Promise<WebApiResult<StartedGeneration>>
   getJobState(input: { readonly jobId: string }): Promise<WebApiResult<JobStateView | null>>
   listChapterAudio(input: { readonly jobId: string }): Promise<WebApiResult<ChapterAudioListing>>
   listUploads(): Promise<WebApiResult<readonly EpubUploadView[]>>

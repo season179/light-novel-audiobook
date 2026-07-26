@@ -1,5 +1,6 @@
 import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import { createServerFn } from '@tanstack/react-start'
+import type { StartGenerationCommand } from '../client/audiobook-client.js'
 import type {
   ChapterAudioListing,
   EpubUploadView,
@@ -35,7 +36,7 @@ export const uploadEpubFn = createServerFn({ method: 'POST' })
   )
 
 export const startGenerationFn = createServerFn({ method: 'POST' })
-  .validator((data: { uploadId: string; recoverAbandoned?: boolean; slice?: SliceLimits }) => data)
+  .validator((data: StartGenerationCommand) => data)
   .handler(
     async ({ data }): Promise<WebApiResult<StartedGeneration>> =>
       toWebApiResult('startGeneration', async () => {

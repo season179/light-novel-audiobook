@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useId, useState } from 'react'
-import type { AudiobookClient, EpubUploadView, SliceLimits } from '../client/audiobook-client.js'
+import type {
+  AudiobookClient,
+  EpubUploadView,
+  SliceLimits,
+  StartGenerationCommand,
+} from '../client/audiobook-client.js'
 import type { WebApiFailure } from '../server/errors.js'
 
 export interface EpubUploadPanelProps {
@@ -35,7 +40,9 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
   const [file, setFile] = useState<File | null>(null)
   const [upload, setUpload] = useState<EpubUploadView | null>(null)
   const [failure, setFailure] = useState<WebApiFailure | null>(null)
-  const [recoverable, setRecoverable] = useState<string | null>(null)
+  // Keep the complete rejected command. A bounded recovery is the same job only if it retains the
+  // original slice, so remembering an upload ID alone is not enough.
+  const [recoverable, setRecoverable] = useState<StartGenerationCommand | null>(null)
   const [firstChapter, setFirstChapter] = useState('')
   const [maxChapters, setMaxChapters] = useState('')
   const [maxPassages, setMaxPassages] = useState('')
@@ -66,15 +73,11 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
   })
 
   const startMutation = useMutation({
-    mutationFn: async (input: {
-      uploadId: string
-      recoverAbandoned: boolean
-      slice?: SliceLimits
-    }) => client.startGeneration(input),
-    onSuccess: (result, input) => {
+    mutationFn: async (command: StartGenerationCommand) => client.startGeneration(command),
+    onSuccess: (result, command) => {
       if (!result.ok) {
         setFailure(result.error)
-        setRecoverable(result.error.code === 'generation_rejected' ? input.uploadId : null)
+        setRecoverable(result.error.code === 'generation_rejected' ? command : null)
         return
       }
       setFailure(null)
@@ -92,8 +95,8 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
     uploadMutation.mutate(file)
   }
 
-  const start = (uploadId: string, recoverAbandoned = false) => {
-    startMutation.mutate({ uploadId, recoverAbandoned })
+  const start = (uploadId: string) => {
+    startMutation.mutate({ uploadId, recoverAbandoned: false, slice: {} })
   }
 
   /**
@@ -154,7 +157,10 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
             {uploadMutation.isPending ? 'Uploading…' : 'Upload EPUB'}
           </button>
           {recoverable !== null && (
-            <button type="button" onClick={() => start(recoverable, true)}>
+            <button
+              type="button"
+              onClick={() => startMutation.mutate({ ...recoverable, recoverAbandoned: true })}
+            >
               Recover and continue
             </button>
           )}

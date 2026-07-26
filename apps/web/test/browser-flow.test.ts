@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { AudiobookClient, StartGenerationCommand } from '../src/client/audiobook-client.js'
 import { EpubUploadPanel } from '../src/components/epub-upload-panel.js'
 import { JobProgressPanel } from '../src/components/job-progress-panel.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
@@ -27,8 +28,10 @@ const withQueryClient = (children: ReactNode) =>
     children,
   )
 
-const renderUploadPanel = (onStarted: (jobId: string) => void) =>
-  render(withQueryClient(createElement(EpubUploadPanel, { client: harness.client, onStarted })))
+const renderUploadPanel = (
+  onStarted: (jobId: string) => void,
+  client: AudiobookClient = harness.client,
+) => render(withQueryClient(createElement(EpubUploadPanel, { client, onStarted })))
 
 const renderJobPanel = (jobId: string) =>
   render(
@@ -98,6 +101,51 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     await waitForJobState(harness.api, jobId, (job) => job.state === 'awaiting_review')
     const job = await harness.api.getJobState({ jobId })
     expect(job?.state).toBe('awaiting_review')
+  })
+
+  it('recovers a rejected bounded start with the same slice bounds', async () => {
+    const user = userEvent.setup()
+    const commands: StartGenerationCommand[] = []
+    const client: AudiobookClient = {
+      ...harness.client,
+      startGeneration: async (command) => {
+        commands.push(command)
+        if (commands.length === 1) {
+          return {
+            ok: false,
+            error: {
+              code: 'generation_rejected',
+              message: 'This bounded job was abandoned.',
+            },
+          }
+        }
+        return harness.client.startGeneration(command)
+      },
+    }
+    let startedJobId: string | null = null
+    renderUploadPanel((jobId) => {
+      startedJobId = jobId
+    }, client)
+
+    await user.upload(screen.getByLabelText('EPUB file'), epubFile())
+    await user.click(screen.getByRole('button', { name: 'Upload EPUB' }))
+    await screen.findByRole('button', { name: 'Generate audiobook' }, WAIT)
+
+    await user.type(screen.getByLabelText('Start at chapter'), '2')
+    await user.type(screen.getByLabelText('Number of chapters'), '1')
+    await user.type(screen.getByLabelText('Passages per chapter'), '1')
+    await user.click(screen.getByRole('button', { name: 'Generate this slice' }))
+    await user.click(await screen.findByRole('button', { name: 'Recover and continue' }, WAIT))
+
+    await waitFor(() => expect(startedJobId).not.toBeNull(), WAIT)
+    expect(commands).toHaveLength(2)
+    expect(commands[0]).toMatchObject({
+      recoverAbandoned: false,
+      slice: { firstChapter: 2, maxChapters: 1, maxPassagesPerChapter: 1 },
+    })
+    expect(commands[1]).toEqual({ ...commands[0], recoverAbandoned: true })
+    gate.open()
+    await waitForJobState(harness.api, startedJobId ?? '', (job) => job.finished)
   })
 
   it('rejects an unparseable bound in the form instead of starting a whole-book render', async () => {

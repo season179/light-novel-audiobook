@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { SliceLimits } from '../src/client/audiobook-client.js'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
 import { parseJobId, sliceLimitsForJobId } from '../src/server/job-identity.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
@@ -73,18 +74,37 @@ describe('bounded-slice job identity', () => {
     expect(sliceLimitsForJobId('pipeline-demo-123')).toEqual({})
   })
 
-  it('rejects a malformed bounded job ID loudly instead of rendering the whole book', () => {
-    expect(() => sliceLimitsForJobId(`job-${SHA.slice(0, 24)}-slice-firstChapter=0`)).toThrow(
-      /cannot be understood/,
-    )
-    expect(() => sliceLimitsForJobId(`job-${SHA.slice(0, 24)}-slice-chapters=2`)).toThrow(
-      /cannot be understood/,
-    )
+  it.each([
+    'firstChapter=0',
+    'chapters=2',
+    'unknown=1',
+    // These parse as values, but deriveJobId would never mint these noncanonical spellings.
+    'firstChapter=1',
+    'maxChapters=01',
+    'maxChapters=1,firstChapter=2',
+    // A fourth alias-like form of our own: duplicate fields can never be canonical.
+    'maxChapters=1,maxChapters=1',
+  ])('rejects malformed or noncanonical descriptor %s loudly', (descriptor) => {
+    const jobId = `job-${SHA.slice(0, 24)}-slice-${descriptor}`
+    expect(parseJobId(jobId)).toBeNull()
+    expect(() => sliceLimitsForJobId(jobId)).toThrow(/cannot be understood/)
   })
 
-  it('rejects invalid bounds at the boundary', () => {
-    expect(() => deriveJobId(SHA, { maxChapters: 0 })).toThrow(/positive integer/)
-    expect(() => deriveJobId(SHA, { firstChapter: 1.5 })).toThrow(/positive integer/)
+  const invalidBoundValues = [
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['unsafe integer', Number.MAX_SAFE_INTEGER + 1],
+  ] as const
+
+  it.each(
+    (['firstChapter', 'maxChapters', 'maxPassagesPerChapter'] as const).flatMap((bound) =>
+      invalidBoundValues.map(([kind, value]) => [bound, kind, value] as const),
+    ),
+  )('rejects a %s value that is %s', (bound, _kind, value) => {
+    expect(() => deriveJobId(SHA, { [bound]: value } as SliceLimits)).toThrow(/positive integer/)
   })
 })
 
@@ -223,11 +243,11 @@ describe('bounded slices through the web API', () => {
     expect(completed.totalSegments).toBe(FIXTURE_SEGMENTS)
   })
 
-  it('treats a bound that spans the whole book as its own job with the same content', async () => {
+  it('retains all available content when maxChapters is larger than the book', async () => {
     const stored = await upload()
     const started = await harness.api.startGeneration({
       uploadId: stored.uploadId,
-      slice: { maxChapters: FIXTURE_CHAPTERS },
+      slice: { maxChapters: FIXTURE_CHAPTERS + 10 },
     })
     expect(started.jobId).not.toBe(`job-${stored.sha256.slice(0, 24)}`)
     const completed = await waitForJobState(harness.api, started.jobId, (job) => job.finished)
