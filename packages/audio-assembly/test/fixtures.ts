@@ -59,7 +59,11 @@ export const makeBook = (spec: BookSpec): FixtureBook => {
       position,
       title: chapterSpec.title,
       sourcePassages: [
-        new SourcePassage({ id: passageId, chapterId, sourceText: `Chapter ${position} text.` }),
+        new SourcePassage({
+          id: passageId,
+          chapterId,
+          sourceText: chapterSpec.pauses.map((_, index) => `Segment ${index + 1}.`).join(''),
+        }),
       ],
     })
     const segments = chapterSpec.pauses.map(

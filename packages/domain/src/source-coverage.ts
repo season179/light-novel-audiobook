@@ -3,19 +3,24 @@ import { SourceCoverageError } from './errors.js'
 import { type DirectedSegment, Segment } from './segment.js'
 import { StableIds } from './stable-ids.js'
 
-const createSegments = (
+interface SourceFragment {
+  readonly sourcePassageId: string
+  readonly sourceText: string
+}
+
+const groupExactFragments = <Fragment extends SourceFragment>(
   chapter: Chapter,
-  directed: readonly DirectedSegment[],
-): readonly Segment[] => {
+  directed: readonly Fragment[],
+): readonly (readonly Fragment[])[] => {
   if (directed.length === 0) {
     throw new SourceCoverageError(`Chapter ${chapter.id} has no directed segments`)
   }
 
-  const segments: Segment[] = []
+  const grouped: Fragment[][] = []
   let directedIndex = 0
 
   for (const passage of chapter.sourcePassages) {
-    const fragments: DirectedSegment[] = []
+    const fragments: Fragment[] = []
     while (
       directedIndex < directed.length &&
       directed[directedIndex]?.sourcePassageId === passage.id
@@ -35,7 +40,27 @@ const createSegments = (
         `Source passage ${passage.id} was rewritten, omitted, or duplicated`,
       )
     }
+    grouped.push(fragments)
+  }
 
+  if (directedIndex !== directed.length) {
+    const extra = directed[directedIndex]
+    throw new SourceCoverageError(
+      `Directed output contains unknown, duplicate, or out-of-order passage ${extra?.sourcePassageId ?? ''}`,
+    )
+  }
+
+  return grouped
+}
+
+const createSegments = (
+  chapter: Chapter,
+  directed: readonly DirectedSegment[],
+): readonly Segment[] => {
+  const segments: Segment[] = []
+  for (const [passageIndex, fragments] of groupExactFragments(chapter, directed).entries()) {
+    const passage = chapter.sourcePassages[passageIndex]
+    if (passage === undefined) throw new SourceCoverageError('Source passage grouping is invalid')
     for (const [fragmentIndex, fragment] of fragments.entries()) {
       segments.push(
         new Segment({
@@ -47,16 +72,12 @@ const createSegments = (
       )
     }
   }
-
-  if (directedIndex !== directed.length) {
-    const extra = directed[directedIndex]
-    throw new SourceCoverageError(
-      `Directed output contains unknown, duplicate, or out-of-order passage ${extra?.sourcePassageId ?? ''}`,
-    )
-  }
-
   return Object.freeze(segments)
 }
 
-/** Proves exact, once-only passage coverage and creates source-relative segment IDs. */
-export const ExactSourceCoverage = Object.freeze({ createSegments })
+const assertSegments = (chapter: Chapter, segments: readonly Segment[]): void => {
+  groupExactFragments(chapter, segments)
+}
+
+/** Proves exact, once-only passage coverage and creates or validates chapter segments. */
+export const ExactSourceCoverage = Object.freeze({ createSegments, assertSegments })
