@@ -408,7 +408,17 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
       // arrive, so release() -- and therefore ingest() -- hung without bound.
       process.kill(-groupPid, 'SIGSTOP')
 
-      const released = await settleWithin(30_000, lock.release())
+      // WSL wall-clock synchronization can jump backward while the monotonic release deadline keeps
+      // advancing. The original flake measured a correct 484 ms release as -751 ms via Date.now().
+      const realDateNow = Date.now
+      let wallClock = realDateNow()
+      Date.now = () => (wallClock -= 1_000)
+      let released: Awaited<ReturnType<typeof settleWithin>>
+      try {
+        released = await settleWithin(30_000, lock.release())
+      } finally {
+        Date.now = realDateNow
+      }
 
       expect(released.settled).toBe('rejected')
       expect((released.error as Error).message).toMatch(/required SIGKILL/)
