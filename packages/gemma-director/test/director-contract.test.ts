@@ -83,7 +83,9 @@ class UnstoppableLifecycle implements DirectorRuntimeLifecycle {
 
 class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   acquireCalls = 0
+  quarantineCalls = 0
   releaseCalls = 0
+  quarantined = false
 
   constructor(
     readonly lockFilePath = '/fixture/shared-gpu/exclusive.lock',
@@ -93,11 +95,17 @@ class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
     this.acquireCalls += 1
     if (signal?.aborted) throw new GpuLeaseError('cancelled', 'Fixture lease cancelled')
+    if (this.quarantined) throw new GpuLeaseError('quarantined', 'Fixture lease quarantined')
     this.events.push(`lease-acquired:${owner}`)
     let released = false
     return {
       owner,
       lockFilePath: this.lockFilePath,
+      quarantine: async () => {
+        this.quarantineCalls += 1
+        this.quarantined = true
+        this.events.push('lease-quarantined')
+      },
       release: async () => {
         if (released) return
         released = true
@@ -700,7 +708,7 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     }
   })
 
-  it('releases the GPU lease exactly once even when the runtime refuses to exit', async () => {
+  it('quarantines rather than releasing the GPU lease when runtime cleanup fails', async () => {
     const gpuLeaseCoordinator = new FakeGpuLeaseCoordinator()
     const lifecycle = new UnstoppableLifecycle()
     const book = makeBook()
@@ -709,10 +717,16 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
 
     await expect(model.release()).rejects.toThrow('llama-server refused to exit')
     expect(lifecycle.releaseCalls).toBe(1)
-    expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
-    // A memoised rejected release must not leave the kernel lock held by a live holder.
+    expect(gpuLeaseCoordinator.quarantineCalls).toBe(1)
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(0)
+    await expect(gpuLeaseCoordinator.acquire('qwen3-tts')).rejects.toMatchObject({
+      code: 'quarantined',
+    })
+
+    // A memoised rejected release neither repeats quarantine nor converts it to a normal release.
     await expect(model.release()).rejects.toThrow('llama-server refused to exit')
-    expect(gpuLeaseCoordinator.releaseCalls).toBe(1)
+    expect(gpuLeaseCoordinator.quarantineCalls).toBe(1)
+    expect(gpuLeaseCoordinator.releaseCalls).toBe(0)
   })
 
   it('classifies transient lease failures as retryable and unknown failures as permanent', async () => {

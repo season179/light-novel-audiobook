@@ -2,6 +2,7 @@ import type {
   AssembleAudiobookRequest,
   AudioAssembler,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
   EpubExtractionRequest,
@@ -57,8 +58,14 @@ class SanitizedDirectorModel implements DirectorModel {
     this.identity = inner.identity
   }
 
-  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
-    return sanitize('directorModel.directChapter', () => this.inner.directChapter(book, chapter))
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    return sanitize('directorModel.directChapter', () =>
+      this.inner.directChapter(book, chapter, options),
+    )
   }
 
   release(): Promise<void> {

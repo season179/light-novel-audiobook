@@ -1,5 +1,5 @@
 import { extname } from 'node:path'
-import type { JobRepository } from '@light-novel-audiobook/application'
+import type { DirectChapterOptions, JobRepository } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
@@ -60,6 +60,8 @@ export interface AudiobookWebApiDependencies {
   readonly books: BookReadModelStore
   readonly runner: GenerationRunner
   readonly voices: VoiceCast
+  /** Operational direction options forwarded to every generation command (never persisted). */
+  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
@@ -101,6 +103,7 @@ export class AudiobookWebApi {
   private readonly books: BookReadModelStore
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
+  private readonly directorOptions: DirectChapterOptions | undefined
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -109,6 +112,7 @@ export class AudiobookWebApi {
     this.books = dependencies.books
     this.runner = dependencies.runner
     this.voices = dependencies.voices
+    this.directorOptions = dependencies.directorOptions
   }
 
   /** Throws `invalid_upload` with an actionable message when the bytes are not an EPUB. */
@@ -159,6 +163,7 @@ export class AudiobookWebApi {
       epubPath: upload.epubPath,
       epubSha256: upload.sha256,
       voices: this.voices,
+      ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
       ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
     })
 

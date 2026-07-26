@@ -1,5 +1,6 @@
 import {
   type AudioAssembler,
+  type DirectChapterOptions,
   type DirectorModel,
   type EpubExtractor,
   GenerateAudiobook,
@@ -59,6 +60,11 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly workspace?: LocalWorkspace | undefined
   /** Overrides the pinned Qwen production configuration the default cast is derived from. */
   readonly qwenConfigPath?: string | undefined
+  /**
+   * Operational direction options forwarded to every generation command: cancellation and the
+   * whole-chapter deadline. Operational only; never part of the job's command identity.
+   */
+  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 export const createAudiobookWebApi = async (
@@ -118,6 +124,7 @@ export const createAudiobookWebApi = async (
     books,
     runner,
     voices,
+    ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
   })
 }
 
