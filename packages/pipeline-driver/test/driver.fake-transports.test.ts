@@ -190,6 +190,80 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       characterCount: 1,
       distinctMaterialCount: 1,
       sharedMaterialGroupCount: 0,
+      characterSharesFallbackMaterial: false,
+    })
+    expect(castRun.fallbackWarnings).toBe(0)
+    expect(castRun.jobState).toBe('completed')
+  }, 600_000)
+
+  it('flags a character cast onto the fallback voice material in the run report', async () => {
+    const workspaceRoot = await workspace('fallback-material-cast')
+    const firstServer = await directorServer()
+    const first = await runPipeline({
+      jobId: 'driver-fallback-cast-book-identity',
+      epubPath: FIXTURE_EPUB,
+      workspaceRoot,
+      repositoryRoot: REPOSITORY_ROOT,
+      transports: await createFakeTransports(
+        {
+          runtimeDirectory: path.join(workspaceRoot, 'runtime-first'),
+          repositoryRoot: REPOSITORY_ROOT,
+        },
+        firstServer.baseUrl,
+      ),
+      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+    })
+    const epubSha256 = createHash('sha256')
+      .update(await readFile(FIXTURE_EPUB))
+      .digest('hex')
+    // The single character is cast onto the configured fallback material (ryan-low-weary), so it is
+    // voice-indistinguishable from every unresolved fallback line. The run report must surface that.
+    const database = openWorkspace(layoutFor(workspaceRoot))
+    try {
+      await new SqliteCastApprovalRepository(database).saveCastApproval(
+        createCastApprovalRecord({
+          bookId: first.bookId,
+          epubSha256,
+          assignments: [
+            {
+              speakerId: 'speaker-amber',
+              aliases: ['Amber'],
+              materialProfileId: 'ryan-low-weary',
+              sharingGroupId: null,
+            },
+          ],
+          decidedBy: 'Reviewer One',
+          decidedAt: '2026-07-26T12:00:00.000Z',
+        }),
+      )
+    } finally {
+      database.close()
+    }
+
+    const characterServer = new NarrationEchoDirectorServer('dialogue')
+    servers.push(characterServer)
+    await characterServer.start()
+    const castRun = await runPipeline({
+      jobId: 'driver-fallback-cast-run',
+      epubPath: FIXTURE_EPUB,
+      workspaceRoot,
+      repositoryRoot: REPOSITORY_ROOT,
+      transports: await createFakeTransports(
+        {
+          runtimeDirectory: path.join(workspaceRoot, 'runtime-cast'),
+          repositoryRoot: REPOSITORY_ROOT,
+        },
+        characterServer.baseUrl,
+      ),
+      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+    })
+
+    expect(castRun.cast).toMatchObject({
+      approvalId: expect.stringMatching(/^cast-/),
+      characterCount: 1,
+      distinctMaterialCount: 1,
+      sharedMaterialGroupCount: 0,
+      characterSharesFallbackMaterial: true,
     })
     expect(castRun.fallbackWarnings).toBe(0)
     expect(castRun.jobState).toBe('completed')

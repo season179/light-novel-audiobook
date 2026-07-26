@@ -92,6 +92,22 @@ export const createCastApprovalRecord = (decision: CastApprovalDecision): Persis
   })
 }
 
+/**
+ * True iff some approved assignment is rendered from the configured fallback voice material — the
+ * same `syntheticSpeaker`, `instruction` and `seedSalt` every unresolved fallback line uses, so the
+ * character is voice-indistinguishable from the lines the director failed to attribute.
+ *
+ * This is a derivation over the pinned production config plus the approved assignments, never a
+ * restatable field: the caller supplies the config's fallback profile id and the assignments, and the
+ * boolean is computed here, so it cannot be stated independently and silently drift. Sharing stays
+ * admissible; this only surfaces the fact to the human who signs the cast. It is not part of the
+ * approval record and does not affect the ledger hash.
+ */
+export const characterSharesFallbackMaterial = (
+  fallbackVoiceProfileId: string,
+  assignments: readonly CastAssignment[],
+): boolean => assignments.some((item) => item.materialProfileId === fallbackVoiceProfileId)
+
 /** Sharing groups shown to the human before approval; an empty result means all material is exclusive. */
 export const sharedVoiceMaterialGroups = (
   assignments: readonly CastAssignment[],

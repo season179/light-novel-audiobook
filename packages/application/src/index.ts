@@ -2,6 +2,7 @@ export {
   type CastApprovalDecision,
   type CastAssignment,
   type CastProposal,
+  characterSharesFallbackMaterial,
   createCastApprovalRecord,
   type PersistedCastApproval,
   parseCastProposal,

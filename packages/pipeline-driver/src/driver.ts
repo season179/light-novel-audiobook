@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { GenerateAudiobook, withDirectorContentIdentity } from '@light-novel-audiobook/application'
+import {
+  characterSharesFallbackMaterial,
+  GenerateAudiobook,
+  withDirectorContentIdentity,
+} from '@light-novel-audiobook/application'
 import { FfmpegAudioAssembler } from '@light-novel-audiobook/audio-assembly'
 import { DomainError } from '@light-novel-audiobook/domain'
 import { DomainEpubExtractor } from '@light-novel-audiobook/epub-ingestion'
@@ -65,6 +69,7 @@ export interface RunPipelineReport {
     readonly characterCount: number
     readonly distinctMaterialCount: number
     readonly sharedMaterialGroupCount: number
+    readonly characterSharesFallbackMaterial: boolean
   }
   readonly lifecycleEvents: readonly string[]
   readonly identities: {
@@ -244,6 +249,10 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
           castApproval?.assignments.map((item) => item.materialProfileId) ?? [],
         ).size,
         sharedMaterialGroupCount: sharedMaterialGroups.length,
+        characterSharesFallbackMaterial: characterSharesFallbackMaterial(
+          production.value.fallbackVoiceProfileId,
+          castApproval?.assignments ?? [],
+        ),
       },
       lifecycleEvents: [...transports.lifecycleEvents],
       identities: {

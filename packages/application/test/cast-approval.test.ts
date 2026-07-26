@@ -2,6 +2,7 @@ import { DomainError } from '@light-novel-audiobook/domain'
 import { describe, expect, it } from 'vitest'
 import {
   type CastProposal,
+  characterSharesFallbackMaterial,
   createCastApprovalRecord,
   type PersistedCastApproval,
   parseCastProposal,
@@ -49,6 +50,18 @@ const proposal = () =>
   })
 
 describe('cast proposal and human approval', () => {
+  it('flags when a character shares the fallback voice material, derived from config plus assignments', () => {
+    // The flag is derived from the pinned fallback profile id plus the approved assignments — a caller
+    // supplies the config id and the assignments, never the boolean, so it cannot be stated
+    // independently and drift. Pin both directions; gutting the derivation (always-false, always-true,
+    // `.every` instead of `.some`, `!==` instead of `===`, or comparing the wrong field) fails at least
+    // one assertion. It is not part of the approval record, so the ledger hash is unaffected.
+    const assignments = proposal().assignments // materials: material-bright, material-low, material-low
+    expect(characterSharesFallbackMaterial('ryan-low-weary', assignments)).toBe(false)
+    expect(characterSharesFallbackMaterial('material-low', assignments)).toBe(true)
+    expect(characterSharesFallbackMaterial('material-low', [])).toBe(false)
+  })
+
   it('records an actor-attributed decision and exposes deliberate material sharing', async () => {
     const repository = new InMemoryCastApprovals()
     const review = new ReviewCastApprovals({
