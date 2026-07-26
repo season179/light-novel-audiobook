@@ -126,13 +126,20 @@ afterEach(async () => {
 })
 
 describe('fallback review CLI', () => {
-  it('lists only decision metadata from the real SQLite workspace, including the model reason', async () => {
-    const { root } = await preparedWorkspace('job-list-fallbacks')
+  it('lists without resolving an actor or changing the approval catalog', async () => {
+    const { root, book } = await preparedWorkspace('job-list-fallbacks')
+    const database = openWorkspace(layoutFor(root))
+    const approvals = new SqliteFallbackApprovalRepository(database)
+    const before = await approvals.readCatalog(book.id)
+    database.close()
 
     const report = await runFallbackReviewCommand({
       action: 'list',
       workspaceRoot: root,
       jobId: 'job-list-fallbacks',
+      resolveReviewer: () => {
+        throw new Error('list must not resolve a reviewer')
+      },
     })
 
     expect(report).toEqual({
@@ -149,6 +156,11 @@ describe('fallback review CLI', () => {
       ],
     })
     expect(JSON.stringify(report)).not.toContain('Is anyone there')
+
+    const afterDatabase = openWorkspace(layoutFor(root))
+    const after = await new SqliteFallbackApprovalRepository(afterDatabase).readCatalog(book.id)
+    afterDatabase.close()
+    expect(after).toEqual(before)
   })
 
   it('bulk-approves only after an explicit command and records the resolved human actor', async () => {
