@@ -24,7 +24,8 @@ export interface RealAdapterFactoryOptions {
   /**
    * Where the director's HTTP endpoint is, which Python worker the speech engine spawns, and who
    * arbitrates the GPU. Constructed by the caller — `createRealTransports` in production, fake
-   * transports in tests — so this module never decides how real the runtime is.
+   * transports in tests — so this module never decides how real the runtime is. Its director runtime
+   * factory is invoked once per model; the transport object itself remains process-lived.
    */
   readonly transports: PipelineTransports
   /**
@@ -53,9 +54,9 @@ export interface RealAdapterFactories {
  *
  * The load-bearing rules from the composition-root seam are honoured here, not re-decided:
  *
- * - The director is a **factory called once per generation run**, never a shared instance:
- *   `GemmaDirectorModel.release()` is terminal, so a retained director serves the first book and
- *   fails every book after it.
+ * - The director is a **factory called once per generation run**, never a shared instance, and each
+ *   model receives a fresh single-use runtime from the transport. Both `GemmaDirectorModel.release()`
+ *   and `OwnedLlamaLifecycle.release()` are terminal; neither object may cross run boundaries.
  * - `directorIdentity` is derived from configuration — `createDirectorContentIdentity(settings)`,
  *   which pins `baseUrl` and the GPU lock path out of the hash (issue #54) — and the constructed
  *   director is wrapped in the same value, because `DirectAudiobook` asserts the two agree.
@@ -89,29 +90,43 @@ export const createRealAdapterFactories = async (
     gpuLeaseLockFilePath: transports.gpu.lockFilePath,
   }
   const directorIdentity = createDirectorContentIdentity(directorSettings)
-  const createDirectorModel = () =>
-    withDirectorContentIdentity(
-      new GemmaDirectorModel({
-        baseUrl: transports.director.baseUrl,
-        apiKey: transports.director.apiKey,
-        confidenceThreshold,
-        contextProvider: {
-          // The story bible does not exist yet, so the cast itself is the context: the director may
-          // only attribute dialogue to a speaker this run can actually render.
-          forChapter: async () => ({
-            speakers: options.characterSpeakerIds.map((id) => ({ id, aliases: [] })),
-            narratorSpeakerId: options.narratorProfileId,
-            fallbackSpeakerId: options.fallbackProfileId,
-          }),
-        },
-        // The web surfaces progress from job state, not from the director's event stream.
-        progressStore: { append: async () => undefined },
-        lifecycle: transports.director.lifecycle,
-        gpuLeaseCoordinator: transports.gpu.coordinator,
-        gpuLeaseLockFilePath: transports.gpu.lockFilePath,
-      }),
-      directorIdentity,
-    )
+  const createDirectorModel = async () => {
+    const runtime = transports.director.createRuntime()
+    try {
+      return withDirectorContentIdentity(
+        new GemmaDirectorModel({
+          baseUrl: transports.director.baseUrl,
+          apiKey: runtime.apiKey,
+          confidenceThreshold,
+          contextProvider: {
+            // The story bible does not exist yet, so the cast itself is the context: the director may
+            // only attribute dialogue to a speaker this run can actually render.
+            forChapter: async () => ({
+              speakers: options.characterSpeakerIds.map((id) => ({ id, aliases: [] })),
+              narratorSpeakerId: options.narratorProfileId,
+              fallbackSpeakerId: options.fallbackProfileId,
+            }),
+          },
+          // The web surfaces progress from job state, not from the director's event stream.
+          progressStore: { append: async () => undefined },
+          lifecycle: runtime.lifecycle,
+          gpuLeaseCoordinator: transports.gpu.coordinator,
+          gpuLeaseLockFilePath: transports.gpu.lockFilePath,
+        }),
+        directorIdentity,
+      )
+    } catch (constructionFailure: unknown) {
+      try {
+        await runtime.lifecycle.release()
+      } catch (releaseFailure: unknown) {
+        throw new AggregateError(
+          [constructionFailure, releaseFailure],
+          'Director construction failed and its runtime could not be released',
+        )
+      }
+      throw constructionFailure
+    }
+  }
 
   // --- speech: the real engine over the selected transport, shared across runs. The snapshot path
   // comes from the transport, never from the workspace, exactly as in the driver.

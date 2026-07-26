@@ -19,6 +19,7 @@ import {
 } from '@light-novel-audiobook/persistence'
 import {
   createFakeTransports,
+  type DirectorRuntimeTransport,
   type PipelineTransports,
 } from '@light-novel-audiobook/pipeline-driver'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -64,17 +65,30 @@ const buildRealFactories = async (): Promise<{
   readonly factories: RealAdapterFactories['factories']
   readonly workspaceRoot: string
   readonly transports: PipelineTransports
+  readonly directorRuntimes: DirectorRuntimeTransport[]
 }> => {
   const workspaceRoot = await mkdtemp(path.join(tmpdir(), 'lna-web-real-adapters-'))
   roots.push(workspaceRoot)
   const workspace = await createWorkspace(workspaceRoot)
-  const transports = await createFakeTransports(
+  const underlyingTransports = await createFakeTransports(
     {
       runtimeDirectory: path.join(workspaceRoot, 'runtime'),
       repositoryRoot: REPOSITORY_ROOT,
     },
     'http://127.0.0.1:18080/v1',
   )
+  const directorRuntimes: DirectorRuntimeTransport[] = []
+  const transports: PipelineTransports = {
+    ...underlyingTransports,
+    director: {
+      baseUrl: underlyingTransports.director.baseUrl,
+      createRuntime: () => {
+        const runtime = underlyingTransports.director.createRuntime()
+        directorRuntimes.push(runtime)
+        return runtime
+      },
+    },
+  }
   transportsToClose.push(transports)
   const result = await createRealAdapterFactories({
     workspace,
@@ -85,7 +99,7 @@ const buildRealFactories = async (): Promise<{
     fallbackProfileId: 'fallback-ryan-restrained',
   })
   built.push(result)
-  return { factories: result.factories, workspaceRoot, transports }
+  return { factories: result.factories, workspaceRoot, transports, directorRuntimes }
 }
 
 describe.skipIf(!TOOLCHAIN_PRESENT)('real adapter factories over fake transports', () => {
@@ -126,23 +140,43 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('real adapter factories over fake transports
     expect(factories.directorIdentity).not.toBe(createGemmaDirectorIdentity(settings))
   })
 
-  it('constructs a fresh, identity-agreeing director per call and never a shared one', async () => {
-    const { factories } = await buildRealFactories()
+  it('constructs a fresh, identity-agreeing director and lifecycle for every run', async () => {
+    const { factories, directorRuntimes, transports } = await buildRealFactories()
     expect(factories.createDirectorModel).toBeDefined()
 
     const first = await factories.createDirectorModel?.()
     const second = await factories.createDirectorModel?.()
+    const third = await factories.createDirectorModel?.()
     expect(first).toBeDefined()
     expect(second).toBeDefined()
+    expect(third).toBeDefined()
     // DirectAudiobook releases a director whose identity disagrees with the factory's, then fails
     // the run — so agreement is asserted, not assumed.
     expect(first?.identity).toBe(factories.directorIdentity)
     expect(second?.identity).toBe(factories.directorIdentity)
-    // A retained director would serve the first book and throw 'has been released' on every book
-    // after it, because release() is terminal. Distinct instances are the whole point.
-    expect(second).not.toBe(first)
-    await first?.release()
-    await second?.release()
+    expect(third?.identity).toBe(factories.directorIdentity)
+    // Both terminal layers are per-run. Distinct director wrappers alone would miss #95 if they all
+    // retained one released lifecycle underneath.
+    expect(new Set([first, second, third]).size).toBe(3)
+    expect(directorRuntimes).toHaveLength(3)
+    expect(new Set(directorRuntimes.map((runtime) => runtime.lifecycle)).size).toBe(3)
+
+    // Each start is genuine: the fake runtime mirrors OwnedLlamaLifecycle's start/release latches,
+    // so reusing the first released instance makes run two reject instead of recording a new start.
+    for (const [index, director] of [first, second, third].entries()) {
+      const runtime = directorRuntimes[index]
+      if (runtime === undefined) throw new Error('per-run director lifecycle was not constructed')
+      await runtime.lifecycle.start()
+      await director?.release()
+    }
+    expect(transports.lifecycleEvents).toEqual([
+      'director:start',
+      'director:release',
+      'director:start',
+      'director:release',
+      'director:start',
+      'director:release',
+    ])
   })
 
   it('shares one speech engine across per-book factories, with a stable identity', async () => {

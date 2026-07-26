@@ -147,33 +147,50 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   })
   const directorModelFactory = {
     identity: directorIdentity,
-    create: () =>
-      withDirectorContentIdentity(
-        new GemmaDirectorModel({
-          baseUrl: transports.director.baseUrl,
-          apiKey: transports.director.apiKey,
-          confidenceThreshold: options.confidenceThreshold ?? 0.5,
-          contextProvider: {
-            // The story bible does not exist yet, so the cast itself is the context: the director may
-            // only attribute dialogue to a speaker this run can actually render. The roster excludes
-            // narrator/fallback role IDs because Gemma rejects them as character speakers.
-            forChapter: async () => ({
-              speakers: castSpeakers,
-              narratorSpeakerId: narratorProfileId,
-              fallbackSpeakerId: fallbackProfileId,
-            }),
-          },
-          progressStore: {
-            append: async (event) => {
-              options.onDirectorProgress?.(event)
+    create: async () => {
+      // The CLI is single-run, so this factory is called at most once. It still consumes the same
+      // per-model runtime seam as the long-lived web composition, preserving one lifecycle owner and
+      // all transport-level signal/orphan guards without retaining a resettable runtime.
+      const runtime = transports.director.createRuntime()
+      try {
+        return withDirectorContentIdentity(
+          new GemmaDirectorModel({
+            baseUrl: transports.director.baseUrl,
+            apiKey: runtime.apiKey,
+            confidenceThreshold: options.confidenceThreshold ?? 0.5,
+            contextProvider: {
+              // The story bible does not exist yet, so the cast itself is the context: the director may
+              // only attribute dialogue to a speaker this run can actually render. The roster excludes
+              // narrator/fallback role IDs because Gemma rejects them as character speakers.
+              forChapter: async () => ({
+                speakers: castSpeakers,
+                narratorSpeakerId: narratorProfileId,
+                fallbackSpeakerId: fallbackProfileId,
+              }),
             },
-          },
-          lifecycle: transports.director.lifecycle,
-          gpuLeaseCoordinator: transports.gpu.coordinator,
-          gpuLeaseLockFilePath: transports.gpu.lockFilePath,
-        }),
-        directorIdentity,
-      ),
+            progressStore: {
+              append: async (event) => {
+                options.onDirectorProgress?.(event)
+              },
+            },
+            lifecycle: runtime.lifecycle,
+            gpuLeaseCoordinator: transports.gpu.coordinator,
+            gpuLeaseLockFilePath: transports.gpu.lockFilePath,
+          }),
+          directorIdentity,
+        )
+      } catch (constructionFailure: unknown) {
+        try {
+          await runtime.lifecycle.release()
+        } catch (releaseFailure: unknown) {
+          throw new AggregateError(
+            [constructionFailure, releaseFailure],
+            'Director construction failed and its runtime could not be released',
+          )
+        }
+        throw constructionFailure
+      }
+    },
   }
 
   // --- speech: real engine over the selected transport.
