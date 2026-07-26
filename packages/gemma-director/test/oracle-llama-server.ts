@@ -135,8 +135,6 @@ export class OracleLlamaServer {
             if (fragments === undefined) throw new Error('Oracle missing passage')
             return fragments.map((fragment) => ({
               source_passage_id: passage.source_passage_id,
-              source_start: fragment.start,
-              source_end: fragment.end,
               source_text: passage.source_text.slice(fragment.start, fragment.end),
               kind: fragment.kind,
               speaker_id: fragment.speaker,
