@@ -1,36 +1,32 @@
+import type { CastAssignment } from '@light-novel-audiobook/application'
 import { DomainError, VoiceCast, VoiceProfile } from '@light-novel-audiobook/domain'
 import type { QwenProductionConfig } from '@light-novel-audiobook/qwen-tts'
 
 /**
- * Builds the domain `VoiceCast` from the **pinned Qwen production config**.
+ * Builds a domain cast from one human-approved assignment and the pinned Qwen inventory.
  *
- * This mapping did not exist anywhere before. It has to be derived rather than restated, because the
- * Qwen engine matches an application voice against its pinned catalogue on three fields at once:
- *
- *     profile.speaker     === voice.syntheticSpeaker
- *     profile.instruction === voice.instruction
- *     profile.seedSalt    === voice.seed          // note the name change
- *
- * Any mismatch throws `Application voice does not match an approved pinned Qwen profile` — and it
- * throws at *render* time, after a full chapter of direction has already been paid for. Copying the
- * speaker names, the long instruction strings, and especially `seedSalt` into a literal here would be
- * one transcription slip away from that failure, so nothing is copied: every field is read from the
- * config the engine itself validates against. Issue #25 took the same approach for the web layer.
+ * A character profile has its own domain ID/speaker ID while its material is copied from an admitted
+ * production profile. Multiple character profiles may deliberately reuse material, but that fact was
+ * made explicit by `CastAssignment.sharingGroupId` before approval. Exact material fields are never
+ * restated here: Qwen accepts them only by exact speaker/instruction/seed equality.
  */
-
 export interface DerivedCast {
   readonly cast: VoiceCast
-  /** Speaker IDs the director may legitimately emit, i.e. the ones this cast can actually render. */
-  readonly castSpeakerIds: readonly string[]
+  readonly castSpeakers: readonly { readonly id: string; readonly aliases: readonly string[] }[]
   readonly narratorProfileId: string
   readonly fallbackProfileId: string
   readonly characterProfileIds: readonly string[]
+  readonly sharedMaterialGroups: readonly {
+    readonly sharingGroupId: string
+    readonly materialProfileId: string
+    readonly speakerCount: number
+  }[]
 }
 
-/** Domain speaker IDs must satisfy `AudiobookJob.validateWarning`'s charset, so keep them simple. */
+/** Domain speaker IDs must satisfy `AudiobookJob.validateWarning`'s charset. */
 const SPEAKER_ID_PATTERN = /^[a-z\d](?:[a-z\d._:-]*[a-z\d])?$/i
 
-function requireSpeakerId(speakerId: string): string {
+const requireSpeakerId = (speakerId: string): string => {
   if (!SPEAKER_ID_PATTERN.test(speakerId)) {
     throw new DomainError(
       `Cast speaker ID ${JSON.stringify(speakerId)} is not accepted by the job warning charset`,
@@ -39,14 +35,9 @@ function requireSpeakerId(speakerId: string): string {
   return speakerId
 }
 
-/**
- * @param characterSpeakerIds Speaker IDs to bind, in order, to the pinned character profiles. Only
- *   as many are cast as there are pinned character profiles; a fourth character voice has nothing
- *   approved to render it, so it is refused here rather than mid-batch.
- */
 export function deriveVoiceCast(
   production: QwenProductionConfig,
-  characterSpeakerIds: readonly string[] = [],
+  assignments: readonly CastAssignment[] = [],
 ): DerivedCast {
   const pinned = production.voiceProfiles
   const fallbackPinned = pinned.find((profile) => profile.id === production.fallbackVoiceProfileId)
@@ -58,16 +49,6 @@ export function deriveVoiceCast(
   const narratorPinned = pinned.find((profile) => profile.role === 'narrator')
   if (narratorPinned === undefined) {
     throw new DomainError('Pinned config defines no narrator profile')
-  }
-
-  // Whatever is neither the narrator nor the designated fallback is available for characters.
-  const characterPinned = pinned.filter(
-    (profile) => profile.id !== narratorPinned.id && profile.id !== fallbackPinned.id,
-  )
-  if (characterSpeakerIds.length > characterPinned.length) {
-    throw new DomainError(
-      `Cast requests ${characterSpeakerIds.length} character voices but only ${characterPinned.length} pinned profiles are available`,
-    )
   }
 
   const narrator = new VoiceProfile({
@@ -90,26 +71,66 @@ export function deriveVoiceCast(
     seed: fallbackPinned.seedSalt,
     revision: 1,
   })
-  const characters = characterSpeakerIds.map((speakerId, index) => {
-    const profile = characterPinned[index]
-    if (profile === undefined) throw new DomainError('Pinned character profile is missing')
+
+  const characters = assignments.map((assignment) => {
+    const material = pinned.find((profile) => profile.id === assignment.materialProfileId)
+    if (material === undefined || material.role === 'narrator') {
+      throw new DomainError(
+        `Cast material ${assignment.materialProfileId} is not character-capable pinned material`,
+      )
+    }
     return new VoiceProfile({
-      id: profile.id,
-      displayName: `${profile.speaker} (${speakerId})`,
+      id: `character-${requireSpeakerId(assignment.speakerId)}`,
+      displayName: `${material.speaker} (${assignment.speakerId})`,
       role: 'character',
-      speakerId: requireSpeakerId(speakerId),
-      syntheticSpeaker: profile.speaker,
-      instruction: profile.instruction,
-      seed: profile.seedSalt,
+      speakerId: assignment.speakerId,
+      speakerAliases: assignment.aliases,
+      syntheticSpeaker: material.speaker,
+      instruction: material.instruction,
+      seed: material.seedSalt,
       revision: 1,
     })
   })
 
+  const sharing = new Map<
+    string,
+    { sharingGroupId: string; materialProfileId: string; speakerCount: number }
+  >()
+  for (const assignment of assignments) {
+    if (assignment.sharingGroupId === null) continue
+    const current = sharing.get(assignment.sharingGroupId)
+    if (current === undefined) {
+      sharing.set(assignment.sharingGroupId, {
+        sharingGroupId: assignment.sharingGroupId,
+        materialProfileId: assignment.materialProfileId,
+        speakerCount: 1,
+      })
+    } else {
+      if (current.materialProfileId !== assignment.materialProfileId) {
+        throw new DomainError(
+          `Cast sharing group ${assignment.sharingGroupId} names more than one voice material`,
+        )
+      }
+      current.speakerCount += 1
+    }
+  }
+
   return {
     cast: new VoiceCast(narrator, fallback, characters),
-    castSpeakerIds: characters.map((profile) => profile.speakerId as string),
+    castSpeakers: Object.freeze(
+      characters.map((profile) => ({
+        id: profile.speakerId as string,
+        aliases: profile.speakerAliases,
+      })),
+    ),
     narratorProfileId: narrator.id,
     fallbackProfileId: fallback.id,
     characterProfileIds: characters.map((profile) => profile.id),
+    sharedMaterialGroups: Object.freeze(
+      [...sharing.values()]
+        .filter((group) => group.speakerCount > 1)
+        .sort((left, right) => left.sharingGroupId.localeCompare(right.sharingGroupId))
+        .map((group) => Object.freeze(group)),
+    ),
   }
 }

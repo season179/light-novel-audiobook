@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { OwnedLlamaLifecycle as SharedOwnedLlamaLifecycle } from '@light-novel-audiobook/gemma-director'
 import { FileGpuLeaseCoordinator, type GpuLease } from '@light-novel-audiobook/gpu-lease'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OwnedLlamaLifecycle as DriverOwnedLlamaLifecycle } from '../src/llama-lifecycle.js'
+import { OwnedLlamaLifecycle as DriverReExportedLifecycle } from '../src/index.js'
 
 const spawnProbe = vi.hoisted(() => {
   let onSpawn: ((child: ChildProcess) => void) | undefined
@@ -171,6 +171,29 @@ async function waitUntil(
   }
 }
 
+/**
+ * Bounds a wait on an event the implementation is expected to produce, and fails naming the event if
+ * it never arrives — so a test that synchronises on an observation cannot instead hang to the suite
+ * timeout. Bounded with a duration timer rather than a deadline, so it reads no clock.
+ */
+async function awaited(
+  event: Promise<void>,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      event,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out: ${description}`)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 async function scratch(label: string): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), `lifecycle-contract-${label}-`))
   roots.push(root)
@@ -240,276 +263,325 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-const consumers: readonly { readonly name: string; readonly factory: LifecycleFactory }[] = [
-  {
-    name: 'gemma-director real-smoke shared lifecycle',
-    factory: (options) => new SharedOwnedLlamaLifecycle(options),
-  },
-  {
-    name: 'pipeline-driver owned lifecycle',
-    factory: (options) => new DriverOwnedLlamaLifecycle(options),
-  },
-]
+/**
+ * There is exactly **one** `OwnedLlamaLifecycle`, so the eight properties below run against it once.
+ *
+ * Until issue/lifecycle-dedup this file looped over two independently written copies — one in
+ * gemma-director, one in pipeline-driver — because #53 was believed to have consolidated them and had
+ * not. That loop is gone rather than kept over a single element: a loop labelled `consumers` reads as
+ * though it still compares two things, and a suite that quietly became half a test is worse than a
+ * smaller honest one.
+ *
+ * What replaces the comparison is test `0.` below **together with**
+ * `lifecycle-single-owner.test.ts`. Test `0.` alone is not enough, and the review of
+ * issue/lifecycle-dedup proved it: restoring the local copy while leaving `src/index.ts` re-exporting
+ * the shared class and pointing only `src/transports.ts` at the local one passes all nine tests here.
+ * The guard on the class real runs actually construct lives in that other file; keep them together.
+ */
+const consumer = {
+  name: 'the one OwnedLlamaLifecycle both consumers use',
+  factory: (options: LifecycleOptions): LifecycleSubject => new SharedOwnedLlamaLifecycle(options),
+}
 
-for (const consumer of consumers) {
-  describe(`DirectorRuntimeLifecycle contract: ${consumer.name}`, () => {
-    it('1. sets releasing synchronously before the first await', async () => {
-      const built = await buildSubject(consumer.factory, 'sync-release')
-      let keyPathReads = 0
-      const guardedOptions = {
-        ...built.options,
-        get keyPath(): string {
-          keyPathReads += 1
-          return built.keyPath
-        },
-      }
-      const lifecycle = consumer.factory(guardedOptions)
-      lifecycles.push(lifecycle)
+describe('DirectorRuntimeLifecycle contract: single implementation', () => {
+  /**
+   * Half of the guard that replaces the old two-copy loop: pipeline-driver's **public export** is
+   * gemma-director's class rather than a redefinition.
+   *
+   * What it does *not* prove is that `createRealTransports` constructs that export — the production
+   * binding is a separate direct import in `src/transports.ts`, and a reintroduced copy wired only
+   * there passes this assertion. `lifecycle-single-owner.test.ts` covers that, by observing the
+   * construction real mode performs and by counting class definitions.
+   *
+   * It is an identity check, not a behavioural one, and that is deliberate: two *different* objects
+   * cannot be proved equivalent by any assertion cheap enough to keep, which is precisely why the
+   * duplication had to be deleted rather than tested around.
+   */
+  it('0. is a single class, re-exported rather than redefined by pipeline-driver', () => {
+    expect(DriverReExportedLifecycle).toBe(SharedOwnedLlamaLifecycle)
+  })
+})
 
-      const released = lifecycle.release()
-      const started = lifecycle.start()
-      // `start()` itself runs synchronously to its first await. A delayed releasing assignment lets it
-      // read keyPath and begin the write before release has closed the gate.
-      expect(keyPathReads).toBe(0)
-      await expect(started).rejects.toThrow(/release had already begun/)
-      await expect(released).resolves.toBeUndefined()
-      expect(lifecycle.cleanupComplete).toBe(true)
+describe(`DirectorRuntimeLifecycle contract: ${consumer.name}`, () => {
+  it('1. sets releasing synchronously before the first await', async () => {
+    const built = await buildSubject(consumer.factory, 'sync-release')
+    let keyPathReads = 0
+    const guardedOptions = {
+      ...built.options,
+      get keyPath(): string {
+        keyPathReads += 1
+        return built.keyPath
+      },
+    }
+    const lifecycle = consumer.factory(guardedOptions)
+    lifecycles.push(lifecycle)
+
+    const released = lifecycle.release()
+    const started = lifecycle.start()
+    // `start()` itself runs synchronously to its first await. A delayed releasing assignment lets it
+    // read keyPath and begin the write before release has closed the gate.
+    expect(keyPathReads).toBe(0)
+    await expect(started).rejects.toThrow(/release had already begun/)
+    await expect(released).resolves.toBeUndefined()
+    expect(lifecycle.cleanupComplete).toBe(true)
+  })
+
+  it('2. reaps a current child before waiting for startup settlement', async () => {
+    const built = await buildSubject(consumer.factory, 'reap-before-wait', {
+      extraArgs: ['--health-unready-ms=120000'],
+      startupSettleTimeoutMs: 1_500,
+    })
+    const coordinator = new FileGpuLeaseCoordinator({
+      lockFilePath: path.join(built.root, 'exclusive.lock'),
+      inspectExistingComputeProcesses: false,
+    })
+    const gemmaLease = await coordinator.acquire('gemma')
+    leases.push(gemmaLease)
+    const started = built.lifecycle.start()
+    await waitUntil(() => built.lifecycle.processId !== undefined, 'the child to spawn')
+    const pid = built.lifecycle.processId
+    if (pid === undefined) throw new Error('spawned lifecycle has no process ID')
+    expect(processAlive(pid)).toBe(true)
+
+    const released = built.lifecycle.release()
+    await expect(started).rejects.toThrow(/exited during model load/)
+    await expect(released).resolves.toBeUndefined()
+    expect(processAlive(pid)).toBe(false)
+    await gemmaLease.release()
+
+    const qwenLease = await coordinator.acquire('qwen3-tts')
+    leases.push(qwenLease)
+    expect(processAlive(pid)).toBe(false)
+    expect(await portIsFree(built.port)).toBe(true)
+  })
+
+  it('3. awaits startup settlement and counts a failed start as settled', async () => {
+    const built = await buildSubject(consumer.factory, 'await-start')
+    const barrier = chmodGate.arm(built.keyPath)
+    const started = built.lifecycle.start()
+    await barrier.reached
+
+    let releaseSettled = false
+    const released = built.lifecycle.release().finally(() => {
+      releaseSettled = true
+    })
+    await delay(100)
+    expect(releaseSettled).toBe(false)
+
+    barrier.open()
+    await expect(started).rejects.toThrow(/release had already begun/)
+    await expect(released).resolves.toBeUndefined()
+    expect(built.lifecycle.cleanupComplete).toBe(true)
+  })
+
+  it('4. reaps again after a start that spawned during the first reap snapshot', async () => {
+    const built = await buildSubject(consumer.factory, 'second-reap', {
+      portFreeTimeoutMs: 300,
+    })
+    let releaseFromSpawn: Promise<void> | undefined
+    spawnProbe.arm(() => {
+      releaseFromSpawn ??= built.lifecycle.release()
+      void releaseFromSpawn.catch(() => undefined)
     })
 
-    it('2. reaps a current child before waiting for startup settlement', async () => {
-      const built = await buildSubject(consumer.factory, 'reap-before-wait', {
-        extraArgs: ['--health-unready-ms=120000'],
-        startupSettleTimeoutMs: 1_500,
-      })
-      const coordinator = new FileGpuLeaseCoordinator({
-        lockFilePath: path.join(built.root, 'exclusive.lock'),
-        inspectExistingComputeProcesses: false,
-      })
-      const gemmaLease = await coordinator.acquire('gemma')
-      leases.push(gemmaLease)
-      const started = built.lifecycle.start()
-      await waitUntil(() => built.lifecycle.processId !== undefined, 'the child to spawn')
-      const pid = built.lifecycle.processId
-      if (pid === undefined) throw new Error('spawned lifecycle has no process ID')
-      expect(processAlive(pid)).toBe(true)
+    await expect(built.lifecycle.start()).resolves.toBeUndefined()
+    expect(releaseFromSpawn).toBeDefined()
+    await expect(releaseFromSpawn).resolves.toBeUndefined()
+    const pid = spawnProbe.pids()[0]
+    if (pid === undefined) throw new Error('spawn probe observed no child PID')
+    expect(processAlive(pid)).toBe(false)
+    expect(await portIsFree(built.port)).toBe(true)
+    expect(built.lifecycle.cleanupComplete).toBe(true)
+  })
 
-      const released = built.lifecycle.release()
-      await expect(started).rejects.toThrow(/exited during model load/)
-      await expect(released).resolves.toBeUndefined()
-      expect(processAlive(pid)).toBe(false)
-      await gemmaLease.release()
-
-      const qwenLease = await coordinator.acquire('qwen3-tts')
-      leases.push(qwenLease)
-      expect(processAlive(pid)).toBe(false)
-      expect(await portIsFree(built.port)).toBe(true)
+  it('5. removes the key, requires a free port, then marks cleanup complete', async () => {
+    const built = await buildSubject(consumer.factory, 'cleanup-order')
+    await writeFile(built.keyPath, `${API_KEY}\n`, { mode: 0o600 })
+    const blocker = createServer()
+    servers.push(blocker)
+    await new Promise<void>((resolve, reject) => {
+      blocker.once('error', reject)
+      blocker.listen(built.port, '127.0.0.1', resolve)
     })
 
-    it('3. awaits startup settlement and counts a failed start as settled', async () => {
-      const built = await buildSubject(consumer.factory, 'await-start')
-      const barrier = chmodGate.arm(built.keyPath)
-      const started = built.lifecycle.start()
-      await barrier.reached
-
-      let releaseSettled = false
-      const released = built.lifecycle.release().finally(() => {
-        releaseSettled = true
-      })
-      await delay(100)
-      expect(releaseSettled).toBe(false)
-
-      barrier.open()
-      await expect(started).rejects.toThrow(/release had already begun/)
-      await expect(released).resolves.toBeUndefined()
-      expect(built.lifecycle.cleanupComplete).toBe(true)
+    let releaseSettled = false
+    const released = built.lifecycle.release().finally(() => {
+      releaseSettled = true
     })
+    await waitUntil(
+      async () =>
+        await stat(built.keyPath).then(
+          () => false,
+          (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
+        ),
+      'the API key to be removed',
+    )
+    expect(releaseSettled).toBe(false)
+    expect(built.lifecycle.cleanupComplete).toBe(false)
+    expect(await portIsFree(built.port)).toBe(false)
 
-    it('4. reaps again after a start that spawned during the first reap snapshot', async () => {
-      const built = await buildSubject(consumer.factory, 'second-reap', {
-        portFreeTimeoutMs: 300,
-      })
-      let releaseFromSpawn: Promise<void> | undefined
-      spawnProbe.arm(() => {
-        releaseFromSpawn ??= built.lifecycle.release()
-        void releaseFromSpawn.catch(() => undefined)
-      })
+    await closeServer(blocker)
+    await expect(released).resolves.toBeUndefined()
+    expect(await portIsFree(built.port)).toBe(true)
+    expect(built.lifecycle.cleanupComplete).toBe(true)
+  })
 
-      await expect(built.lifecycle.start()).resolves.toBeUndefined()
-      expect(releaseFromSpawn).toBeDefined()
-      await expect(releaseFromSpawn).resolves.toBeUndefined()
-      const pid = spawnProbe.pids()[0]
-      if (pid === undefined) throw new Error('spawn probe observed no child PID')
-      expect(processAlive(pid)).toBe(false)
-      expect(await portIsFree(built.port)).toBe(true)
-      expect(built.lifecycle.cleanupComplete).toBe(true)
+  it('6. performs the final releasing check and spawn in one synchronous step', async () => {
+    const built = await buildSubject(consumer.factory, 'check-adjacent', {
+      extraArgs: ['--health-unready-ms=120000'],
     })
-
-    it('5. removes the key, requires a free port, then marks cleanup complete', async () => {
-      const built = await buildSubject(consumer.factory, 'cleanup-order')
-      await writeFile(built.keyPath, `${API_KEY}\n`, { mode: 0o600 })
-      const blocker = createServer()
-      servers.push(blocker)
-      await new Promise<void>((resolve, reject) => {
-        blocker.once('error', reject)
-        blocker.listen(built.port, '127.0.0.1', resolve)
-      })
-
-      let releaseSettled = false
-      const released = built.lifecycle.release().finally(() => {
-        releaseSettled = true
-      })
-      await waitUntil(
-        async () =>
-          await stat(built.keyPath).then(
-            () => false,
-            (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
-          ),
-        'the API key to be removed',
-      )
-      expect(releaseSettled).toBe(false)
-      expect(built.lifecycle.cleanupComplete).toBe(false)
-      expect(await portIsFree(built.port)).toBe(false)
-
-      await closeServer(blocker)
-      await expect(released).resolves.toBeUndefined()
-      expect(await portIsFree(built.port)).toBe(true)
-      expect(built.lifecycle.cleanupComplete).toBe(true)
-    })
-
-    it('6. performs the final releasing check and spawn in one synchronous step', async () => {
-      const built = await buildSubject(consumer.factory, 'check-adjacent', {
-        extraArgs: ['--health-unready-ms=120000'],
-      })
-      let lifecycle: LifecycleSubject | undefined
-      let releaseStarted = false
-      let released: Promise<void> | undefined
-      let spawnSawRelease = false
-      const queuedReleaseOperand = {
-        toString(): string {
-          queueMicrotask(() => {
-            releaseStarted = true
-            released ??= (lifecycle as LifecycleSubject).release()
-            void released.catch(() => undefined)
-          })
-          return STUB
-        },
-      }
-      const options = {
-        ...built.options,
-        args: [
-          queuedReleaseOperand,
-          String(built.port),
-          'http://127.0.0.1:9/unreachable',
-          '--health-unready-ms=120000',
-        ] as unknown as readonly string[],
-      }
-      lifecycle = consumer.factory(options)
-      lifecycles.push(lifecycle)
-      spawnProbe.arm(() => {
-        spawnSawRelease = releaseStarted
-      })
-
-      const started = lifecycle.start()
-      await expect(started).rejects.toThrow(/exited during model load/)
-      await expect(released).resolves.toBeUndefined()
-      expect(spawnProbe.count()).toBe(1)
-      expect(spawnSawRelease).toBe(false)
-      expect(lifecycle.cleanupComplete).toBe(true)
-    })
-
-    it('7. reads and coerces every spawn operand before the final releasing check', async () => {
-      const cases: readonly {
-        readonly label: string
-        readonly options: (base: LifecycleOptions, beginRelease: () => void) => LifecycleOptions
-      }[] = [
-        {
-          label: 'binaryPath getter',
-          options: (base, beginRelease) => ({
-            ...base,
-            get binaryPath(): string {
-              beginRelease()
-              return process.execPath
-            },
-          }),
-        },
-        {
-          label: 'args getter',
-          options: (base, beginRelease) => ({
-            ...base,
-            get args(): readonly string[] {
-              beginRelease()
-              return base.args
-            },
-          }),
-        },
-        {
-          label: 'args iterator',
-          options: (base, beginRelease) => ({
-            ...base,
-            args: {
-              *[Symbol.iterator](): Iterator<string> {
-                beginRelease()
-                yield* base.args
-              },
-            } as readonly string[],
-          }),
-        },
-        {
-          label: 'argument coercion',
-          options: (base, beginRelease) => ({
-            ...base,
-            args: [
-              {
-                toString(): string {
-                  beginRelease()
-                  return STUB
-                },
-              },
-              ...base.args.slice(1),
-            ] as unknown as readonly string[],
-          }),
-        },
-      ]
-
-      for (const testCase of cases) {
-        const built = await buildSubject(consumer.factory, `operand-${testCase.label}`)
-        let lifecycle: LifecycleSubject | undefined
-        let released: Promise<void> | undefined
-        let hookCalls = 0
-        const beginRelease = (): void => {
-          hookCalls += 1
+    let lifecycle: LifecycleSubject | undefined
+    let releaseStarted = false
+    let released: Promise<void> | undefined
+    let spawnSawRelease = false
+    const queuedReleaseOperand = {
+      toString(): string {
+        queueMicrotask(() => {
+          releaseStarted = true
           released ??= (lifecycle as LifecycleSubject).release()
           void released.catch(() => undefined)
-        }
-        lifecycle = consumer.factory(testCase.options(built.options, beginRelease))
-        lifecycles.push(lifecycle)
-        spawnProbe.arm()
-
-        await expect(lifecycle.start(), testCase.label).rejects.toThrow(/release had already begun/)
-        await expect(released, testCase.label).resolves.toBeUndefined()
-        expect(hookCalls, testCase.label).toBe(1)
-        expect(spawnProbe.count(), testCase.label).toBe(0)
-        expect(lifecycle.cleanupComplete, testCase.label).toBe(true)
-      }
+        })
+        return STUB
+      },
+    }
+    const options = {
+      ...built.options,
+      args: [
+        queuedReleaseOperand,
+        String(built.port),
+        'http://127.0.0.1:9/unreachable',
+        '--health-unready-ms=120000',
+      ] as unknown as readonly string[],
+    }
+    lifecycle = consumer.factory(options)
+    lifecycles.push(lifecycle)
+    // Resolved from inside the recorded spawn, so the assertion below can only run once a spawn has
+    // actually been observed. Asserting `spawnSawRelease` without this synchronisation would pass
+    // vacuously whenever it ran before the first spawn.
+    let firstSpawnObserved: (() => void) | undefined
+    const firstSpawn = new Promise<void>((resolve) => {
+      firstSpawnObserved = resolve
+    })
+    spawnProbe.arm(() => {
+      spawnSawRelease = releaseStarted
+      firstSpawnObserved?.()
     })
 
-    it('8. bounds startup settlement and leaves cleanup incomplete on expiry', async () => {
-      const built = await buildSubject(consumer.factory, 'settle-bound', {
-        startupSettleTimeoutMs: 75,
-      })
-      const barrier = chmodGate.arm(built.keyPath)
-      const started = built.lifecycle.start()
-      void started.catch(() => undefined)
-      await barrier.reached
+    const started = lifecycle.start()
+    // Attached before the first await so a rejection that arrives while we wait is never unhandled.
+    void started.catch(() => undefined)
 
-      const releaseStartedAt = performance.now()
-      await expect(built.lifecycle.release()).rejects.toThrow(/had not settled 75ms/)
-      expect(performance.now() - releaseStartedAt).toBeLessThan(2_000)
-      expect(built.lifecycle.cleanupComplete).toBe(false)
+    // Ordered so the failure names the defect. An `await` inserted between the final releasing check
+    // and the spawn lets the queued release land first; the downstream symptom is a child spawned
+    // after release began, never reaped, so startup times out ~10 s later. Awaiting `started` first
+    // reported that timeout and masked the ordering violation that caused it.
+    await awaited(
+      firstSpawn,
+      'the lifecycle never spawned a child, so nothing observed the ordering',
+    )
+    expect(
+      spawnSawRelease,
+      'release began before spawn: the final releasing check and the spawn were separated by an await',
+    ).toBe(false)
 
-      barrier.open()
-      await expect(started).rejects.toThrow()
-      expect(built.lifecycle.processId).toBeUndefined()
-    })
+    await expect(started).rejects.toThrow(/exited during model load/)
+    await expect(released).resolves.toBeUndefined()
+    expect(spawnProbe.count()).toBe(1)
+    expect(lifecycle.cleanupComplete).toBe(true)
   })
-}
+
+  it('7. reads and coerces every spawn operand before the final releasing check', async () => {
+    const cases: readonly {
+      readonly label: string
+      readonly options: (base: LifecycleOptions, beginRelease: () => void) => LifecycleOptions
+    }[] = [
+      {
+        label: 'binaryPath getter',
+        options: (base, beginRelease) => ({
+          ...base,
+          get binaryPath(): string {
+            beginRelease()
+            return process.execPath
+          },
+        }),
+      },
+      {
+        label: 'args getter',
+        options: (base, beginRelease) => ({
+          ...base,
+          get args(): readonly string[] {
+            beginRelease()
+            return base.args
+          },
+        }),
+      },
+      {
+        label: 'args iterator',
+        options: (base, beginRelease) => ({
+          ...base,
+          args: {
+            *[Symbol.iterator](): Iterator<string> {
+              beginRelease()
+              yield* base.args
+            },
+          } as readonly string[],
+        }),
+      },
+      {
+        label: 'argument coercion',
+        options: (base, beginRelease) => ({
+          ...base,
+          args: [
+            {
+              toString(): string {
+                beginRelease()
+                return STUB
+              },
+            },
+            ...base.args.slice(1),
+          ] as unknown as readonly string[],
+        }),
+      },
+    ]
+
+    for (const testCase of cases) {
+      const built = await buildSubject(consumer.factory, `operand-${testCase.label}`)
+      let lifecycle: LifecycleSubject | undefined
+      let released: Promise<void> | undefined
+      let hookCalls = 0
+      const beginRelease = (): void => {
+        hookCalls += 1
+        released ??= (lifecycle as LifecycleSubject).release()
+        void released.catch(() => undefined)
+      }
+      lifecycle = consumer.factory(testCase.options(built.options, beginRelease))
+      lifecycles.push(lifecycle)
+      spawnProbe.arm()
+
+      await expect(lifecycle.start(), testCase.label).rejects.toThrow(/release had already begun/)
+      await expect(released, testCase.label).resolves.toBeUndefined()
+      expect(hookCalls, testCase.label).toBe(1)
+      expect(spawnProbe.count(), testCase.label).toBe(0)
+      expect(lifecycle.cleanupComplete, testCase.label).toBe(true)
+    }
+  })
+
+  it('8. bounds startup settlement and leaves cleanup incomplete on expiry', async () => {
+    const built = await buildSubject(consumer.factory, 'settle-bound', {
+      startupSettleTimeoutMs: 75,
+    })
+    const barrier = chmodGate.arm(built.keyPath)
+    const started = built.lifecycle.start()
+    void started.catch(() => undefined)
+    await barrier.reached
+
+    const releaseStartedAt = performance.now()
+    await expect(built.lifecycle.release()).rejects.toThrow(/had not settled 75ms/)
+    expect(performance.now() - releaseStartedAt).toBeLessThan(2_000)
+    expect(built.lifecycle.cleanupComplete).toBe(false)
+
+    barrier.open()
+    await expect(started).rejects.toThrow()
+    expect(built.lifecycle.processId).toBeUndefined()
+  })
+})

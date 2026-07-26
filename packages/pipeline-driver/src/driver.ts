@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { GenerateAudiobook, withDirectorContentIdentity } from '@light-novel-audiobook/application'
+import {
+  characterSharesFallbackMaterial,
+  GenerateAudiobook,
+  withDirectorContentIdentity,
+} from '@light-novel-audiobook/application'
 import { FfmpegAudioAssembler } from '@light-novel-audiobook/audio-assembly'
+import { DomainError } from '@light-novel-audiobook/domain'
 import { DomainEpubExtractor } from '@light-novel-audiobook/epub-ingestion'
 import {
   createGemmaDirectorContentIdentity,
@@ -13,6 +18,7 @@ import {
   layoutFor,
   migrateSchema,
   openWorkspace,
+  SqliteCastApprovalRepository,
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
@@ -33,8 +39,6 @@ export interface RunPipelineOptions {
   readonly repositoryRoot: string
   readonly transports: PipelineTransports
   readonly limits?: SliceLimits
-  /** Character speaker IDs to cast against the pinned character profiles. Empty for narration-only. */
-  readonly characterSpeakerIds?: readonly string[]
   readonly confidenceThreshold?: number
   readonly ffmpegDirectory?: string
   /** Direction progress, which #21 needs to surface and a run needs in order to be diagnosable. */
@@ -60,6 +64,13 @@ export interface RunPipelineReport {
     readonly bytes: number
   }[]
   readonly fallbackWarnings: number
+  readonly cast: {
+    readonly approvalId: string | null
+    readonly characterCount: number
+    readonly distinctMaterialCount: number
+    readonly sharedMaterialGroupCount: number
+    readonly characterSharesFallbackMaterial: boolean
+  }
   readonly lifecycleEvents: readonly string[]
   readonly identities: {
     readonly extractor: string
@@ -96,24 +107,34 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   migrateSchema(database)
   const jobs = new SqliteJobRepository(layout, database)
   const approvals = new SqliteFallbackApprovalRepository(database)
+  const castApprovals = new SqliteCastApprovalRepository(database)
+  const castApproval = await castApprovals.findCastApproval(epubSha256)
 
   // --- extraction: the real extractor, bounded by a decorator at this boundary only
-  const extractor = new SlicingEpubExtractor(
+  const slicedExtractor = new SlicingEpubExtractor(
     new DomainEpubExtractor({
       workspaceRoot: options.workspaceRoot,
       repositoryRoot: options.repositoryRoot,
     }),
     options.limits ?? {},
   )
+  const extractor = {
+    identity: slicedExtractor.identity,
+    extract: async (request: { readonly epubPath: string }) => {
+      const book = await slicedExtractor.extract(request)
+      if (castApproval !== undefined && castApproval.bookId !== book.id) {
+        throw new DomainError('The approved cast belongs to a different extracted book identity')
+      }
+      return book
+    },
+  }
 
   // --- cast: derived from the config the engine validates against
   const production = await loadProductionConfig(
     path.join(options.repositoryRoot, 'config/qwen3-tts-production.json'),
   )
-  const { cast, castSpeakerIds, narratorProfileId, fallbackProfileId } = deriveVoiceCast(
-    production.value,
-    options.characterSpeakerIds ?? [],
-  )
+  const { cast, castSpeakers, narratorProfileId, fallbackProfileId, sharedMaterialGroups } =
+    deriveVoiceCast(production.value, castApproval?.assignments ?? [])
 
   // --- director: constructed only if a draft chapter actually needs direction. Its command
   // identity binds content settings, not the movable loopback port or GPU lock path.
@@ -135,7 +156,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
             // only attribute dialogue to a speaker this run can actually render. The roster excludes
             // narrator/fallback role IDs because Gemma rejects them as character speakers.
             forChapter: async () => ({
-              speakers: castSpeakerIds.map((id) => ({ id, aliases: [] })),
+              speakers: castSpeakers,
               narratorSpeakerId: narratorProfileId,
               fallbackSpeakerId: fallbackProfileId,
             }),
@@ -212,7 +233,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
       bookId: result.job.bookId ?? '',
       jobState: result.job.state,
       jobStage: result.job.stage,
-      slice: extractor.report,
+      slice: slicedExtractor.report,
       generatedSegments: result.generatedSegments,
       reusedSegments: result.reusedSegments,
       outputVersion: result.output.version.value,
@@ -221,6 +242,18 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
       m4bSha256: createHash('sha256').update(m4b).digest('hex'),
       chapterOutputs,
       fallbackWarnings: result.job.warnings.length,
+      cast: {
+        approvalId: castApproval?.approvalId ?? null,
+        characterCount: castApproval?.assignments.length ?? 0,
+        distinctMaterialCount: new Set(
+          castApproval?.assignments.map((item) => item.materialProfileId) ?? [],
+        ).size,
+        sharedMaterialGroupCount: sharedMaterialGroups.length,
+        characterSharesFallbackMaterial: characterSharesFallbackMaterial(
+          production.value.fallbackVoiceProfileId,
+          castApproval?.assignments ?? [],
+        ),
+      },
       lifecycleEvents: [...transports.lifecycleEvents],
       identities: {
         extractor: extractor.identity,

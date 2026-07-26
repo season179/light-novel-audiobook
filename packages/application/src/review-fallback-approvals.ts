@@ -8,6 +8,7 @@ import { type ApprovalCatalogAccess, approvalCatalogAccessFor } from './complete
 import {
   approvalStillDescribes,
   type BookFallbackGrant,
+  type BookFallbackGrantSubject,
   collectFallbackSubjects,
   createBookFallbackGrant,
   createFallbackApprovalRecord,
@@ -76,9 +77,9 @@ export class RenderInProgressError extends DomainError {
  * fallback decisions `QwenApplicationSpeechEngine` requires, and the consequence of changing one: a
  * completed job goes back to awaiting review so its dependent audio is re-derived.
  *
- * **Every approval in the system originates here.** `reconcile` can only materialize records from a
- * grant that a human already issued through `grantBookFallback`; it has no policy parameter and no
- * default, so no generation run and no composition wiring can cause an approval to exist.
+ * **Every approval decision in the system originates here.** Generation calls `reconcile`, so it can
+ * materialize per-segment approval records from a grant a human already issued. It cannot create that
+ * grant or make a decision: `reconcile` has no policy parameter and no approval default.
  */
 export class ReviewFallbackApprovals {
   private readonly jobs: JobRepository
@@ -117,6 +118,9 @@ export class ReviewFallbackApprovals {
     const excluded = new Set(catalog.exclusions.map((exclusion) => exclusion.segmentId))
     const excludedBy = new Map(
       catalog.exclusions.map((exclusion) => [exclusion.segmentId, exclusion.decidedBy]),
+    )
+    const grantedSubjects = new Map(
+      catalog.grant?.subjects.map((subject) => [subject.segmentId, subject]) ?? [],
     )
 
     const approved: PersistedFallbackApproval[] = []
@@ -170,7 +174,12 @@ export class ReviewFallbackApprovals {
         )
         continue
       }
-      if (catalog.grant === undefined) {
+      const grantedSubject = grantedSubjects.get(subject.segment.id)
+      if (
+        catalog.grant === undefined ||
+        grantedSubject === undefined ||
+        !grantSubjectStillDescribes(grantedSubject, subject)
+      ) {
         pending.push(pendingFrom(subject, {}, speakerReasons.get(subject.segment.id)))
         continue
       }
@@ -254,13 +263,28 @@ export class ReviewFallbackApprovals {
     return this.catalogAccess.runExclusive(book.id, async () => {
       this.assertNoRenderOwns(job)
       await this.reopenIfCompleted(job)
-      await this.approvals.saveBookGrant(
-        createBookFallbackGrant({
-          bookId: book.id,
-          decidedBy: request.decidedBy,
-          decidedAt: this.decidedAt(),
-        }),
-      )
+      const catalog = await this.approvals.readCatalog(book.id)
+      const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
+      const excluded = new Set(catalog.exclusions.map((record) => record.segmentId))
+      const subjects = collectFallbackSubjects(book).filter((subject) => {
+        if (excluded.has(subject.segment.id)) return false
+        const existing = live.get(subject.segment.id)
+        return existing === undefined || !approvalStillDescribes(existing, subject)
+      })
+      if (subjects.length === 0) {
+        if (catalog.grant === undefined) {
+          throw new DomainError('A fallback grant requires at least one pending reviewed subject')
+        }
+      } else {
+        await this.approvals.saveBookGrant(
+          createBookFallbackGrant({
+            bookId: book.id,
+            decidedBy: request.decidedBy,
+            decidedAt: this.decidedAt(),
+            subjects: subjects.map(grantSubjectFrom),
+          }),
+        )
+      }
       const reconciliation = await this.reconcileUnlocked({ book, warnings: job.warnings })
       await this.reopenIfCompletedSince(request.jobId)
       return reconciliation
@@ -393,6 +417,29 @@ export class ReviewFallbackApprovals {
   }
 }
 
+function grantSubjectFrom(subject: FallbackApprovalSubject): BookFallbackGrantSubject {
+  return {
+    segmentId: subject.segment.id,
+    speakerId: subject.speakerId,
+    fallbackReason: subject.fallbackReason,
+    voiceProfileId: subject.voiceProfileId,
+    sourceTextSha256: subject.sourceTextSha256,
+  }
+}
+
+function grantSubjectStillDescribes(
+  granted: BookFallbackGrantSubject,
+  subject: FallbackApprovalSubject,
+): boolean {
+  return (
+    granted.segmentId === subject.segment.id &&
+    granted.speakerId === subject.speakerId &&
+    granted.fallbackReason === subject.fallbackReason &&
+    granted.voiceProfileId === subject.voiceProfileId &&
+    granted.sourceTextSha256 === subject.sourceTextSha256
+  )
+}
+
 function pendingFrom(
   subject: FallbackApprovalSubject,
   decided: {
@@ -404,6 +451,8 @@ function pendingFrom(
 ): PendingFallbackApproval {
   return Object.freeze({
     segmentId: subject.segment.id,
+    sourcePassageId: subject.segment.sourcePassageId,
+    kind: subject.segment.kind,
     chapterId: subject.chapterId,
     chapterTitle: subject.chapterTitle,
     speakerId: subject.speakerId,
