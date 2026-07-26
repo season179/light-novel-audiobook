@@ -267,7 +267,9 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
     }
     // Guard the fuzz itself: it must actually exercise multi-window stitching.
     expect(multiWindowCases).toBeGreaterThan(CLEAN_CASES * 0.5)
-  })
+    // 60 s: this is a seeded fuzz over thousands of random fragmentations; it takes ~10 s on a
+    // fast machine and CI runners are roughly half the speed. The global 20 s default is too thin.
+  }, 60_000)
 
   it('never lets a single corruption through the chunked pipeline undetected', () => {
     const rand = mulberry32(0x5357_0002)
@@ -389,7 +391,9 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
     }
     expect(corruptionCounts.get('move-across-windows') ?? 0).toBeGreaterThan(200)
     expect(corruptionCounts.get('swap-windows') ?? 0).toBeGreaterThan(200)
-  })
+    // 60 s: same seeded fuzz as above; the corruption loop validates every mutation through the
+    // real validator, which is O(n) per case. Do not reduce the iteration count to fit the timeout.
+  }, 60_000)
 })
 
 describe('issue #53 chunked fidelity fuzz through the HTTP adapter', () => {
