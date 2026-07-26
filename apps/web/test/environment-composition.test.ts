@@ -1,8 +1,10 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import { resolveDefaultModelSnapshotPath } from '@light-novel-audiobook/pipeline-driver'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DIRECTOR_URL_ENV_VAR,
   GPU_LOCK_ENV_VAR,
@@ -129,5 +131,43 @@ describe('real transport configuration', () => {
 
     expect(config.llamaRuntimeRoot).toBe('/elsewhere/brain')
     expect(config.modelSnapshotPath).toBe('/elsewhere/snapshot')
+  })
+})
+
+describe('the server entry point', () => {
+  it('rejects at startup on an invalid mode instead of starting on guessed adapters', async () => {
+    vi.stubEnv(TRANSPORT_MODE_ENV_VAR, 'bogus')
+    vi.resetModules()
+    try {
+      const { getAudiobookWebApi } = await import('../src/server/composition-root.js')
+      const error = await getAudiobookWebApi().then(
+        () => undefined,
+        (caughtError: unknown) => caughtError,
+      )
+      // resetModules gives the re-imported module graph its own WebApiError class, so assert on
+      // the shape, not instanceof.
+      const failure = error as { name?: string; code?: string; message?: string }
+      expect(failure.name).toBe('WebApiError')
+      expect(failure.code).toBe('internal')
+      expect(failure.message).toContain(TRANSPORT_MODE_ENV_VAR)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('builds the fake composition when the mode variable is absent', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'lna-web-env-fake-'))
+    vi.stubEnv('AUDIOBOOK_WORKSPACE_DIR', root)
+    vi.stubEnv('LNA_REVIEWER', 'env-fake-test')
+    vi.resetModules()
+    try {
+      const { getAudiobookWebApi } = await import('../src/server/composition-root.js')
+      const api = await getAudiobookWebApi()
+      // The in-memory default: nothing persisted, no GPU, no model weights touched.
+      await expect(api.getJobState({ jobId: 'job-not-anywhere' })).resolves.toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
