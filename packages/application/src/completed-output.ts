@@ -90,6 +90,17 @@ export class CompletedOutputAuthority {
     if (job.state !== 'completed' || bookId === null) {
       return Object.freeze({ exposable: false as const, denial: 'not-completed' as const })
     }
+    // This preliminary read is never an authorization: it can only reject an already-stale job.
+    // The final read below is repeated while catalog writers are excluded and immediately followed
+    // by consumption. If a withdrawal commits after this read returns a stale snapshot but before
+    // the critical section is acquired, the final read observes it and no descriptor is opened.
+    const preliminary = await this.approvals.readCatalog(bookId)
+    if (job.completedOutputAtCatalogRevision(preliminary.revision) === null) {
+      return Object.freeze({
+        exposable: false as const,
+        denial: 'approval-catalog-moved' as const,
+      })
+    }
     return this.catalogAccess.runExclusive(bookId, async () => {
       const { revision } = await this.approvals.readCatalog(bookId)
       const output = job.completedOutputAtCatalogRevision(revision)
