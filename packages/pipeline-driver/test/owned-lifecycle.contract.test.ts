@@ -171,6 +171,29 @@ async function waitUntil(
   }
 }
 
+/**
+ * Bounds a wait on an event the implementation is expected to produce, and fails naming the event if
+ * it never arrives — so a test that synchronises on an observation cannot instead hang to the suite
+ * timeout. Bounded with a duration timer rather than a deadline, so it reads no clock.
+ */
+async function awaited(
+  event: Promise<void>,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      event,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out: ${description}`)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 async function scratch(label: string): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), `lifecycle-contract-${label}-`))
   roots.push(root)
@@ -432,15 +455,38 @@ describe(`DirectorRuntimeLifecycle contract: ${consumer.name}`, () => {
     }
     lifecycle = consumer.factory(options)
     lifecycles.push(lifecycle)
+    // Resolved from inside the recorded spawn, so the assertion below can only run once a spawn has
+    // actually been observed. Asserting `spawnSawRelease` without this synchronisation would pass
+    // vacuously whenever it ran before the first spawn.
+    let firstSpawnObserved: (() => void) | undefined
+    const firstSpawn = new Promise<void>((resolve) => {
+      firstSpawnObserved = resolve
+    })
     spawnProbe.arm(() => {
       spawnSawRelease = releaseStarted
+      firstSpawnObserved?.()
     })
 
     const started = lifecycle.start()
+    // Attached before the first await so a rejection that arrives while we wait is never unhandled.
+    void started.catch(() => undefined)
+
+    // Ordered so the failure names the defect. An `await` inserted between the final releasing check
+    // and the spawn lets the queued release land first; the downstream symptom is a child spawned
+    // after release began, never reaped, so startup times out ~10 s later. Awaiting `started` first
+    // reported that timeout and masked the ordering violation that caused it.
+    await awaited(
+      firstSpawn,
+      'the lifecycle never spawned a child, so nothing observed the ordering',
+    )
+    expect(
+      spawnSawRelease,
+      'release began before spawn: the final releasing check and the spawn were separated by an await',
+    ).toBe(false)
+
     await expect(started).rejects.toThrow(/exited during model load/)
     await expect(released).resolves.toBeUndefined()
     expect(spawnProbe.count()).toBe(1)
-    expect(spawnSawRelease).toBe(false)
     expect(lifecycle.cleanupComplete).toBe(true)
   })
 
