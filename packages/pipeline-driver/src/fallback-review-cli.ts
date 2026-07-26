@@ -207,6 +207,8 @@ function reviewItem(item: PendingFallbackApproval): FallbackReviewItem {
   })
 }
 
-function decisionGroupKey(item: FallbackReviewItem): string {
+export function decisionGroupKey(
+  item: Pick<FallbackReviewItem, 'speakerId' | 'fallbackReason' | 'proposedVoiceProfileId'>,
+): string {
   return JSON.stringify([item.speakerId, item.fallbackReason, item.proposedVoiceProfileId])
 }

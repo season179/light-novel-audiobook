@@ -24,6 +24,7 @@ import {
 } from '@light-novel-audiobook/persistence'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  decisionGroupKey,
   type FallbackReviewApprovalNotice,
   runFallbackReviewCommand,
 } from '../src/fallback-review-cli.js'
@@ -162,6 +163,21 @@ afterEach(async () => {
 })
 
 describe('fallback review CLI', () => {
+  it('keys every bulk-decision tuple dimension independently', () => {
+    const base = {
+      speakerId: 'synthetic-speaker-a',
+      fallbackReason: 'missing_speaker_voice' as const,
+      proposedVoiceProfileId: 'synthetic-profile-a',
+    }
+    const key = decisionGroupKey(base)
+
+    expect(decisionGroupKey({ ...base, speakerId: 'synthetic-speaker-b' })).not.toBe(key)
+    expect(decisionGroupKey({ ...base, fallbackReason: 'unresolved_speaker' })).not.toBe(key)
+    expect(decisionGroupKey({ ...base, proposedVoiceProfileId: 'synthetic-profile-b' })).not.toBe(
+      key,
+    )
+  })
+
   it('lists without resolving an actor or changing the approval catalog', async () => {
     const { root, book } = await preparedWorkspace('job-list-fallbacks')
     const database = openWorkspace(layoutFor(root))
