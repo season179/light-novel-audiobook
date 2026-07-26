@@ -57,6 +57,7 @@ class UnusedGpuGate implements ExclusiveGpuGate {
     return {
       owner,
       lockFilePath: '/unused',
+      quarantine: async () => undefined,
       release: async () => undefined,
     }
   }

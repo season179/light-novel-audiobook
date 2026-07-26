@@ -300,20 +300,24 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       // so the bound belongs to the lifecycle's own startup timeout (see DirectorRuntimeLifecycle).
       const starting = this.runtimeReady
       if (starting !== undefined) await starting.catch(() => undefined)
-      // A runtime that refuses to exit must never strand the cross-process lease: both steps
-      // always run, and the runtime failure stays the reported cause.
-      let failure: unknown
+      // A failed lifecycle cleanup means runtime state is unknown. Never hand the lease to Qwen in
+      // that state: quarantine keeps this process's kernel lock and leaves a durable marker that
+      // blocks acquisition after process exit. Recovery therefore requires an explicit proof that
+      // no runtime, GPU residency, pending spawn, or occupied endpoint remains.
       try {
         await this.lifecycle.release()
-      } catch (error: unknown) {
-        failure = error
+      } catch (runtimeFailure: unknown) {
+        try {
+          await this.gpuLease?.quarantine('Gemma runtime cleanup did not complete')
+        } catch (quarantineFailure: unknown) {
+          throw new AggregateError(
+            [runtimeFailure, quarantineFailure],
+            'Gemma runtime cleanup failed and the GPU lease could not be quarantined',
+          )
+        }
+        throw runtimeFailure
       }
-      try {
-        await this.gpuLease?.release()
-      } catch (error: unknown) {
-        failure ??= error
-      }
-      if (failure !== undefined) throw failure
+      await this.gpuLease?.release()
     })()
     return this.releasePromise
   }

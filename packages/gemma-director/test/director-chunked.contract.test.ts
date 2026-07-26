@@ -37,7 +37,12 @@ class FakeLifecycle implements DirectorRuntimeLifecycle {
 class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly lockFilePath = '/fixture/shared-gpu/exclusive.lock'
   async acquire(owner: GpuOwner): Promise<GpuLease> {
-    return { owner, lockFilePath: this.lockFilePath, release: async () => {} }
+    return {
+      owner,
+      lockFilePath: this.lockFilePath,
+      quarantine: async () => {},
+      release: async () => {},
+    }
   }
 }
 
@@ -489,6 +494,9 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
         return {
           owner,
           lockFilePath: '/fixture/shared-gpu/exclusive.lock',
+          quarantine: async () => {
+            events.push('lease:quarantined')
+          },
           release: async () => {
             events.push('lease:released')
           },

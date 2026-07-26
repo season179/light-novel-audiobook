@@ -469,7 +469,12 @@ describe('issue #53 chunked fidelity fuzz through the HTTP adapter', () => {
         })(),
         gpuLeaseCoordinator: new (class implements ExclusiveGpuLeaseCoordinator {
           async acquire(owner: GpuOwner): Promise<GpuLease> {
-            return { owner, lockFilePath: '/fuzz/gpu.lock', release: async () => {} }
+            return {
+              owner,
+              lockFilePath: '/fuzz/gpu.lock',
+              quarantine: async () => {},
+              release: async () => {},
+            }
           }
         })(),
         gpuLeaseLockFilePath: '/fuzz/gpu.lock',
