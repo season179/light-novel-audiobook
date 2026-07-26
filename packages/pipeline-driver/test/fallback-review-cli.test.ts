@@ -1,0 +1,209 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import {
+  AudiobookJob,
+  Book,
+  Chapter,
+  ExactSourceCoverage,
+  SourcePassage,
+  StableIds,
+  VoiceCast,
+  VoiceProfile,
+} from '@light-novel-audiobook/domain'
+import {
+  layoutFor,
+  migrateSchema,
+  openWorkspace,
+  SqliteFallbackApprovalRepository,
+  SqliteJobRepository,
+} from '@light-novel-audiobook/persistence'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  type FallbackReviewApprovalNotice,
+  runFallbackReviewCommand,
+} from '../src/fallback-review-cli.js'
+
+const roots: string[] = []
+const sourceHash = '7'.repeat(64)
+const bookId = StableIds.book(sourceHash)
+const chapterId = StableIds.chapter(bookId, 1)
+const passageId = StableIds.passage(chapterId, 1)
+const segmentId = StableIds.segment(passageId, 1)
+const speakerReason = 'No eligible character was present in the synthetic fixture roster.'
+
+const voice = (id: string, role: 'narrator' | 'fallback'): VoiceProfile =>
+  new VoiceProfile({
+    id,
+    displayName: id,
+    role,
+    speakerId: null,
+    syntheticSpeaker: role === 'narrator' ? 'Aiden' : 'Ryan',
+    instruction: `${id} restrained delivery`,
+    seed: 74,
+    revision: 1,
+  })
+
+async function preparedWorkspace(jobId: string): Promise<{ root: string; book: Book }> {
+  const root = await mkdtemp(path.join(tmpdir(), 'fallback-review-cli-'))
+  roots.push(root)
+  const chapter = new Chapter({
+    id: chapterId,
+    bookId,
+    position: 1,
+    title: 'Synthetic Review Chapter',
+    sourcePassages: [
+      new SourcePassage({
+        id: passageId,
+        chapterId,
+        sourceText: '“Is anyone there?”',
+      }),
+    ],
+  })
+  const [segment] = ExactSourceCoverage.createSegments(chapter, [
+    {
+      sourcePassageId: passageId,
+      sourceText: '“Is anyone there?”',
+      kind: 'dialogue',
+      speakerId: null,
+      speakerReason,
+      confidence: 0.4,
+      delivery: {
+        emotion: 'uncertain',
+        pace: 'normal',
+        volume: 'normal',
+        pauseAfterMs: 100,
+      },
+    },
+  ])
+  if (segment === undefined) throw new Error('synthetic review segment missing')
+  const cast = new VoiceCast(voice('narrator', 'narrator'), voice('fallback', 'fallback'), [])
+  segment.assignVoice(cast.resolve(segment).assignment)
+  chapter.submitForReview([segment])
+  chapter.approve()
+  const book = new Book({
+    id: bookId,
+    title: 'Synthetic Review Book',
+    author: null,
+    coverPath: null,
+    source: { epubPath: '/synthetic/review.epub', sha256: sourceHash },
+    chapters: [chapter],
+  })
+  const job = new AudiobookJob(jobId)
+  job.bindCommand('d'.repeat(64))
+  job.start()
+  job.attachBook(book.id)
+  job.beginDirection()
+  job.addFallbackWarning({
+    segmentId,
+    speakerId: null,
+    voiceProfileId: cast.fallback.id,
+    reason: 'unresolved_speaker',
+    speakerReason,
+  })
+  job.awaitReview()
+
+  const layout = layoutFor(root)
+  const db = openWorkspace(layout)
+  migrateSchema(db)
+  const jobs = new SqliteJobRepository(layout, db)
+  await jobs.saveBook(book)
+  await jobs.saveJob(job)
+  db.close()
+  return { root, book }
+}
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+})
+
+describe('fallback review CLI', () => {
+  it('lists only decision metadata from the real SQLite workspace, including the model reason', async () => {
+    const { root } = await preparedWorkspace('job-list-fallbacks')
+
+    const report = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-list-fallbacks',
+    })
+
+    expect(report).toEqual({
+      action: 'list',
+      jobId: 'job-list-fallbacks',
+      pendingCount: 1,
+      items: [
+        {
+          segmentId,
+          sourcePassageId: passageId,
+          kind: 'dialogue',
+          speakerReason,
+        },
+      ],
+    })
+    expect(JSON.stringify(report)).not.toContain('Is anyone there')
+  })
+
+  it('bulk-approves only after an explicit command and records the resolved human actor', async () => {
+    const { root, book } = await preparedWorkspace('job-approve-fallbacks')
+    const notices: FallbackReviewApprovalNotice[] = []
+
+    const report = await runFallbackReviewCommand({
+      action: 'approve',
+      workspaceRoot: root,
+      jobId: 'job-approve-fallbacks',
+      resolveReviewer: () => 'Ada Lovelace',
+      announceApproval: (notice) => notices.push(notice),
+    })
+
+    expect(notices).toEqual([
+      {
+        actor: 'Ada Lovelace',
+        jobId: 'job-approve-fallbacks',
+        decision: 'approve the fallback voice for every listed pending segment',
+        items: [
+          {
+            segmentId,
+            sourcePassageId: passageId,
+            kind: 'dialogue',
+            speakerReason,
+          },
+        ],
+      },
+    ])
+    expect(report).toMatchObject({
+      action: 'approve',
+      jobId: 'job-approve-fallbacks',
+      actor: 'Ada Lovelace',
+      approvedCount: 1,
+    })
+
+    const db = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(db).readCatalog(book.id)
+    db.close()
+    expect(catalog.grant?.decidedBy).toBe('Ada Lovelace')
+    expect(catalog.approvals).toHaveLength(1)
+    expect(catalog.approvals[0]?.decidedBy).toBe('Ada Lovelace')
+  })
+
+  it('fails closed before approval when no real reviewer identity can be resolved', async () => {
+    const { root } = await preparedWorkspace('job-no-reviewer')
+
+    await expect(
+      runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-no-reviewer',
+        resolveReviewer: () => {
+          throw new Error('Cannot record who approves a fallback voice')
+        },
+      }),
+    ).rejects.toThrow('Cannot record who approves a fallback voice')
+
+    const listed = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-no-reviewer',
+    })
+    expect(listed.pendingCount).toBe(1)
+  })
+})
