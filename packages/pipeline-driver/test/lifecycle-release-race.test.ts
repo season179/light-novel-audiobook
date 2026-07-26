@@ -96,6 +96,8 @@ afterEach(async () => {
   for (const lease of leases.splice(0)) await lease.release().catch(() => undefined)
   for (const lifecycle of lifecycles.splice(0)) await lifecycle.release().catch(() => undefined)
   for (const server of servers.splice(0)) await server.stop()
+  for (const reservation of reservations.splice(0))
+    await reservation.release().catch(() => undefined)
   await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
@@ -105,15 +107,40 @@ async function scratch(label: string): Promise<string> {
   return directory
 }
 
-async function freePort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const probe = createServer()
-    probe.once('error', reject)
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address() as { port: number }
-      probe.close((error) => (error ? reject(error) : resolve(port)))
-    })
+/**
+ * A port this test *owns* from the moment it exists: `listen(0)` lets the kernel assign one and
+ * the reservation holds it, so no other process can take it between "a free port was found" and
+ * "the stub binds it" — the window the old probe-and-close `freePort()` left unowned, where a
+ * foreign bind under suite load crashed the stub or wedged `waitForPortFree` (#94). Releasing is
+ * idempotent, and anything unreleased is closed in afterEach.
+ */
+interface PortReservation {
+  readonly port: number
+  readonly release: () => Promise<void>
+}
+
+const reservations: { release: () => Promise<void> }[] = []
+
+async function reservePort(): Promise<PortReservation> {
+  const server = createServer()
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once('error', rejectListen)
+    server.listen(0, '127.0.0.1', () => resolveListen())
   })
+  const { port } = server.address() as { port: number }
+  let released = false
+  const reservation: PortReservation = {
+    port,
+    release: async () => {
+      if (released) return
+      released = true
+      await new Promise<void>((resolveClose, rejectClose) => {
+        server.close((error) => (error ? rejectClose(error) : resolveClose()))
+      })
+    },
+  }
+  reservations.push(reservation)
+  return reservation
 }
 
 async function portIsFree(port: number): Promise<boolean> {
@@ -145,15 +172,25 @@ const delay = async (ms: number): Promise<void> =>
 
 /** Polls observable state rather than sleeping a guessed interval, and fails loudly if it never holds. */
 async function waitUntil(
-  condition: () => boolean,
+  condition: () => boolean | Promise<boolean>,
   what: string,
   timeoutMs = 15_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!condition()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting until ${what}`)
+  // Monotonic: Date.now() runs backward on this host.
+  const deadline = performance.now() + timeoutMs
+  while (!(await condition())) {
+    if (performance.now() >= deadline) throw new Error(`Timed out waiting until ${what}`)
     await delay(10)
   }
+}
+
+/**
+ * The port-free assertions all mean "nothing holds this port by the time it matters" and all of
+ * them were one-shot probes: under suite load a foreign process can take a just-released port in
+ * the milliseconds before the check. Bounded, monotonic, and it says which port it waited for.
+ */
+async function waitForFreePort(port: number, what: string, timeoutMs = 15_000): Promise<void> {
+  await waitUntil(() => portIsFree(port), `${what} (port ${port} to be free)`, timeoutMs)
 }
 
 interface RacedStart {
@@ -187,6 +224,7 @@ interface RaceSubject {
   readonly port: number
   readonly keyPath: string
   readonly runtimeRoot: string
+  readonly reservation: PortReservation
 }
 
 async function subject(
@@ -196,13 +234,14 @@ async function subject(
     readonly startupSettleTimeoutMs?: number
     readonly runtimeRoot?: string
     readonly keyName?: string
-    readonly port?: number
+    readonly reservation?: PortReservation
     /** Omit the proxy target when the trial can never reach a spawn, so 40 trials start 0 servers. */
     readonly upstream?: 'echo' | 'none'
   } = {},
 ): Promise<RaceSubject> {
   const runtimeRoot = options.runtimeRoot ?? (await scratch(options.label ?? 'runtime'))
-  const port = options.port ?? (await freePort())
+  const reservation = options.reservation ?? (await reservePort())
+  const port = reservation.port
   const keyPath = path.join(runtimeRoot, options.keyName ?? 'api-key')
   let upstreamUrl = 'http://127.0.0.1:9/unreachable'
   if (options.upstream !== 'none') {
@@ -226,7 +265,7 @@ async function subject(
       : { startupSettleTimeoutMs: options.startupSettleTimeoutMs }),
   })
   lifecycles.push(lifecycle)
-  return { lifecycle, port, keyPath, runtimeRoot }
+  return { lifecycle, port, keyPath, runtimeRoot, reservation }
 }
 
 /**
@@ -265,15 +304,18 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
   it('never returns before a pre-spawn start has settled, and never lets a spawn follow', async () => {
     // The inverse of the probe that found this: 40 trials, same shape, opposite expectation.
     const runtimeRoot = await scratch('trials')
-    const port = await freePort()
+    const reservation = await reservePort()
     let releasedBeforeStartSettled = 0
     let spawnedAfterRelease = 0
     let startsRejected = 0
 
+    // The trials never spawn and never bind the port; the reservation only has to go before the
+    // first lifecycle release's own port check.
+    await reservation.release()
     for (let trial = 0; trial < RACE_TRIALS; trial += 1) {
       const { lifecycle } = await subject({
         runtimeRoot,
-        port,
+        reservation,
         keyName: `api-key-${trial}`,
         upstream: 'none',
       })
@@ -305,7 +347,10 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
   }, 120_000)
 
   it('holds release open at the barrier between the key write and the spawn', async () => {
-    const { lifecycle, port, keyPath } = await subject({ label: 'barrier', upstream: 'none' })
+    const { lifecycle, port, keyPath, reservation } = await subject({
+      label: 'barrier',
+      upstream: 'none',
+    })
     const barrier = chmodGate.arm(keyPath)
 
     const start = trackStart(lifecycle)
@@ -316,6 +361,9 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     expect(lifecycle.processId).toBeUndefined()
     expect(start.settled()).toBe(false)
 
+    // The reservation has held the port from its creation until now, so nothing foreign could
+    // have taken it while startup was parked; release's own port check needs it back.
+    await reservation.release()
     const released = lifecycle.release().then(() => 'released' as const)
     // The old implementation resolved here. It must not: startup is one statement from spawning.
     expect(await Promise.race([released, delay(250).then(() => 'still-waiting' as const)])).toBe(
@@ -332,17 +380,20 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     expect(lifecycle.processId).toBeUndefined()
     expect(lifecycle.running).toBe(false)
     expect(lifecycle.cleanupComplete).toBe(true)
-    expect(await portIsFree(port)).toBe(true)
+    await waitForFreePort(port, 'director port after a barrier-held release')
     // Awaiting settlement also fixes the key file leak: the write completed before release removed it.
     await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
   }, 60_000)
 
   it('reaps a child spawned by an in-flight start before release resolves', async () => {
     // Startup is past spawn and still polling /health, exactly as it is while llama.cpp loads weights.
-    const { lifecycle, port } = await subject({
+    const { lifecycle, port, reservation } = await subject({
       label: 'loading',
       extraArgs: ['--health-unready-ms=120000'],
     })
+    // The reservation held the port from its creation to the last controllable moment, so the
+    // stub is the only process that can bind it when it starts.
+    await reservation.release()
     const start = trackStart(lifecycle)
     await waitUntil(() => lifecycle.processId !== undefined, 'the owned process is spawned')
     const pid = lifecycle.processId
@@ -358,7 +409,7 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     expect(processAlive(pid)).toBe(false)
     expect(lifecycle.running).toBe(false)
     expect(lifecycle.cleanupComplete).toBe(true)
-    expect(await portIsFree(port)).toBe(true)
+    await waitForFreePort(port, 'director port after a loading director was reaped')
   }, 60_000)
 
   it('rejects a spawn whose own operands re-entered release, before any child exists', async () => {
@@ -367,7 +418,8 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     // calls release() is synchronous caller code running between the check and the spawn. Against the
     // unsnapshotted version this spawned a live child after release had begun.
     const runtimeRoot = await scratch('reentrant')
-    const port = await freePort()
+    const reservation = await reservePort()
+    const port = reservation.port
     const keyPath = path.join(runtimeRoot, 'api-key')
     let lifecycle: OwnedLlamaLifecycle | undefined
     let binaryPathReads = 0
@@ -396,6 +448,9 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     lifecycle = new OwnedLlamaLifecycle(reentrant)
     lifecycles.push(lifecycle)
 
+    // The operand's re-entrant release ends in the lifecycle's own port check, so the reservation
+    // has to go before start — and it held the port exclusively until now.
+    await reservation.release()
     await expect(lifecycle.start()).rejects.toThrow(/abandoned because release had already begun/)
 
     // The operand really did run — otherwise this test would pass for the wrong reason.
@@ -408,7 +463,7 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     // And the release that the operand began still completes its contract.
     await expect(releaseFromOperand).resolves.toBeUndefined()
     expect(lifecycle.cleanupComplete).toBe(true)
-    expect(await portIsFree(port)).toBe(true)
+    await waitForFreePort(port, 'director port after an operand-reentrant release')
     await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
   }, 60_000)
 
@@ -416,7 +471,8 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     // Same window, reached through the other operand: `args` is an iterable, so spreading it can run
     // caller code too. Snapshotting has to cover the iteration, not just the property read.
     const runtimeRoot = await scratch('reentrant-args')
-    const port = await freePort()
+    const reservation = await reservePort()
+    const port = reservation.port
     const keyPath = path.join(runtimeRoot, 'api-key')
     let lifecycle: OwnedLlamaLifecycle | undefined
     let iterated = false
@@ -446,18 +502,19 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     })
     lifecycles.push(lifecycle)
 
+    await reservation.release()
     await expect(lifecycle.start()).rejects.toThrow(/abandoned because release had already begun/)
 
     expect(iterated).toBe(true)
     expect(lifecycle.processId).toBeUndefined()
     await expect(releaseFromOperand).resolves.toBeUndefined()
     expect(lifecycle.cleanupComplete).toBe(true)
-    expect(await portIsFree(port)).toBe(true)
+    await waitForFreePort(port, 'director port after an args-reentrant release')
   }, 60_000)
 
   it('fails loudly instead of hanging or reporting success when startup is wedged', async () => {
     // A bounded wait is only progress if expiry cannot be mistaken for a released runtime.
-    const { lifecycle, keyPath } = await subject({
+    const { lifecycle, keyPath, reservation } = await subject({
       label: 'wedged',
       startupSettleTimeoutMs: 250,
       upstream: 'none',
@@ -466,6 +523,7 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     const start = trackStart(lifecycle)
     await barrier.reached
 
+    await reservation.release()
     await expect(lifecycle.release()).rejects.toThrow(/had not settled 250ms after release began/)
     expect(lifecycle.cleanupComplete).toBe(false)
     expect(lifecycle.processId).toBeUndefined()
@@ -480,7 +538,7 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
 describe('a raced release leaves nothing for the real Qwen lease to load beside', () => {
   it('has no director process at the instant the real flock reaches the speech engine', async () => {
     // The composition GenerateAudiobook performs, with the pre-spawn race dropped into the middle of it.
-    const { lifecycle, port, runtimeRoot } = await subject({
+    const { lifecycle, port, runtimeRoot, reservation } = await subject({
       label: 'flock-prespawn',
       upstream: 'none',
     })
@@ -500,6 +558,9 @@ describe('a raced release leaves nothing for the real Qwen lease to load beside'
     // Gemma's real cross-process lease first, then the runtime — the only ordering the lease makes
     // meaningful, and the ordering GemmaDirectorModel.ensureRuntimeReady enforces.
     const gemmaLease = await coordinator.acquire('gemma')
+    // The reservation held the port from its creation to here, so nothing foreign owns it when the
+    // raced start and release run.
+    await reservation.release()
     const start = trackStart(lifecycle)
     const released = lifecycle.release()
 
@@ -524,7 +585,7 @@ describe('a raced release leaves nothing for the real Qwen lease to load beside'
   it('has reaped a loading director process before the real flock reaches the speech engine', async () => {
     // The same composition, but release races a startup that has already spawned, so there is a real
     // PID for the kernel to be asked about at the Qwen instant.
-    const { lifecycle, port, runtimeRoot } = await subject({
+    const { lifecycle, port, runtimeRoot, reservation } = await subject({
       label: 'flock-loading',
       extraArgs: ['--health-unready-ms=120000'],
     })
@@ -542,6 +603,9 @@ describe('a raced release leaves nothing for the real Qwen lease to load beside'
     )
 
     const gemmaLease = await coordinator.acquire('gemma')
+    // The reservation held the port from its creation to the last controllable moment, so the
+    // stub is the only process that can bind it when it starts.
+    await reservation.release()
     const start = trackStart(lifecycle)
     await waitUntil(() => lifecycle.processId !== undefined, 'the owned process is spawned')
     const pid = lifecycle.processId
