@@ -323,7 +323,7 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
     budgetMs: number,
     work: Promise<unknown>,
   ): Promise<{ settled: 'resolved' | 'rejected'; elapsedMs: number; error?: unknown }> {
-    const startedAt = Date.now()
+    const startedAt = performance.now()
     let timer: NodeJS.Timeout | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error(`did not settle within ${budgetMs} ms`)), budgetMs)
@@ -331,10 +331,10 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
     try {
       const outcome = await Promise.race([
         work.then(
-          () => ({ settled: 'resolved' as const, elapsedMs: Date.now() - startedAt }),
+          () => ({ settled: 'resolved' as const, elapsedMs: performance.now() - startedAt }),
           (error: unknown) => ({
             settled: 'rejected' as const,
-            elapsedMs: Date.now() - startedAt,
+            elapsedMs: performance.now() - startedAt,
             error,
           }),
         ),
@@ -408,7 +408,17 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
       // arrive, so release() -- and therefore ingest() -- hung without bound.
       process.kill(-groupPid, 'SIGSTOP')
 
-      const released = await settleWithin(30_000, lock.release())
+      // WSL wall-clock synchronization can jump backward while the monotonic release deadline keeps
+      // advancing. The original flake measured a correct 484 ms release as -751 ms via Date.now().
+      const realDateNow = Date.now
+      let wallClock = realDateNow()
+      Date.now = () => (wallClock -= 1_000)
+      let released: Awaited<ReturnType<typeof settleWithin>>
+      try {
+        released = await settleWithin(30_000, lock.release())
+      } finally {
+        Date.now = realDateNow
+      }
 
       expect(released.settled).toBe('rejected')
       expect((released.error as Error).message).toMatch(/required SIGKILL/)
