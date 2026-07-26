@@ -480,12 +480,16 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     const book = makeChapterBook(texts, ids)
     const events: string[] = []
     const lifecycle = new (class implements DirectorRuntimeLifecycle {
-      async start(): Promise<void> {
+      private starting: Promise<void> | undefined
+      start(): Promise<void> {
         events.push('start:begin')
-        await new Promise((resolve) => setTimeout(resolve, 400))
-        events.push('start:settled')
+        this.starting = new Promise((resolve) => setTimeout(resolve, 400)).then(() => {
+          events.push('start:settled')
+        })
+        return this.starting
       }
       async release(): Promise<void> {
+        await this.starting?.catch(() => undefined)
         events.push('lifecycle:release')
       }
     })()
@@ -529,9 +533,9 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
 
     await model.release()
 
-    // release() must have waited out the start (~400 ms), then unloaded, then freed the lease:
-    // runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps backwards
-    // under WSL2 time sync and made this assertion flake.
+    // The lifecycle contract waits out the start (~400 ms), then unloads before the model frees
+    // the lease: runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps
+    // backwards under WSL2 time sync and made this assertion flake.
     expect(performance.now() - started).toBeGreaterThanOrEqual(350)
     expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
   })

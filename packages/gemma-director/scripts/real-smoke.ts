@@ -1,7 +1,7 @@
-import { type ChildProcess, execFile as execFileCallback, spawn } from 'node:child_process'
+import { execFile as execFileCallback } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, readFile, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { readFile, readlink, realpath, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
@@ -14,10 +14,12 @@ import {
   assertOwnedProcessIdentity,
   type DirectorProgressEvent,
   type DirectorProgressStore,
-  type DirectorRuntimeLifecycle,
   FileGpuLeaseCoordinator,
   GemmaDirectorEndpoint,
   GemmaDirectorModel,
+  llamaRuntimePaths,
+  llamaServerArgs,
+  OwnedLlamaLifecycle,
   probeBrowserBoundary,
   SELECTED_GEMMA_PROFILE,
 } from '../src/index.js'
@@ -57,94 +59,6 @@ class SanitizedProgressStore implements DirectorProgressStore {
   }
 }
 
-export interface OwnedLlamaLifecycleOptions {
-  readonly binaryPath: string
-  readonly args: readonly string[]
-  readonly apiKey: string
-  readonly keyPath: string
-  readonly origin: string
-  readonly port: number
-  readonly startupTimeoutMs: number
-}
-
-/**
- * The adapter calls start() only while it already holds the GPU lease, so this is the exact point
- * at which the owned llama-server — and its VRAM residency — may come into existence.
- *
- * Exported (rather than script-private) so the lifecycle's own race tests can import it, and so a
- * future consolidation can reuse this implementation instead of the copy in
- * packages/pipeline-driver (same class, same former defect) — see the #53 round-4 report.
- */
-export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
-  private child: ChildProcess | undefined
-  private childError: Error | undefined
-  private startPromise: Promise<void> | undefined
-  private releasePromise: Promise<void> | undefined
-  cleanupComplete = false
-
-  constructor(private readonly options: OwnedLlamaLifecycleOptions) {}
-
-  get processId(): number | undefined {
-    return this.child?.pid
-  }
-
-  start(): Promise<void> {
-    this.startPromise ??= this.startOnce()
-    return this.startPromise
-  }
-
-  private async startOnce(): Promise<void> {
-    await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
-    await chmod(this.options.keyPath, 0o600)
-    const child = spawn(this.options.binaryPath, [...this.options.args], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    })
-    this.child = child
-    child.on('error', (error: Error) => {
-      this.childError = error
-    })
-    await waitForHealth({
-      origin: this.options.origin,
-      apiKey: this.options.apiKey,
-      child,
-      childError: () => this.childError,
-      timeoutMs: this.options.startupTimeoutMs,
-    })
-  }
-
-  release(): Promise<void> {
-    if (this.releasePromise !== undefined) return this.releasePromise
-    this.releasePromise = this.releaseOnce()
-    return this.releasePromise
-  }
-
-  private async releaseOnce(): Promise<void> {
-    // Settle any in-flight start first. Without this, a release landing in the pre-spawn window
-    // (key-file write, before `this.child` exists) observes no child and returns while
-    // `startOnce()` is still heading toward spawning — the server then comes up with no owner,
-    // beside whatever took the GPU next. Bounded by `startupTimeoutMs` inside `startOnce()`.
-    const starting = this.startPromise
-    if (starting !== undefined) await starting.catch(() => undefined)
-    const child = this.child
-    try {
-      if (child !== undefined && !childExited(child)) {
-        child.kill('SIGTERM')
-        if (!(await waitForChildExit(child, 15_000))) {
-          child.kill('SIGKILL')
-          if (!(await waitForChildExit(child, 10_000))) {
-            throw new Error('Owned llama-server did not exit after SIGKILL')
-          }
-        }
-      }
-    } finally {
-      child?.removeAllListeners('error')
-      await rm(this.options.keyPath, { force: true })
-      await waitForPortFree(this.options.port, 10_000)
-    }
-    this.cleanupComplete = true
-  }
-}
-
 function configPath(): string {
   const args = process.argv.slice(2)
   if (args.length === 0) return DEFAULT_CONFIG
@@ -164,27 +78,6 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-function childExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null
-}
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (childExited(child)) return true
-  return await new Promise<boolean>((resolvePromise) => {
-    let settled = false
-    const finish = (value: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.removeListener('exit', onExit)
-      resolvePromise(value)
-    }
-    const onExit = (): void => finish(true)
-    const timer = setTimeout(() => finish(childExited(child)), timeoutMs)
-    child.once('exit', onExit)
-  })
-}
-
 async function portIsFree(port: number): Promise<boolean> {
   return await new Promise<boolean>((resolvePromise) => {
     const server = createServer()
@@ -193,41 +86,6 @@ async function portIsFree(port: number): Promise<boolean> {
       server.close((error) => resolvePromise(error === undefined))
     })
   })
-}
-
-async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await portIsFree(port)) return
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
-  }
-  throw new Error('Owned llama-server did not release its configured port')
-}
-
-async function waitForHealth(options: {
-  origin: string
-  apiKey: string
-  child: ChildProcess
-  childError: () => Error | undefined
-  timeoutMs: number
-}): Promise<void> {
-  const deadline = Date.now() + options.timeoutMs
-  while (Date.now() < deadline) {
-    const emittedError = options.childError()
-    if (emittedError) throw new Error('Owned llama-server failed to spawn', { cause: emittedError })
-    if (childExited(options.child)) throw new Error('Owned llama-server exited during model load')
-    try {
-      const response = await fetch(`${options.origin}/health`, {
-        headers: { authorization: `Bearer ${options.apiKey}` },
-        signal: AbortSignal.timeout(2_000),
-      })
-      if (response.ok) return
-    } catch {
-      // Expected while the owned model process is loading.
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250))
-  }
-  throw new Error('Owned llama-server did not become healthy before the startup deadline')
 }
 
 function smokeBook(): Book {
@@ -272,8 +130,7 @@ async function main(): Promise<void> {
   const manifest = hostManifestSchema.parse(
     JSON.parse(await readFile(resolve(runtimeRoot, 'host-build.json'), 'utf8')),
   )
-  const modelPath = resolve(runtimeRoot, 'models', SELECTED_GEMMA_PROFILE.file)
-  const binaryPath = resolve(runtimeRoot, 'llama.cpp/build/bin/llama-server')
+  const { modelPath, binaryPath } = llamaRuntimePaths(runtimeRoot)
   const [modelStat, binaryStat, modelSha256, binarySha256, canonicalBinary] = await Promise.all([
     stat(modelPath),
     stat(binaryPath),
@@ -301,46 +158,12 @@ async function main(): Promise<void> {
   const keyPath = resolve(runtimeRoot, `.gemma-director-smoke-key-${process.pid}`)
   const gpuLeasePath = expandHome(process.env.GEMMA_DIRECTOR_GPU_LEASE_PATH ?? config.gpuLeasePath)
   const gpuLeaseCoordinator = new FileGpuLeaseCoordinator({ lockFilePath: gpuLeasePath })
-  const args = [
-    '--model',
+  const args = llamaServerArgs({
     modelPath,
-    '--alias',
-    SELECTED_GEMMA_PROFILE.modelId,
-    '--host',
-    endpoint.host,
-    '--port',
-    String(endpoint.port),
-    '--ctx-size',
-    String(SELECTED_GEMMA_PROFILE.contextSize),
-    '--parallel',
-    '1',
-    '--n-gpu-layers',
-    String(SELECTED_GEMMA_PROFILE.gpuLayers),
-    '--cache-type-k',
-    SELECTED_GEMMA_PROFILE.cacheTypeK,
-    '--cache-type-v',
-    SELECTED_GEMMA_PROFILE.cacheTypeV,
-    '--flash-attn',
-    'on',
-    '--batch-size',
-    String(SELECTED_GEMMA_PROFILE.batchSize),
-    '--ubatch-size',
-    String(SELECTED_GEMMA_PROFILE.microBatchSize),
-    '--threads',
-    String(SELECTED_GEMMA_PROFILE.threads),
-    '--reasoning',
-    SELECTED_GEMMA_PROFILE.reasoning,
-    '--no-cache-prompt',
-    '--api-key-file',
+    host: endpoint.host,
+    port: endpoint.port,
     keyPath,
-    '--cors-origins',
-    'localhost',
-    '--no-cors-credentials',
-    '--no-webui',
-    '--metrics',
-    '--slots',
-    '--log-disable',
-  ]
+  })
   let lifecycle: OwnedLlamaLifecycle | undefined
   let model: GemmaDirectorModel | undefined
   let sanitizedResult: Record<string, unknown> | undefined
@@ -444,8 +267,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ...sanitizedResult, cleanupVerified: true }, null, 2))
 }
 
-// Run main() only when executed as a script (tsx scripts/real-smoke.ts), never on import — the
-// lifecycle class above is imported by tests.
+// Run main() only when executed as a script (tsx scripts/real-smoke.ts), never on import.
 const invokedAsScript =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 if (invokedAsScript) await main()

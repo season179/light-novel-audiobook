@@ -1,10 +1,53 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { type Mode, mkdtempSync, type PathLike, rmSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { OwnedLlamaLifecycle } from '../scripts/real-smoke.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { OwnedLlamaLifecycle } from '../src/owned-llama-lifecycle.js'
+
+const chmodGate = vi.hoisted(() => {
+  let armedPath: string | undefined
+  let announceReached: (() => void) | undefined
+  let openBarrier: (() => void) | undefined
+  let opened: Promise<void> | undefined
+  return {
+    arm(keyPath: string): { readonly reached: Promise<void>; readonly open: () => void } {
+      armedPath = keyPath
+      const reached = new Promise<void>((resolve) => {
+        announceReached = resolve
+      })
+      opened = new Promise<void>((resolve) => {
+        openBarrier = resolve
+      })
+      return { reached, open: () => openBarrier?.() }
+    },
+    disarm(): void {
+      openBarrier?.()
+      armedPath = undefined
+      announceReached = undefined
+      openBarrier = undefined
+      opened = undefined
+    },
+    async waitIfArmed(candidate: string): Promise<void> {
+      if (armedPath === undefined || candidate !== armedPath) return
+      announceReached?.()
+      await opened
+    },
+  }
+})
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    chmod: async (target: PathLike, mode: Mode): Promise<void> => {
+      await chmodGate.waitIfArmed(String(target))
+      await actual.chmod(target, mode)
+    },
+  }
+})
 
 // Regression (issue #53 round 4, second window): the concrete lifecycle's release() could return
 // while a concurrent startOnce() was still unresolved — pre-spawn it observed no child at all, and
@@ -19,6 +62,16 @@ import { OwnedLlamaLifecycle } from '../scripts/real-smoke.js'
 
 const API_KEY = 'fake-lifecycle-key-00000001'
 
+async function freePort(): Promise<number> {
+  const probe = createServer()
+  await new Promise<void>((resolveListen) => probe.listen(0, '127.0.0.1', resolveListen))
+  const port = (probe.address() as AddressInfo).port
+  await new Promise<void>((resolveClose, rejectClose) =>
+    probe.close((error) => (error === undefined ? resolveClose() : rejectClose(error))),
+  )
+  return port
+}
+
 const isAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
@@ -32,6 +85,7 @@ describe('OwnedLlamaLifecycle', () => {
   const roots: string[] = []
   let server: Server | undefined
   afterEach(async () => {
+    chmodGate.disarm()
     if (server !== undefined) await new Promise<void>((done) => server?.close(() => done()))
     server = undefined
     for (const root of roots) rmSync(root, { recursive: true, force: true })
@@ -56,7 +110,7 @@ describe('OwnedLlamaLifecycle', () => {
         const healthy = childPid !== undefined && isAlive(childPid)
         response.writeHead(healthy ? 200 : 500, { 'content-type': 'application/json' })
         response.end('{"status":"ok"}')
-        if (healthy) setTimeout(() => server?.close(), 25)
+        setTimeout(() => server?.close(), 25)
       }
       const remaining = 300 - (performance.now() - serverStarted)
       if (remaining <= 0) respond()
@@ -87,9 +141,9 @@ describe('OwnedLlamaLifecycle', () => {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 50))
     const releasePromise = lifecycle.release()
 
-    // Pre-fix this rejects: release() killed the child underneath the health wait, and the
-    // (honest) health endpoint then stopped answering healthy.
-    await expect(startPromise).resolves.toBeUndefined()
+    // Release reaps first so health polling settles promptly by rejecting; a failed start still
+    // counts as settled, and release does not resolve until both startup and the child are gone.
+    await expect(startPromise).rejects.toThrow('exited during model load')
     await releasePromise
 
     expect(performance.now() - started).toBeGreaterThanOrEqual(250)
@@ -98,4 +152,83 @@ describe('OwnedLlamaLifecycle', () => {
     expect(childPid).toBeDefined()
     expect(isAlive(childPid as number)).toBe(false)
   }, 20_000)
+
+  it('blocks a pre-spawn release, then permanently prohibits the pending spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-prespawn-'))
+    roots.push(root)
+    const keyPath = join(root, 'llama.key')
+    const port = await freePort()
+    const barrier = chmodGate.arm(keyPath)
+    const lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: ['-e', 'setInterval(() => undefined, 1000)'],
+      apiKey: API_KEY,
+      keyPath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 10_000,
+      startupSettleTimeoutMs: 2_000,
+    })
+
+    let startSettled = false
+    const start = lifecycle.start().then(
+      () => {
+        startSettled = true
+        return 'resolved' as const
+      },
+      () => {
+        startSettled = true
+        return 'rejected' as const
+      },
+    )
+    await barrier.reached
+    expect((await stat(keyPath)).isFile()).toBe(true)
+    expect(lifecycle.processId).toBeUndefined()
+
+    const released = lifecycle.release().then(() => 'released' as const)
+    expect(
+      await Promise.race([
+        released,
+        new Promise<'blocked'>((resolveBlocked) => setTimeout(() => resolveBlocked('blocked'), 50)),
+      ]),
+    ).toBe('blocked')
+    expect(startSettled).toBe(false)
+
+    barrier.open()
+    await expect(released).resolves.toBe('released')
+    await expect(start).resolves.toBe('rejected')
+    expect(lifecycle.processId).toBeUndefined()
+    expect(lifecycle.running).toBe(false)
+    expect(lifecycle.cleanupComplete).toBe(true)
+    await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('fails closed within a bound when a pre-spawn operation never settles', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-wedged-'))
+    roots.push(root)
+    const keyPath = join(root, 'llama.key')
+    const port = await freePort()
+    const barrier = chmodGate.arm(keyPath)
+    const lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: ['-e', 'setInterval(() => undefined, 1000)'],
+      apiKey: API_KEY,
+      keyPath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 10_000,
+      startupSettleTimeoutMs: 50,
+    })
+    const start = lifecycle.start()
+    void start.catch(() => undefined)
+    await barrier.reached
+
+    await expect(lifecycle.release()).rejects.toThrow(/had not settled 50ms after release began/)
+    expect(lifecycle.cleanupComplete).toBe(false)
+    expect(lifecycle.processId).toBeUndefined()
+
+    barrier.open()
+    await expect(start).rejects.toThrow()
+    expect(lifecycle.processId).toBeUndefined()
+  })
 })

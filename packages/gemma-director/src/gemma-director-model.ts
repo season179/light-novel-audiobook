@@ -289,17 +289,11 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     this.shutdownController.abort(new DOMException('Gemma Director released', 'AbortError'))
     const active = [...this.activeOperations]
     this.releasePromise = (async () => {
-      await Promise.allSettled(active)
-      // Settle any in-flight runtime start before unloading. The chapter deadline abandons the
-      // AWAIT on startup, never the start itself: a raced-away ensureRuntimeReady keeps loading
-      // untracked, and unloading here while it runs frees the lease with weights still heading
-      // for the GPU — the runtime then finishes loading beside Qwen, the exact co-residency the
-      // lease exists to prevent. Read after the active-set snapshot above: no new start can
-      // appear once released is set, so this is the last start that can exist. The wait has no
-      // adapter-side cap on purpose — a cold multi-GB weight load can legitimately take minutes,
-      // so the bound belongs to the lifecycle's own startup timeout (see DirectorRuntimeLifecycle).
-      const starting = this.runtimeReady
-      if (starting !== undefined) await starting.catch(() => undefined)
+      // Begin lifecycle release before waiting for adapter operations. A compliant lifecycle sets
+      // its no-future-spawn barrier synchronously, reaps current work, and bounds startup settlement;
+      // waiting on `runtimeReady` or `active` first would make that bound unreachable during a hung
+      // pre-spawn filesystem operation.
+      //
       // A failed lifecycle cleanup means runtime state is unknown. Never hand the lease to Qwen in
       // that state: quarantine keeps this process's kernel lock and leaves a durable marker that
       // blocks acquisition after process exit. Recovery therefore requires an explicit proof that
@@ -317,6 +311,9 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         }
         throw runtimeFailure
       }
+      // Shutdown abort plus runtime exit settles request operations before lease handoff. This wait
+      // is deliberately after lifecycle cleanup so it cannot hide the lifecycle's startup bound.
+      await Promise.allSettled(active)
       await this.gpuLease?.release()
     })()
     return this.releasePromise
