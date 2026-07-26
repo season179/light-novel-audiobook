@@ -19,7 +19,12 @@ export {
   type ListFallbackReviewReport,
   runFallbackReviewCommand,
 } from './fallback-review-cli.js'
-export { type SliceLimits, type SliceReport, SlicingEpubExtractor } from './slice.js'
+export {
+  canonicalSliceDescriptor,
+  type SliceLimits,
+  type SliceReport,
+  SlicingEpubExtractor,
+} from './slice.js'
 export {
   createFakeTransports,
   createRealTransports,

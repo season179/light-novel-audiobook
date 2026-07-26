@@ -19,8 +19,9 @@ export const serverFnAudiobookClient: AudiobookClient = {
     formData.append('file', file)
     return uploadEpubFn({ data: formData })
   },
-  startGeneration: ({ uploadId, recoverAbandoned }) =>
-    startGenerationFn({ data: { uploadId, recoverAbandoned: recoverAbandoned === true } }),
+  // Forward the complete command object. Its required `slice` property and this whole-object seam
+  // make silently narrowing the production payload to selected fields impossible.
+  startGeneration: (command) => startGenerationFn({ data: command }),
   getJobState: ({ jobId }) => getJobStateFn({ data: { jobId } }),
   listChapterAudio: ({ jobId }) => listChapterAudioFn({ data: { jobId } }),
   listUploads: () => listUploadsFn(),

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import type { EpubExtractionRequest, EpubExtractor } from '@light-novel-audiobook/application'
-import { Book, Chapter } from '@light-novel-audiobook/domain'
+import { Book, Chapter, SourcePassage, StableIds } from '@light-novel-audiobook/domain'
 
 export interface SliceLimits {
   /**
@@ -31,6 +32,38 @@ export interface SliceReport {
 }
 
 /**
+ * The one canonical statement of a slice's bounds: fixed order, defaults omitted, invalid bounds
+ * rejected. `null` means the limits spell the unbounded prefix — no bound stated, or only
+ * `firstChapter: 1`, which *is* the unbounded prefix — so an unbounded run and a bounded one can
+ * never share a descriptor, and two spellings of one window always share one.
+ *
+ * This is the single rule every identity derivation uses: `SlicingEpubExtractor` binds it into the
+ * extractor identity here in the driver, and the web API binds the same string into its job IDs
+ * (`apps/web/src/server/job-identity.ts`). Nothing else may re-decide which bounds count.
+ */
+export const canonicalSliceDescriptor = (limits: SliceLimits): string | null => {
+  // A bound that is silently wrong is worse than one that is rejected: `firstChapter: 0` would make
+  // the window start at index -1 and slice from the *end* of the book.
+  for (const [name, value] of [
+    ['firstChapter', limits.firstChapter],
+    ['maxChapters', limits.maxChapters],
+    ['maxPassagesPerChapter', limits.maxPassagesPerChapter],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+      throw new Error(`Slice bound ${name} must be a positive integer, got ${String(value)}`)
+    }
+  }
+  const bounds = [
+    ['firstChapter', limits.firstChapter === 1 ? undefined : limits.firstChapter],
+    ['maxChapters', limits.maxChapters],
+    ['maxPassagesPerChapter', limits.maxPassagesPerChapter],
+  ]
+    .filter(([, value]) => value !== undefined)
+    .map(([name, value]) => `${String(name)}=${String(value)}`)
+  return bounds.length === 0 ? null : bounds.join(',')
+}
+
+/**
  * Wraps the real extractor and narrows the `Book` it returns.
  *
  * `GenerateAudiobookCommand` has no slice option and the use case calls `extract()` itself, so
@@ -40,14 +73,11 @@ export interface SliceReport {
  * workspace commit are genuinely exercised, and only what direction and rendering see is reduced.
  *
  * The window stays internally consistent: `Book` requires `chapter.position === index + 1`, so a window
- * that does not start at chapter 1 is **renumbered** to 1..N while every chapter keeps its original
- * `id`. That split is deliberate. The ID is what identity, the database rows and all passage IDs are
- * built from, so a chapter-3 run stays distinguishable from a chapter-1 run everywhere it matters; the
- * position is only the chapter's place *within this render*. The visible consequence is that exported
+ * that does not start at chapter 1 is **renumbered** to 1..N. The visible consequence is that exported
  * filenames and M4B track numbers are window-relative — selecting chapter 3 alone produces `-ch001-`,
- * because it is the first chapter of that excerpt. The web UI derives its label from the ID instead, so
- * it still reads "Chapter 3". `SourcePassage` carries no position invariant, and `ExactSourceCoverage`
- * runs over the sliced book, so "every passage represented exactly once" still means that for the slice.
+ * because it is the first chapter of that excerpt. `SourcePassage` carries no position invariant, and
+ * `ExactSourceCoverage` runs over the sliced book, so "every passage represented exactly once" still
+ * means that for the slice.
  *
  * `identity` binds the slice bounds. `GenerateAudiobook` folds the extractor identity into the command
  * identity, and a completed job returns its stored output without re-extracting — so an unbound slice
@@ -56,8 +86,20 @@ export interface SliceReport {
  * With the bounds bound in, changing them changes the command identity, and the same job ID is
  * rejected as stale instead of quietly resurfacing the old result.
  *
- * An unbounded slice reports the inner identity verbatim, so wrapping without limits stays
- * indistinguishable from not wrapping at all.
+ * A window that actually removes or renumbers anything also gets its own **IDs throughout**: the book
+ * ID is derived from the parent book ID plus the same canonical descriptor `identity` binds, and every
+ * chapter and passage ID is rebuilt under it — `StableIds.chapter(windowId, originalPosition)`, so the
+ * suffix still names the original chapter (the web UI derives its "Chapter 3" label from that suffix)
+ * while the prefix names the window. This is load-bearing, not cosmetic: the approved-script rows,
+ * chapter and segment rows, the fallback approval catalog and output versioning are all keyed from
+ * these IDs, and the parent book ID derives from the EPUB's sha256 alone. Without windowed IDs every
+ * slice of one upload would share those rows — a chapter-3 run pausing for review and a chapter-1 run
+ * then directing would replace each other's persisted script, and the paused job would resume into
+ * the other window's chapters. With them, two windows of one upload can no more collide than two
+ * different books.
+ *
+ * An unbounded slice reports the inner identity verbatim and returns the inner book untouched, so
+ * wrapping without limits stays indistinguishable from not wrapping at all.
  */
 export class SlicingEpubExtractor implements EpubExtractor {
   readonly identity: string
@@ -67,17 +109,8 @@ export class SlicingEpubExtractor implements EpubExtractor {
     private readonly inner: EpubExtractor,
     private readonly limits: SliceLimits,
   ) {
-    // A bound that is silently wrong is worse than one that is rejected: `firstChapter: 0` would make
-    // the window start at index -1 and slice from the *end* of the book.
-    for (const [name, value] of [
-      ['firstChapter', limits.firstChapter],
-      ['maxChapters', limits.maxChapters],
-      ['maxPassagesPerChapter', limits.maxPassagesPerChapter],
-    ] as const) {
-      if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
-        throw new Error(`Slice bound ${name} must be a positive integer, got ${String(value)}`)
-      }
-    }
+    // `canonicalSliceDescriptor` validates the bounds; its throw is the guard against a bound that is
+    // silently wrong (`firstChapter: 0` would start the window at index -1, the *end* of the book).
     this.identity = SlicingEpubExtractor.#identityFor(inner.identity, limits)
   }
 
@@ -87,15 +120,9 @@ export class SlicingEpubExtractor implements EpubExtractor {
    * spellings of one window would produce two job identities.
    */
   static #identityFor(innerIdentity: string, limits: SliceLimits): string {
-    const bounds = [
-      ['firstChapter', limits.firstChapter === 1 ? undefined : limits.firstChapter],
-      ['maxChapters', limits.maxChapters],
-      ['maxPassagesPerChapter', limits.maxPassagesPerChapter],
-    ]
-      .filter(([, value]) => value !== undefined)
-      .map(([name, value]) => `${String(name)}=${String(value)}`)
-    if (bounds.length === 0) return innerIdentity
-    return `${innerIdentity}+slice(${bounds.join(',')})`
+    const descriptor = canonicalSliceDescriptor(limits)
+    if (descriptor === null) return innerIdentity
+    return `${innerIdentity}+slice(${descriptor})`
   }
 
   /** Populated once `extract` has run; the numbers a run report should quote. */
@@ -128,21 +155,36 @@ export class SlicingEpubExtractor implements EpubExtractor {
       startIndex + (this.limits.maxChapters ?? book.chapters.length),
     )
     const selectedChapterPositions = keptChapters.map((chapter) => chapter.position)
-    const chapters = keptChapters.map(
-      (chapter, windowIndex) =>
-        new Chapter({
-          id: chapter.id,
-          bookId: chapter.bookId,
-          // Window-relative, because `Book` requires positions to be exactly `index + 1`. The original
-          // chapter is still identified by `chapter.id`, which is what carries into identity and IDs.
-          position: windowIndex + 1,
-          title: chapter.title,
-          sourcePassages: chapter.sourcePassages.slice(
-            0,
-            this.limits.maxPassagesPerChapter ?? chapter.sourcePassages.length,
+    // The window's own ID namespace (see the class doc). The canonical descriptor cannot be null
+    // here in a way that matters: when it is null nothing was bounded away, `sliced` comes out
+    // false below, and the original book — original IDs included — is returned untouched.
+    const descriptor = canonicalSliceDescriptor(this.limits)
+    const windowedBookId =
+      descriptor === null
+        ? book.id
+        : `book-${createHash('sha256').update(`${book.id}+slice(${descriptor})`, 'utf8').digest('hex').slice(0, 24)}`
+    const chapters = keptChapters.map((chapter, windowIndex) => {
+      // The suffix keeps naming the original chapter, so labels and filenames still read
+      // "chapter 3"; the prefix names the window, so per-window storage can never collide.
+      const windowedChapterId = StableIds.chapter(windowedBookId, chapter.position)
+      return new Chapter({
+        id: windowedChapterId,
+        bookId: windowedBookId,
+        // Window-relative, because `Book` requires positions to be exactly `index + 1`.
+        position: windowIndex + 1,
+        title: chapter.title,
+        sourcePassages: chapter.sourcePassages
+          .slice(0, this.limits.maxPassagesPerChapter ?? chapter.sourcePassages.length)
+          .map(
+            (passage, passageIndex) =>
+              new SourcePassage({
+                id: StableIds.passage(windowedChapterId, passageIndex + 1),
+                chapterId: windowedChapterId,
+                sourceText: passage.sourceText,
+              }),
           ),
-        }),
-    )
+      })
+    })
 
     this.#report = {
       extractedChapters: book.chapters.length,
@@ -163,7 +205,7 @@ export class SlicingEpubExtractor implements EpubExtractor {
 
     if (!this.#report.sliced) return book
     return new Book({
-      id: book.id,
+      id: windowedBookId,
       title: book.title,
       author: book.author,
       coverPath: book.coverPath,

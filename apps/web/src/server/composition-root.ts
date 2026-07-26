@@ -12,6 +12,7 @@ import {
   type SpeechEngineFactory,
 } from '@light-novel-audiobook/application'
 import type { VoiceCast } from '@light-novel-audiobook/domain'
+import { SlicingEpubExtractor } from '@light-novel-audiobook/pipeline-driver'
 import { withSanitizedFailures } from './adapter-failure-boundary.js'
 import { AudiobookWebApi } from './audiobook-web-api.js'
 import { BookReadModelStore, ProjectingJobRepository } from './book-read-model.js'
@@ -24,6 +25,7 @@ import { createFakeSpeechEngineFactory } from './fakes/fake-speech-engine.js'
 import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-approvals.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
+import { sliceLimitsForJobId } from './job-identity.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
 import { resolveReviewerIdentity } from './reviewer-identity.js'
 import { createWorkspace, type LocalWorkspace } from './workspace.js'
@@ -158,13 +160,23 @@ export const createAudiobookWebApi = async (
   // stylistic: `GenerateAudiobook` skips direction entirely for a job already awaiting review, so a
   // director constructed here would never be used and never released. With Gemma that leaks a
   // GPU-resident model — `release()` is terminal — while Qwen then starts rendering beside it.
-  const runner = new GenerationRunner(async () => {
+  const runner = new GenerationRunner(async (command) => {
     const [epubExtractor, audioAssembler] = await Promise.all([
       createEpubExtractor(),
       createAudioAssembler(),
     ])
+    // The slice bounds live in exactly one place — the job ID — and this is the only read of them:
+    // start, retry, and review resume all reach the runner with the same job ID, so the extractor
+    // is always wrapped for the window the ID states. The bounds are bound into the extractor
+    // identity by `SlicingEpubExtractor` itself (the driver's rule), which the command identity
+    // folds in, so a bounded run can never be handed another window's stored audio.
+    const limits = sliceLimitsForJobId(command.jobId)
+    const boundedExtractor =
+      Object.keys(limits).length === 0
+        ? epubExtractor
+        : new SlicingEpubExtractor(epubExtractor, limits)
     return new GenerateAudiobook({
-      epubExtractor: withSanitizedFailures.epubExtractor(epubExtractor),
+      epubExtractor: withSanitizedFailures.epubExtractor(boundedExtractor),
       // Sanitized around `create()` as well as around the adapter: construction now happens inside
       // the run, so a factory that throws must fail the job with a message the browser may read.
       directorModelFactory: withSanitizedFailures.directorModelFactory({

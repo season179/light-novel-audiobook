@@ -13,10 +13,12 @@ import type {
   AudiobookOutput,
   VoiceCast,
 } from '@light-novel-audiobook/domain'
+import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
 import type { GenerationRunner } from './generation-runner.js'
+import { deriveJobId, parseJobId } from './job-identity.js'
 import {
   buildJobStateView,
   type ChapterAudioView,
@@ -24,6 +26,9 @@ import {
   type JobStateView,
 } from './job-state-view.js'
 import type { ContainedFile, LocalWorkspace } from './workspace.js'
+
+export { deriveJobId } from './job-identity.js'
+export type { SliceLimits }
 
 export interface EpubUploadView {
   readonly uploadId: string
@@ -110,8 +115,12 @@ const STREAM_CHUNK_BYTES = 64 * 1024
 
 export const QUEUED_RUN_MESSAGE = 'Waiting for the current generation to finish'
 
-/** A job is addressed by its EPUB content, so re-opening or refreshing always finds the same run. */
-export const deriveJobId = (uploadSha256: string): string => `job-${uploadSha256.slice(0, 24)}`
+/** The bounds a generation can be limited to. Absent, the whole book is rendered. */
+export interface StartGenerationInput {
+  readonly uploadId: string
+  readonly recoverAbandoned?: boolean | undefined
+  readonly slice?: SliceLimits | undefined
+}
 
 const toUploadView = (upload: StoredEpubUpload): EpubUploadView => ({
   uploadId: upload.uploadId,
@@ -239,11 +248,16 @@ export class AudiobookWebApi {
         'This audiobook is not waiting for a fallback-voice decision.',
       )
     }
-    // The job ID is a prefix of the upload digest, so the upload is found by re-deriving it rather
-    // than by storing a reverse mapping that could drift.
-    const upload = (await this.uploads.list()).find(
-      (candidate) => deriveJobId(candidate.sha256) === input.jobId,
-    )
+    // The job ID carries a prefix of the upload digest (plus any slice bounds), so the upload is
+    // found by matching that prefix rather than by storing a reverse mapping that could drift. The
+    // bounds themselves are not needed here: the runner reconstructs them from the job ID.
+    const parsed = parseJobId(input.jobId)
+    const upload =
+      parsed === null
+        ? undefined
+        : (await this.uploads.list()).find((candidate) =>
+            candidate.sha256.startsWith(parsed.uploadSha256Prefix),
+          )
     if (upload === undefined) {
       throw new WebApiError('unknown_upload', 'The uploaded EPUB for this job is no longer here.')
     }
@@ -297,12 +311,11 @@ export class AudiobookWebApi {
    * second job waits rather than competing for the GPU. Throws `generation_rejected` when the user
    * has to make a choice first, and `unknown_upload` when the EPUB is gone.
    */
-  async startGeneration(input: {
-    readonly uploadId: string
-    readonly recoverAbandoned?: boolean | undefined
-  }): Promise<StartedGeneration> {
+  async startGeneration(input: StartGenerationInput): Promise<StartedGeneration> {
     const upload = await this.uploads.require(input.uploadId)
-    const jobId = deriveJobId(upload.sha256)
+    // The bounds are validated and canonicalized inside the job ID derivation, so an invalid bound
+    // is rejected here — before any run exists — and a stated bound can never be dropped on the way.
+    const jobId = deriveJobId(upload.sha256, input.slice ?? {})
     const recoverAbandoned = input.recoverAbandoned === true
 
     if (this.runner.isActive(jobId)) {
