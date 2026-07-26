@@ -274,6 +274,35 @@ export async function createRealTransports(
     startupTimeoutMs: config.startupTimeoutMs ?? 600_000,
   })
 
+  // Last-ditch orphan guard. The lifecycle's own paths cover success and failure, and a terminal
+  // Ctrl-C reaches the server through the process group; but a SIGTERM aimed at this process
+  // alone, or an unhandled rejection, kills the driver without touching its child, whose stdio is
+  // 'ignore' so nothing EOFs it. A resident llama-server then wedges every later run (the compute
+  // diagnostic fails closed) and, if that guard is ever disabled, invites co-residency. The 'exit'
+  // hook cannot run under SIGKILL; that residual needs a parent-death signal the server does not
+  // have, and is documented rather than half-fixed here.
+  const killOrphanedServer = () => {
+    const pid = owned.processId
+    if (owned.running && pid !== undefined) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+  process.once('exit', killOrphanedServer)
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      const relay = () => {
+        // Only re-raise when no other listener remains: a host with its own shutdown must not be
+        // killed mid-cleanup by this guard.
+        if (process.listenerCount(signal) === 0) process.kill(process.pid, signal)
+      }
+      void owned.release().then(relay, relay)
+    })
+  }
+
   return {
     mode: 'real',
     director: {
