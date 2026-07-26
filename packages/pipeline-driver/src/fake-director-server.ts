@@ -123,9 +123,6 @@ export class NarrationEchoDirectorServer {
         })
         const segments = passages.map((passage) => ({
           source_passage_id: passage.source_passage_id,
-          source_start: 0,
-          // UTF-16 code units, matching the offsets the director validates against.
-          source_end: passage.source_text.length,
           source_text: passage.source_text,
           kind: 'narration',
           speaker_id: narratorSpeakerId,
