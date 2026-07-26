@@ -7,12 +7,14 @@ const profile = (
   id: string,
   role: 'narrator' | 'fallback' | 'character',
   speakerId: string | null,
+  speakerAliases: readonly string[] = [],
 ): VoiceProfile => {
   const props: VoiceProfileProps = {
     id,
     displayName: id,
     role,
     speakerId,
+    speakerAliases,
     syntheticSpeaker: role === 'narrator' ? 'Aiden' : 'Ryan',
     instruction: `${id} instruction`,
     seed: 1,
@@ -37,6 +39,26 @@ const baseInput = {
   audioAssemblerIdentity: 'assembler-identity',
   splitterIdentity: splitterIdentity(),
 }
+
+describe('cast identity is bound into the generation command identity (#83)', () => {
+  it('changing a roster alias or voice material mints a different job identity', () => {
+    const withAlias = new VoiceCast(cast.narrator, cast.fallback, [
+      profile('alice-voice', 'character', 'alice', ['Captain Alice']),
+    ])
+    const withChangedMaterial = new VoiceCast(cast.narrator, cast.fallback, [
+      new VoiceProfile({
+        ...profile('alice-voice', 'character', 'alice'),
+        instruction: 'different admitted material',
+      }),
+    ])
+
+    const baseline = createGenerationCommandIdentity(baseInput)
+    expect(createGenerationCommandIdentity({ ...baseInput, voices: withAlias })).not.toBe(baseline)
+    expect(createGenerationCommandIdentity({ ...baseInput, voices: withChangedMaterial })).not.toBe(
+      baseline,
+    )
+  })
+})
 
 describe('splitter identity is bound into the generation command identity (#55 r2, MEDIUM 2)', () => {
   it('splitterIdentity changes when the budget or overshoot changes', () => {

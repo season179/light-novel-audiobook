@@ -1,9 +1,16 @@
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createCastApprovalRecord } from '@light-novel-audiobook/application'
 import { defaultFfmpegDirectory, FFMPEG_DIRECTORY_ENV } from '@light-novel-audiobook/audio-assembly'
+import {
+  layoutFor,
+  openWorkspace,
+  SqliteCastApprovalRepository,
+} from '@light-novel-audiobook/persistence'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runPipeline } from '../src/driver.js'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
@@ -116,6 +123,131 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     // The fake transport was asked for exactly the sliced chapters, one request each.
     expect(server.requests).toHaveLength(1)
     expect(server.requests.map((request) => request.passageCount)).toEqual([1])
+  }, 600_000)
+
+  it('loads the approved cast from the review ledger and resolves character-bearing segments', async () => {
+    const workspaceRoot = await workspace('approved-cast')
+    const firstServer = await directorServer()
+    const first = await runPipeline({
+      jobId: 'driver-cast-book-identity',
+      epubPath: FIXTURE_EPUB,
+      workspaceRoot,
+      repositoryRoot: REPOSITORY_ROOT,
+      transports: await createFakeTransports(
+        {
+          runtimeDirectory: path.join(workspaceRoot, 'runtime-first'),
+          repositoryRoot: REPOSITORY_ROOT,
+        },
+        firstServer.baseUrl,
+      ),
+      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+    })
+    const epubSha256 = createHash('sha256')
+      .update(await readFile(FIXTURE_EPUB))
+      .digest('hex')
+    const database = openWorkspace(layoutFor(workspaceRoot))
+    try {
+      await new SqliteCastApprovalRepository(database).saveCastApproval(
+        createCastApprovalRecord({
+          bookId: first.bookId,
+          epubSha256,
+          assignments: [
+            {
+              speakerId: 'speaker-amber',
+              aliases: ['Amber'],
+              materialProfileId: 'ryan-energetic-baseline',
+              sharingGroupId: null,
+            },
+          ],
+          decidedBy: 'Reviewer One',
+          decidedAt: '2026-07-26T12:00:00.000Z',
+        }),
+      )
+    } finally {
+      database.close()
+    }
+
+    const characterServer = new NarrationEchoDirectorServer('dialogue')
+    servers.push(characterServer)
+    await characterServer.start()
+    const castRun = await runPipeline({
+      jobId: 'driver-approved-cast-run',
+      epubPath: FIXTURE_EPUB,
+      workspaceRoot,
+      repositoryRoot: REPOSITORY_ROOT,
+      transports: await createFakeTransports(
+        {
+          runtimeDirectory: path.join(workspaceRoot, 'runtime-cast'),
+          repositoryRoot: REPOSITORY_ROOT,
+        },
+        characterServer.baseUrl,
+      ),
+      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+    })
+
+    expect(castRun.cast).toMatchObject({
+      approvalId: expect.stringMatching(/^cast-/),
+      characterCount: 1,
+      distinctMaterialCount: 1,
+      sharedMaterialGroupCount: 0,
+    })
+    expect(castRun.fallbackWarnings).toBe(0)
+    expect(castRun.jobState).toBe('completed')
+  }, 600_000)
+
+  it('rejects an approved cast whose recorded book identity differs from the extracted book', async () => {
+    const workspaceRoot = await workspace('mismatched-book-id')
+    const server = await directorServer()
+    const transports = await createFakeTransports(
+      { runtimeDirectory: path.join(workspaceRoot, 'runtime'), repositoryRoot: REPOSITORY_ROOT },
+      server.baseUrl,
+    )
+    const epubSha256 = createHash('sha256')
+      .update(await readFile(FIXTURE_EPUB))
+      .digest('hex')
+    // The approval is bound to this EPUB by its exact epubSha256 (the ledger primary key), but its
+    // recorded bookId names a different extracted identity. Use a mismatched ID of the SAME length as
+    // the real extracted book id (book- + 24 chars), so only a real value comparison — not a
+    // length comparison — distinguishes them. The driver's defence-in-depth cross-check must catch
+    // the mismatch before the cast is trusted.
+    const database = openWorkspace(layoutFor(workspaceRoot))
+    try {
+      await new SqliteCastApprovalRepository(database).saveCastApproval(
+        createCastApprovalRecord({
+          bookId: 'book-zzzzzzzzzzzzzzzzzzzzzzzz',
+          epubSha256,
+          assignments: [
+            {
+              speakerId: 'speaker-amber',
+              aliases: ['Amber'],
+              materialProfileId: 'ryan-energetic-baseline',
+              sharingGroupId: null,
+            },
+          ],
+          decidedBy: 'Reviewer One',
+          decidedAt: '2026-07-26T12:00:00.000Z',
+        }),
+      )
+    } finally {
+      database.close()
+    }
+
+    let report: Awaited<ReturnType<typeof runPipeline>> | undefined
+    await expect(
+      (async () => {
+        report = await runPipeline({
+          jobId: 'driver-mismatched-book-id',
+          epubPath: FIXTURE_EPUB,
+          workspaceRoot,
+          repositoryRoot: REPOSITORY_ROOT,
+          transports,
+          limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+        })
+      })(),
+    ).rejects.toThrow(/belongs to a different extracted book identity/)
+    // The mismatch is caught during extraction, before the cast is trusted or any output assembled,
+    // so no run report is produced.
+    expect(report).toBeUndefined()
   }, 600_000)
 
   it('reuses completed segment audio when the same job is run again', async () => {

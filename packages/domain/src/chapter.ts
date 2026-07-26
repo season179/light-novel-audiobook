@@ -1,5 +1,6 @@
 import { DomainError, InvalidStateTransitionError } from './errors.js'
 import type { Segment } from './segment.js'
+import { ExactSourceCoverage } from './source-coverage.js'
 import type { SourcePassage } from './source-passage.js'
 
 export const CHAPTER_STATES = [
@@ -76,7 +77,7 @@ export class Chapter {
     if (this.currentState !== 'draft') {
       throw new InvalidStateTransitionError('Chapter', this.currentState, 'needs_review')
     }
-    if (segments.length === 0) throw new DomainError('A directed chapter requires segments')
+    ExactSourceCoverage.assertSegments(this, segments)
     const ids = new Set<string>()
     for (const [index, segment] of segments.entries()) {
       if (segment.chapterId !== this.id || segment.order !== index + 1) {

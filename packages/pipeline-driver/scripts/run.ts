@@ -10,7 +10,6 @@
  *   --from-chapter <n>         Start at domain chapter N (1-based). Default: 1.
  *   --chapters <n>             Keep at most N chapters, counting from --from-chapter. Default: 1.
  *   --passages <n>             Keep at most N passages per chapter. Default: 3.
- *   --characters <a,b>         Character speaker IDs to cast. Default: none (narration only).
  *   --transports fake|real     Default: fake. `real` loads actual models; see below.
  *   --director-url <url>       Real mode: loopback /v1 URL the owned llama-server binds to.
  *   --llama-runtime-root <p>   Real mode: built brain runtime root. Default: the pinned profile's.
@@ -19,6 +18,9 @@
  *   --runtime-manifest <path>  Real mode: pinned runtime manifest.
  *   --snapshot <path>          Real mode: pinned Qwen model snapshot. Default: derived from the lock.
  *   --gpu-lock <path>          Real mode: GPU lock file shared by Gemma and Qwen.
+ *
+ * A human-approved cast for the exact EPUB is loaded from the workspace ledger. With no approval the
+ * roster remains empty and character-bearing segments still reach the fallback review gate.
  *
  * Fake transports are the default on purpose: no GPU, no model weights, no network beyond loopback,
  * so this is safe to run anywhere and in CI. Real transports load Gemma and Qwen for real and must be
@@ -79,11 +81,6 @@ const workspaceRoot = flag('workspace')
   ? path.resolve(flag('workspace') as string)
   : await mkdtemp(path.join(tmpdir(), 'pipeline-demo-'))
 const jobId = flag('job-id') ?? `pipeline-demo-${Date.now()}`
-const characterSpeakerIds = (flag('characters') ?? '')
-  .split(',')
-  .map((value) => value.trim())
-  .filter((value) => value.length > 0)
-
 // Only bound when the flag is present, so the identity of an unqualified prefix run is unchanged.
 const limits: SliceLimits = {
   maxChapters: positiveInteger('chapters', 1),
@@ -128,7 +125,6 @@ try {
     repositoryRoot: REPOSITORY_ROOT,
     transports,
     limits,
-    characterSpeakerIds,
     onDirectorProgress: (event) => {
       process.stderr.write(
         `[direction] ${event.state} ${event.completedPassages}/${event.totalPassages}\n`,

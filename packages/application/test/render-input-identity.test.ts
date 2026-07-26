@@ -136,6 +136,30 @@ describe('render input identity binds the human fallback decision (issue #45, pr
     )
   })
 
+  it('moves when only the exact source text changes under the same segment ID', () => {
+    const original = segmentFor(false)
+    const revised = new Segment({
+      id: original.id,
+      chapterId: original.chapterId,
+      sourcePassageId: original.sourcePassageId,
+      order: original.order,
+      sourceText: original.sourceText.replace('asked', 'heard'),
+      kind: original.kind,
+      speakerId: original.speakerId,
+      confidence: original.confidence,
+      delivery: original.delivery,
+    })
+    const assignment = original.voiceAssignment
+    if (assignment === null) throw new Error('fixture voice assignment missing')
+    revised.assignVoice(assignment)
+
+    expect(revised.sourceText).not.toBe(original.sourceText)
+    expect(revised.sourceText).toHaveLength(original.sourceText.length)
+    expect(createRenderInputIdentity(revised, castVoice, ENGINE)).not.toBe(
+      createRenderInputIdentity(original, castVoice, ENGINE),
+    )
+  })
+
   it('refuses to give a cast-voice segment an approval-bound identity', () => {
     expect(() =>
       createRenderInputIdentity(

@@ -11,6 +11,15 @@ export {
 export { type RunPipelineOptions, type RunPipelineReport, runPipeline } from './driver.js'
 export { NarrationEchoDirectorServer } from './fake-director-server.js'
 export {
+  type ApproveFallbackReviewReport,
+  type FallbackReviewApprovalNotice,
+  type FallbackReviewCommandOptions,
+  type FallbackReviewItem,
+  type FallbackReviewReport,
+  type ListFallbackReviewReport,
+  runFallbackReviewCommand,
+} from './fallback-review-cli.js'
+export {
   canonicalSliceDescriptor,
   type SliceLimits,
   type SliceReport,

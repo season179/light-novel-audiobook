@@ -8,6 +8,7 @@ import type {
   Segment,
   VoiceProfile,
 } from '@light-novel-audiobook/domain'
+import type { PersistedCastApproval } from './cast-approval.js'
 import type {
   BookFallbackGrant,
   FallbackApprovalCatalog,
@@ -135,6 +136,13 @@ export interface SpeechEngineFactory {
  * decision moved underneath it — reading records and revision separately would leave exactly the
  * race this exists to close.
  */
+export interface CastApprovalRepository {
+  /** Active human-approved cast for these exact EPUB bytes, if one exists. */
+  findCastApproval(epubSha256: string): Promise<PersistedCastApproval | undefined>
+  /** Replaces the active decision while preserving its content-addressed approval identity. */
+  saveCastApproval(approval: PersistedCastApproval): Promise<void>
+}
+
 export interface FallbackApprovalRepository {
   /** One atomically consistent read: live approvals, exclusions, the book-wide grant, revision. */
   readCatalog(bookId: string): Promise<FallbackApprovalCatalog>
