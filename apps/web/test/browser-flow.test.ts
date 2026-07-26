@@ -78,6 +78,47 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     expect(screen.queryByRole('button', { name: 'Generate audiobook' })).toBeNull()
   })
 
+  it('starts a bounded slice from the upload form', async () => {
+    const user = userEvent.setup()
+    let startedJobId: string | null = null
+    renderUploadPanel((jobId) => {
+      startedJobId = jobId
+    })
+
+    await user.upload(screen.getByLabelText('EPUB file'), epubFile())
+    await user.click(screen.getByRole('button', { name: 'Upload EPUB' }))
+    await screen.findByRole('button', { name: 'Generate audiobook' }, WAIT)
+
+    await user.type(screen.getByLabelText('Number of chapters'), '1')
+    await user.click(screen.getByRole('button', { name: 'Generate this slice' }))
+
+    await waitFor(() => expect(startedJobId).not.toBeNull(), WAIT)
+    const jobId = startedJobId ?? ''
+    expect(jobId).toContain('-slice-maxChapters=1')
+    await waitForJobState(harness.api, jobId, (job) => job.state === 'awaiting_review')
+    const job = await harness.api.getJobState({ jobId })
+    expect(job?.state).toBe('awaiting_review')
+  })
+
+  it('rejects an unparseable bound in the form instead of starting a whole-book render', async () => {
+    const user = userEvent.setup()
+    renderUploadPanel(() => undefined)
+
+    await user.upload(screen.getByLabelText('EPUB file'), epubFile())
+    await user.click(screen.getByRole('button', { name: 'Upload EPUB' }))
+    await screen.findByRole('button', { name: 'Generate audiobook' }, WAIT)
+
+    await user.type(screen.getByLabelText('Number of chapters'), '0')
+    await user.click(screen.getByRole('button', { name: 'Generate this slice' }))
+
+    await waitFor(
+      () => expect(screen.getByRole('alert').textContent).toContain('positive whole numbers'),
+      WAIT,
+    )
+    expect(await harness.api.listUploads()).toHaveLength(1)
+    expect(harness.directors).toHaveLength(0)
+  })
+
   it('carries an EPUB through generation and keeps state across a page refresh', async () => {
     const user = userEvent.setup()
     let startedJobId: string | null = null
