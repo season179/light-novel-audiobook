@@ -82,8 +82,8 @@ describe('bounded-slice job identity', () => {
     'firstChapter=1',
     'maxChapters=01',
     'maxChapters=1,firstChapter=2',
-    // A fourth alias-like form of our own: duplicate fields can never be canonical.
-    'maxChapters=1,maxChapters=1',
+    // A fourth form of our own: the default must be omitted even when another bound remains.
+    'firstChapter=1,maxChapters=2',
   ])('rejects malformed or noncanonical descriptor %s loudly', (descriptor) => {
     const jobId = `job-${SHA.slice(0, 24)}-slice-${descriptor}`
     expect(parseJobId(jobId)).toBeNull()
