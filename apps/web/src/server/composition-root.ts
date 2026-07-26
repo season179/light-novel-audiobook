@@ -27,7 +27,7 @@ import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
 import { sliceLimitsForJobId } from './job-identity.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
-import { resolveReviewerIdentity } from './reviewer-identity.js'
+import { type ReviewerIdentity, resolveReviewerIdentity } from './reviewer-identity.js'
 import { createWorkspace, type LocalWorkspace } from './workspace.js'
 
 /**
@@ -101,7 +101,7 @@ export interface AudiobookAdapterFactories {
    * never read from a request body. `resolveReviewerIdentity` throws if neither is available, so the
    * gap is visible at startup instead of being papered over with a constant.
    */
-  readonly reviewer?: string | undefined
+  readonly reviewer?: ReviewerIdentity | undefined
 }
 
 export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {

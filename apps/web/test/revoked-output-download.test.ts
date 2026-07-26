@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { InMemoryFallbackApprovalRepository } from '../src/server/fakes/in-memory-fallback-approvals.js'
+import { REVIEWER_ENV_VARIABLE, resolveReviewerIdentity } from '../src/server/reviewer-identity.js'
 import { LocalWorkspace } from '../src/server/workspace.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 
@@ -68,7 +69,7 @@ const completedAudiobook = async (
   const api = await createAudiobookWebApi({
     workspaceRoot: root,
     ...(workspace === undefined ? {} : { workspace }),
-    reviewer: REVIEWER,
+    reviewer: resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: REVIEWER }),
     approvals,
   })
   const upload = await api.uploadEpub({

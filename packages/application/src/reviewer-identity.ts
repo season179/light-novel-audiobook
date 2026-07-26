@@ -6,6 +6,19 @@ const MAX_LENGTH = 128
 export const REVIEWER_ENV_VARIABLE = 'LNA_REVIEWER'
 
 /**
+ * A reviewer identity that can only originate from `resolveReviewerIdentity`.
+ *
+ * A nominal brand over `string`: erased at runtime, so the value serialises and compares as a plain
+ * string downstream, but a slot typed `ReviewerIdentity` cannot be filled with a manufactured
+ * constant or a local fork — only the canonical resolver produces this type. This is the structural
+ * half of issue #87: the web composition root's reviewer slot is `ReviewerIdentity`, so a
+ * `?? 'local-user'` fork at the consumption site does not typecheck. The behavioural half is the
+ * test that exercises resolution without a supplied reviewer.
+ */
+declare const reviewerIdentityBrand: unique symbol
+export type ReviewerIdentity = string & { readonly [reviewerIdentityBrand]: true }
+
+/**
  * Resolves the local human account recorded on a fallback-voice decision.
  *
  * The actor is never manufactured: configuration wins, then the operating-system account, and if
@@ -16,7 +29,7 @@ export const REVIEWER_ENV_VARIABLE = 'LNA_REVIEWER'
 export const resolveReviewerIdentity = (
   environment: Readonly<Record<string, string | undefined>> = process.env,
   accountName: () => string | undefined = localAccountName,
-): string => {
+): ReviewerIdentity => {
   const configured = environment[REVIEWER_ENV_VARIABLE]
   const candidate =
     normalizeReviewerIdentity(configured) ?? normalizeReviewerIdentity(accountName())
@@ -26,7 +39,7 @@ export const resolveReviewerIdentity = (
         'An approval is evidence of a human decision, so this application will not invent one.',
     )
   }
-  return candidate
+  return candidate as ReviewerIdentity
 }
 
 export const normalizeReviewerIdentity = (value: string | undefined): string | undefined => {

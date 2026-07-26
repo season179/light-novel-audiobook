@@ -2,5 +2,6 @@
 // the web seam so existing server imports cannot grow a second policy.
 export {
   REVIEWER_ENV_VARIABLE,
+  type ReviewerIdentity,
   resolveReviewerIdentity,
 } from '@light-novel-audiobook/application'

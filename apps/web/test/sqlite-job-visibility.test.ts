@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { GenerateAudiobook, PendingFallbackReviewError } from '@light-novel-audiobook/application'
+import {
+  GenerateAudiobook,
+  PendingFallbackReviewError,
+  REVIEWER_ENV_VARIABLE,
+  resolveReviewerIdentity,
+} from '@light-novel-audiobook/application'
 import {
   layoutFor,
   migrateSchema,
@@ -104,7 +109,7 @@ describe('a SQLite job written by one side of the workspace', () => {
       workspace,
       jobs: new SqliteJobRepository(layout, readerDb),
       approvals: new SqliteFallbackApprovalRepository(readerDb),
-      reviewer: WEB_REVIEWER,
+      reviewer: resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: WEB_REVIEWER }),
     })
 
     const state = await api.getJobState({ jobId: JOB_ID })
