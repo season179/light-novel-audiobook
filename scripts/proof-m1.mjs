@@ -1325,11 +1325,29 @@ const main = async () => {
   }
 }
 
-main().catch((error) => {
-  if (error instanceof HarnessFailure) {
-    console.error(`\nPROOF RED: ${error.message}`)
-  } else {
-    console.error('\nPROOF RED: unexpected harness error:', error)
-  }
-  process.exitCode = 1
-})
+export {
+  createServerFnClient,
+  discoverServerFunctions,
+  loadSeroval,
+  pollJobUntil,
+  portIsFree,
+  resolveHarnessWorkspace,
+  runPreflight,
+  startDevServer,
+  stopDevServer,
+  waitForHttp,
+}
+
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    if (error instanceof HarnessFailure) {
+      console.error(`\nPROOF RED: ${error.message}`)
+    } else {
+      console.error('\nPROOF RED: unexpected harness error:', error)
+    }
+    process.exitCode = 1
+  })
+}
