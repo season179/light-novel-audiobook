@@ -18,6 +18,7 @@ import {
 } from '@light-novel-audiobook/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  CompletedOutputAuthority,
   collectFallbackSubjects,
   createRenderContract,
   FALLBACK_EXCERPT_MAX_LENGTH,
@@ -727,6 +728,45 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     expect(result.job.state).toBe('completed')
     expect(result.generatedSegments).toBe(0)
     expect(result.output.m4bPath).toBe('/workspace/review-v001.m4b')
+  })
+
+  it('rejects same-book authority callback re-entry instead of deadlocking', async () => {
+    const book = bookOf()
+    const job = directedJob(app.jobs, book)
+    await app.review.grantBookFallback({ jobId: 'job-review', decidedBy: REVIEWER })
+    const claimed = (await app.approvals.readCatalog(BOOK_ID)).revision
+    job.resumeApprovedRender()
+    job.beginRendering(4)
+    for (const segment of book.chapters[0]?.segments ?? []) job.recordSegmentCompleted(segment.id)
+    job.beginAssembly()
+    job.complete(
+      {
+        version: { value: 1, label: 'v001', fileName: () => 'x' } as never,
+        m4bPath: '/workspace/review-v001.m4b',
+        chapters: [{ chapterId: CHAPTER_ID, path: '/workspace/ch1.flac' }],
+      },
+      claimed,
+    )
+    const authority = new CompletedOutputAuthority(app.approvals)
+    const nested = authority.authorize(job, () =>
+      authority.authorize(job, (output) => output.m4bPath),
+    )
+    const outcome = await Promise.race([
+      nested.then(
+        () => ({ status: 'resolved' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      ),
+      new Promise<{ readonly status: 'blocked' }>((resolve) => {
+        setTimeout(() => resolve({ status: 'blocked' }), 100)
+      }),
+    ])
+
+    expect(outcome.status).toBe('rejected')
+    if (outcome.status !== 'rejected') return
+    expect(outcome.error).toBeInstanceOf(Error)
+    expect((outcome.error as Error).name).toBe('ApprovalCatalogReentryError')
+    expect((outcome.error as Error).message).toContain(BOOK_ID)
+    expect((outcome.error as Error).message).toContain('must not re-enter')
   })
 
   it('reopens a job that completed while a review decision was in flight', async () => {

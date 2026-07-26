@@ -121,13 +121,21 @@ describe('awaiting-review job lifecycle (issue #45)', () => {
     expect(job.stage).toBe('rendering')
   })
 
-  it('has no raw completed-output getter and requires an explicit catalog revision', () => {
+  it('has no public primitive that can recover its stored completed output', () => {
     const job = completedJob()
+    const prototype = AudiobookJob.prototype as unknown as Record<string, unknown>
+    const instance = job as unknown as Record<string, unknown>
 
     expect(Object.getOwnPropertyDescriptor(AudiobookJob.prototype, 'output')).toBeUndefined()
-    expect('output' in job).toBe(false)
-    expect(job.completedOutputAtCatalogRevision(1)).toBeNull()
-    expect(job.completedOutputAtCatalogRevision(0)?.m4bPath).toBe('/workspace/story-v001.m4b')
+    expect(
+      Object.getOwnPropertyDescriptor(AudiobookJob.prototype, 'completedOutputAtCatalogRevision'),
+    ).toBeUndefined()
+    expect(prototype.output).toBeUndefined()
+    expect(prototype.completedOutputAtCatalogRevision).toBeUndefined()
+    expect(instance.output).toBeUndefined()
+    expect(instance.completedOutputAtCatalogRevision).toBeUndefined()
+    // The recorded revision remains useful metadata, but a bare number grants no output access.
+    expect(job.catalogRevision).toBe(0)
   })
 
   it('only reopens a completed job', () => {
