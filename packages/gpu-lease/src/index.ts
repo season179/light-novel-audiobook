@@ -88,9 +88,72 @@ interface HolderExit {
 
 type HolderHandshake = 'acquired' | 'exited' | 'unusable'
 
-interface ComputeApp {
+export interface ComputeApp {
   readonly pid: number | undefined
   readonly line: string
+}
+
+/** Liveness of a compute-apps row's PID, tri-stated so "cannot tell" can fail closed. */
+export type ProcessLiveness = 'alive' | 'dead' | 'unknown'
+
+/**
+ * Maps a `/proc/<pid>/stat` read outcome to liveness. Provably dead means the process is gone
+ * (ENOENT) or a zombie (`Z`/`X` - its address space, and with it any GPU allocation, is already
+ * released). Every other read failure, and any content that cannot be parsed, is `unknown` -
+ * never `dead` - because a false "dead" lets a second model onto the card, which is a guaranteed
+ * OOM. Exported so tests can pin every errno without a host that can produce them.
+ */
+export function livenessFromProcStat(
+  outcome:
+    | { readonly ok: true; readonly stat: string }
+    | { readonly ok: false; readonly code: string | undefined },
+): ProcessLiveness {
+  if (!outcome.ok) return outcome.code === 'ENOENT' ? 'dead' : 'unknown'
+  const closeParen = outcome.stat.lastIndexOf(')')
+  if (closeParen < 0) return 'unknown'
+  const state = outcome.stat
+    .slice(closeParen + 1)
+    .trim()
+    .split(/\s+/u)[0]
+  if (state === undefined || state.length === 0) return 'unknown'
+  return state === 'Z' || state === 'X' ? 'dead' : 'alive'
+}
+
+/**
+ * Tri-states one pid against real `/proc`. The read boundary is a parameter (defaulting to the
+ * real read) so the errno class is testable on hosts where non-ENOENT `/proc` failures cannot be
+ * produced; the production caller never overrides it.
+ */
+export async function probeProcessLiveness(
+  pid: number,
+  readStat: (target: number) => Promise<string> = async (target) =>
+    await readFile(`/proc/${target}/stat`, 'utf8'),
+): Promise<ProcessLiveness> {
+  try {
+    return livenessFromProcStat({ ok: true, stat: await readStat(pid) })
+  } catch (error) {
+    return livenessFromProcStat({ ok: false, code: (error as NodeJS.ErrnoException).code })
+  }
+}
+
+type ComputeAppVerdict = 'own' | 'foreign' | 'phantom'
+
+/**
+ * Decides what one compute-apps row means for the foreign-process guard (#68). Under WSL2/GPU-PV
+ * the table can list PIDs that are already gone (`[Not Found], [N/A]`); a provably dead row is a
+ * phantom and occupies nothing. An unreadable row is `unknown`, and unknown is foreign: the
+ * asymmetry is deliberate, because a false "dead" puts two models co-resident on one card.
+ * Exported with an injectable probe so the unknown branch is testable; production never overrides.
+ */
+export async function classifyComputeApp(
+  app: ComputeApp,
+  probeLiveness: (pid: number) => Promise<ProcessLiveness> = probeProcessLiveness,
+): Promise<ComputeAppVerdict> {
+  if (app.pid === undefined) return 'foreign'
+  const liveness = await probeLiveness(app.pid)
+  if (liveness === 'dead') return 'phantom'
+  if (liveness === 'alive' && (await isOwnProcessTree(app.pid))) return 'own'
+  return 'foreign'
 }
 
 /** Reads the parent PID from `/proc/<pid>/stat`, tolerating spaces and parens in the comm field. */
@@ -444,7 +507,11 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     let ownProcesses = 0
     for (const app of computeApps) {
       // Names and per-process memory are unreliable under GPU-PV; only the PID is trustworthy.
-      if (app.pid !== undefined && (await isOwnProcessTree(app.pid))) ownProcesses += 1
+      // Every row is classified: a phantom (provably dead PID) is ignored, everything else
+      // reaches the guard (#68).
+      const verdict = await classifyComputeApp(app)
+      if (verdict === 'phantom') continue
+      if (verdict === 'own') ownProcesses += 1
       else foreign.push(app.line)
     }
     if (foreign.length > 0) {
