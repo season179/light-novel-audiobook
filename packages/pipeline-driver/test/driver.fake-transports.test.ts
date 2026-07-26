@@ -153,6 +153,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     })
 
     expect(resumed.jobState).toBe('completed')
+    expect(resumed.identities.director).toBe(report.identities.director)
     expect(resumed.reusedSegments).toBe(1)
     expect(resumed.generatedSegments).toBe(0)
     // A second export never overwrites the first.
