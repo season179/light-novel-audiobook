@@ -20,7 +20,7 @@ import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ACCEPTANCE_M1_EPUB_PATH, buildAcceptanceM1EpubBytes } from './build-acceptance-m1-epub.mjs'
 import { assertContainerProbe, ContainerCheckFailure } from './proof-m1-container-check.mjs'
 import {
@@ -774,6 +774,16 @@ const verifyOutput = async (config, client, jobId, baseUrl) => {
     fail(
       `verification: workspace M4B ${path.basename(m4bFiles[0])} disagrees with the download ` +
         `name ${listing.download.fileName}`,
+    )
+  }
+  // Same name is not the same file. The criterion is that *this* audiobook can be downloaded, so
+  // compare bytes: a route serving some other valid M4B would satisfy every check above.
+  const downloadedSha = sha256Hex(m4b)
+  const workspaceSha = await sha256File(m4bFiles[0])
+  if (downloadedSha !== workspaceSha) {
+    fail(
+      `verification: the downloaded M4B is not the workspace M4B (download ${downloadedSha}, ` +
+        `workspace ${workspaceSha})`,
     )
   }
   log(`[step 5] numbered M4B: ${m4bFiles[0]} (${m4b.byteLength} bytes)`)
