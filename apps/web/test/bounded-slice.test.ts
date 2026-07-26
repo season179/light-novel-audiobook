@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
 import { parseJobId, sliceLimitsForJobId } from '../src/server/job-identity.js'
@@ -129,8 +130,8 @@ describe('bounded slices through the web API', () => {
     expect(rereadA.output?.chapters.map((chapter) => chapter.chapterLabel)).toEqual(['Chapter 1'])
     const listingA = await harness.api.listChapterAudio({ jobId: startedA.jobId })
     const listingB = await harness.api.listChapterAudio({ jobId: startedB.jobId })
-    expect(listingA.chapters[0]?.audioUrl).toContain(startedA.jobId)
-    expect(listingB.chapters[0]?.audioUrl).toContain(startedB.jobId)
+    expect(listingA.chapters[0]?.audioUrl).toContain(encodeURIComponent(startedA.jobId))
+    expect(listingB.chapters[0]?.audioUrl).toContain(encodeURIComponent(startedB.jobId))
 
     // The audio bytes differ, and every segment was genuinely rendered: nothing was read back.
     const chapterA = completedA.output?.chapters[0]?.chapterId ?? ''
