@@ -361,6 +361,100 @@ describe('OwnedLlamaLifecycle release racing an in-flight start', () => {
     expect(await portIsFree(port)).toBe(true)
   }, 60_000)
 
+  it('rejects a spawn whose own operands re-entered release, before any child exists', async () => {
+    // The last window: `spawn`'s operands are read *after* the check unless they are snapshotted first,
+    // and `OwnedLlamaLifecycleOptions` is an interface, so they may legally be accessors. A getter that
+    // calls release() is synchronous caller code running between the check and the spawn. Against the
+    // unsnapshotted version this spawned a live child after release had begun.
+    const runtimeRoot = await scratch('reentrant')
+    const port = await freePort()
+    const keyPath = path.join(runtimeRoot, 'api-key')
+    let lifecycle: OwnedLlamaLifecycle | undefined
+    let binaryPathReads = 0
+    let releaseFromOperand: Promise<void> | undefined
+
+    const reentrant = {
+      // Legal against the declared `readonly binaryPath: string`.
+      get binaryPath(): string {
+        binaryPathReads += 1
+        releaseFromOperand ??= (lifecycle as OwnedLlamaLifecycle).release()
+        // Swallowed here only so the probe itself cannot fail on an unhandled rejection; the test
+        // asserts on `releaseFromOperand` below.
+        void releaseFromOperand.catch(() => undefined)
+        return process.execPath
+      },
+      args: [STUB, String(port), 'http://127.0.0.1:9/unreachable'],
+      apiKey: 'reentrant-operand-key',
+      keyPath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 30_000,
+      terminateTimeoutMs: 2_000,
+      killTimeoutMs: 5_000,
+      startupSettleTimeoutMs: 5_000,
+    }
+    lifecycle = new OwnedLlamaLifecycle(reentrant)
+    lifecycles.push(lifecycle)
+
+    await expect(lifecycle.start()).rejects.toThrow(/abandoned because release had already begun/)
+
+    // The operand really did run — otherwise this test would pass for the wrong reason.
+    expect(binaryPathReads).toBe(1)
+    expect(releaseFromOperand).toBeDefined()
+    // No child was ever created, so there is nothing that could still be holding VRAM.
+    expect(lifecycle.processId).toBeUndefined()
+    expect(lifecycle.running).toBe(false)
+
+    // And the release that the operand began still completes its contract.
+    await expect(releaseFromOperand).resolves.toBeUndefined()
+    expect(lifecycle.cleanupComplete).toBe(true)
+    expect(await portIsFree(port)).toBe(true)
+    await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 60_000)
+
+  it('rejects a spawn whose args iterator re-entered release', async () => {
+    // Same window, reached through the other operand: `args` is an iterable, so spreading it can run
+    // caller code too. Snapshotting has to cover the iteration, not just the property read.
+    const runtimeRoot = await scratch('reentrant-args')
+    const port = await freePort()
+    const keyPath = path.join(runtimeRoot, 'api-key')
+    let lifecycle: OwnedLlamaLifecycle | undefined
+    let iterated = false
+    let releaseFromOperand: Promise<void> | undefined
+
+    const args: Iterable<string> = {
+      *[Symbol.iterator](): Iterator<string> {
+        iterated = true
+        releaseFromOperand ??= (lifecycle as OwnedLlamaLifecycle).release()
+        void releaseFromOperand.catch(() => undefined)
+        yield STUB
+        yield String(port)
+        yield 'http://127.0.0.1:9/unreachable'
+      },
+    }
+    lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: args as readonly string[],
+      apiKey: 'reentrant-args-key',
+      keyPath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 30_000,
+      terminateTimeoutMs: 2_000,
+      killTimeoutMs: 5_000,
+      startupSettleTimeoutMs: 5_000,
+    })
+    lifecycles.push(lifecycle)
+
+    await expect(lifecycle.start()).rejects.toThrow(/abandoned because release had already begun/)
+
+    expect(iterated).toBe(true)
+    expect(lifecycle.processId).toBeUndefined()
+    await expect(releaseFromOperand).resolves.toBeUndefined()
+    expect(lifecycle.cleanupComplete).toBe(true)
+    expect(await portIsFree(port)).toBe(true)
+  }, 60_000)
+
   it('fails loudly instead of hanging or reporting success when startup is wedged', async () => {
     // A bounded wait is only progress if expiry cannot be mistaken for a released runtime.
     const { lifecycle, keyPath } = await subject({

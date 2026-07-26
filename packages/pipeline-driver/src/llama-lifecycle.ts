@@ -171,10 +171,13 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     this.#assertSpawnStillAllowed()
     await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
     await chmod(this.options.keyPath, 0o600)
-    // Re-checked here, not only on entry, and in the same synchronous step as the `spawn` below: both
-    // filesystem awaits above are windows in which `release()` can begin, and a release that found no
-    // child must not be followed by a fresh 16 GB load. Nothing may be awaited between this line and
-    // the assignment of `#child`, or the window reopens.
+    // Every spawn operand is read and coerced to a primitive *before* the final check, so the check and
+    // the spawn are separated by nothing the caller can hook. `OwnedLlamaLifecycleOptions` is an
+    // interface: these properties may legally be accessors, `args` may be any iterable, and a value may
+    // carry a `toString`. Reading them after the check would run caller code inside the one window that
+    // has to be closed — and a `binaryPath` getter that calls `release()` provably spawned a child after
+    // release had begun. The coercions look redundant against the declared types on purpose; the types
+    // are a promise from the caller, and this window is exactly where that promise must not be trusted.
     this.#assertSpawnStillAllowed()
     const child = spawn(this.options.binaryPath, [...this.options.args], {
       stdio: ['ignore', 'ignore', 'ignore'],
