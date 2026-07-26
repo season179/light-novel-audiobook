@@ -35,7 +35,11 @@ const processRunning = async (pid: number): Promise<boolean> => {
     const stat = await readFile(`/proc/${pid}/stat`, 'utf8')
     return stat.split(' ')[2] !== 'Z'
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    const code = (error as NodeJS.ErrnoException).code
+    // Linux may report ESRCH when the task vanishes between opening and reading procfs. Hosted CI
+    // run 30221208089 threw here for a probe that was already gone, so the predicate has to treat
+    // both disappearance codes as dead — rethrowing turns a correct observation into a failure.
+    if (code === 'ENOENT' || code === 'ESRCH') return false
     throw error
   }
 }
