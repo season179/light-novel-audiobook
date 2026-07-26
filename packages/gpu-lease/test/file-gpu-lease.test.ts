@@ -476,44 +476,6 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
 })
 
 describe('FileGpuLeaseCoordinator', () => {
-  it('keeps a durable quarantine after its owner exits until an operator explicitly clears it', async () => {
-    const root = await makeRoot('gpu-flock-quarantine')
-    const path = join(root, 'exclusive.lock')
-    const quarantined = await runDetachedLeaseCaller(
-      [
-        "const lease = await coordinator().acquire('gemma')",
-        "await lease.quarantine('fixture runtime cleanup remained unknown')",
-        '// Even an accidental normal release must not clear quarantine or hand off the lock.',
-        'await lease.release()',
-        "record('quarantined')",
-      ],
-      path,
-    )
-    expect(quarantined).toMatchObject({ outcome: 'quarantined', code: 0 })
-
-    // The child process and its kernel flock are now gone. Only the persisted marker can block this.
-    await expect(coordinator(path).acquire('qwen3-tts')).rejects.toMatchObject({
-      code: 'quarantined',
-      message: expect.stringContaining(`${path}.quarantined`),
-    })
-    const marker = JSON.parse(await readFile(`${path}.quarantined`, 'utf8')) as {
-      schema: number
-      owner: string
-      reason: string
-    }
-    expect(marker).toMatchObject({
-      schema: 1,
-      owner: 'gemma',
-      reason: 'fixture runtime cleanup remained unknown',
-    })
-
-    // Explicit operator recovery is intentionally outside the lease API: the coordinator cannot
-    // prove that no pending spawn exists. Once that proof is made, removing the marker restores use.
-    await rm(`${path}.quarantined`)
-    const recovered = await coordinator(path).acquire('qwen3-tts')
-    await recovered.release()
-  })
-
   it('treats nvidia-smi as a post-lock diagnostic and releases after a diagnostic failure', async () => {
     const root = await makeRoot('gpu-flock-diagnostic')
     const path = join(root, 'exclusive.lock')

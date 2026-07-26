@@ -30,12 +30,6 @@ export type GpuOwner = 'composition' | 'gemma' | 'qwen3-tts'
 export interface GpuLease {
   readonly owner: GpuOwner
   readonly lockFilePath: string
-  /**
-   * Persistently prevents normal acquisition when an owner cannot prove that its GPU runtime is
-   * gone. Quarantine deliberately keeps the current kernel lease held for this process lifetime;
-   * the durable marker continues blocking after the process exits and the kernel lock is released.
-   */
-  quarantine(reason: string): Promise<void>
   release(): Promise<void>
 }
 
@@ -44,7 +38,7 @@ export interface ExclusiveGpuLeaseCoordinator {
   acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease>
 }
 
-export type GpuLeaseErrorCode = 'busy' | 'cancelled' | 'diagnostic' | 'quarantined' | 'unavailable'
+export type GpuLeaseErrorCode = 'busy' | 'cancelled' | 'diagnostic' | 'unavailable'
 
 export class GpuLeaseError extends Error {
   override readonly name = 'GpuLeaseError'
@@ -160,7 +154,6 @@ async function isOwnProcessTree(pid: number): Promise<boolean> {
 
 export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly #lockFilePath: string
-  readonly #quarantineFilePath: string
   readonly #flockExecutable: string
   readonly #nvidiaSmiExecutable: string
   readonly #inspectExistingComputeProcesses: boolean
@@ -171,7 +164,6 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     if (config.lockFilePath.length === 0)
       throw new GpuLeaseError('unavailable', 'GPU lock file path is required')
     this.#lockFilePath = resolve(config.lockFilePath)
-    this.#quarantineFilePath = `${this.#lockFilePath}.quarantined`
     this.#flockExecutable = config.flockExecutable ?? 'flock'
     this.#nvidiaSmiExecutable = config.nvidiaSmiExecutable ?? 'nvidia-smi'
     this.#inspectExistingComputeProcesses = config.inspectExistingComputeProcesses ?? true
@@ -273,31 +265,17 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
       if (signal?.aborted) {
         throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled')
       }
-      // Check only after the kernel lock is ours. A previous owner can create the durable marker and
-      // then lose its holder while this acquire is starting; a pre-lock check would miss that race.
-      await this.#assertNotQuarantined()
       if (this.#inspectExistingComputeProcesses) await this.#diagnoseExistingCompute(signal)
 
       // Only here, once nothing is awaiting a holder event any more. See the function's comment: the
       // placement of this call is load-bearing and must stay after the handshake.
       detachHolderFromEventLoop(child)
       let released = false
-      let quarantined = false
       return {
         owner,
         lockFilePath: this.#lockFilePath,
-        quarantine: async (reason: string) => {
-          if (released) {
-            throw new GpuLeaseError('unavailable', 'A released GPU lease cannot be quarantined')
-          }
-          if (quarantined) return
-          await this.#writeQuarantine(owner, reason)
-          quarantined = true
-        },
         release: async () => {
-          // Quarantine is intentionally not a normal release. Keep the holder alive until this
-          // process exits; the marker below keeps future processes blocked after EOF frees flock.
-          if (released || quarantined) return
+          if (released) return
           released = true
           await this.#stopHolder(child, exit)
         },
@@ -316,50 +294,6 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
       })
     } finally {
       signal?.removeEventListener('abort', cancel)
-    }
-  }
-
-  async #assertNotQuarantined(): Promise<void> {
-    try {
-      await readFile(this.#quarantineFilePath, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw new GpuLeaseError('unavailable', 'Could not inspect the GPU quarantine marker', {
-        cause: error,
-      })
-    }
-    throw new GpuLeaseError(
-      'quarantined',
-      `GPU lease is quarantined after an unproven runtime cleanup: ${this.#quarantineFilePath}. Verify no model process, GPU residency, pending spawn, or occupied endpoint remains before explicitly removing this marker.`,
-    )
-  }
-
-  async #writeQuarantine(owner: GpuOwner, reason: string): Promise<void> {
-    const explanation = reason.trim()
-    if (explanation.length === 0) {
-      throw new GpuLeaseError('unavailable', 'GPU lease quarantine requires a reason')
-    }
-    let marker: Awaited<ReturnType<typeof open>> | undefined
-    try {
-      marker = await open(this.#quarantineFilePath, 'wx', 0o600)
-      await marker.writeFile(
-        `${JSON.stringify({
-          schema: 1,
-          owner,
-          processId: process.pid,
-          quarantinedAt: new Date().toISOString(),
-          reason: explanation,
-        })}\n`,
-        'utf8',
-      )
-      await marker.sync()
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return
-      throw new GpuLeaseError('unavailable', 'Could not persist the GPU quarantine marker', {
-        cause: error,
-      })
-    } finally {
-      await marker?.close()
     }
   }
 

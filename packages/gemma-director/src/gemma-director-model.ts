@@ -261,7 +261,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   ): Promise<GemmaDirectedChapter> {
     // The chapter deadline clock starts here, at entry: lease acquisition, runtime startup,
     // and context loading all consume the same budget as the window requests that follow.
-    const chapterStartedAt = performance.now()
+    const chapterStartedAt = Date.now()
     this.assertAvailable()
     if (
       chapter.bookId !== book.id ||
@@ -289,32 +289,21 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     this.shutdownController.abort(new DOMException('Gemma Director released', 'AbortError'))
     const active = [...this.activeOperations]
     this.releasePromise = (async () => {
-      // Begin lifecycle release before waiting for adapter operations. A compliant lifecycle sets
-      // its no-future-spawn barrier synchronously, reaps current work, and bounds startup settlement;
-      // waiting on `runtimeReady` or `active` first would make that bound unreachable during a hung
-      // pre-spawn filesystem operation.
-      //
-      // A failed lifecycle cleanup means runtime state is unknown. Never hand the lease to Qwen in
-      // that state: quarantine keeps this process's kernel lock and leaves a durable marker that
-      // blocks acquisition after process exit. Recovery therefore requires an explicit proof that
-      // no runtime, GPU residency, pending spawn, or occupied endpoint remains.
+      await Promise.allSettled(active)
+      // A runtime that refuses to exit must never strand the cross-process lease: both steps
+      // always run, and the runtime failure stays the reported cause.
+      let failure: unknown
       try {
         await this.lifecycle.release()
-      } catch (runtimeFailure: unknown) {
-        try {
-          await this.gpuLease?.quarantine('Gemma runtime cleanup did not complete')
-        } catch (quarantineFailure: unknown) {
-          throw new AggregateError(
-            [runtimeFailure, quarantineFailure],
-            'Gemma runtime cleanup failed and the GPU lease could not be quarantined',
-          )
-        }
-        throw runtimeFailure
+      } catch (error: unknown) {
+        failure = error
       }
-      // Shutdown abort plus runtime exit settles request operations before lease handoff. This wait
-      // is deliberately after lifecycle cleanup so it cannot hide the lifecycle's startup bound.
-      await Promise.allSettled(active)
-      await this.gpuLease?.release()
+      try {
+        await this.gpuLease?.release()
+      } catch (error: unknown) {
+        failure ??= error
+      }
+      if (failure !== undefined) throw failure
     })()
     return this.releasePromise
   }
@@ -343,8 +332,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     // runtime startup, and the context provider all consume the same budget as the window
     // requests — the slowest, least predictable phase is exactly what the deadline must cover.
     const chapterTimeoutMs = options.timeoutMs ?? DEFAULT_CHAPTER_TIMEOUT_MS
-    const chapterRemaining = (): number =>
-      Math.floor(chapterTimeoutMs - (performance.now() - chapterStartedAt))
+    const chapterRemaining = (): number => chapterTimeoutMs - (Date.now() - chapterStartedAt)
     await this.withChapterDeadline(
       chapterRemaining(),
       chapterTimeoutMs,
@@ -663,9 +651,8 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   }
 
   /**
-   * Bounds one setup phase by the chapter deadline. The loser of the race is not cancelled — the
-   * chapter merely stops waiting for it. A raced-away runtime start is settled and unloaded by
-   * `release()` before the GPU lease is freed (runtime exit precedes lease release, always).
+   * Bounds one setup phase by the chapter deadline. A raced-away loser is not cancelled —
+   * `release()` still awaits and unloads it — but the chapter stops waiting for it.
    */
   private async withChapterDeadline<T>(
     remainingMs: number,

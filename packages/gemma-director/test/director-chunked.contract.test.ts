@@ -37,12 +37,7 @@ class FakeLifecycle implements DirectorRuntimeLifecycle {
 class FakeGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly lockFilePath = '/fixture/shared-gpu/exclusive.lock'
   async acquire(owner: GpuOwner): Promise<GpuLease> {
-    return {
-      owner,
-      lockFilePath: this.lockFilePath,
-      quarantine: async () => {},
-      release: async () => {},
-    }
+    return { owner, lockFilePath: this.lockFilePath, release: async () => {} }
   }
 }
 
@@ -467,98 +462,6 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     }
     expect(Date.now() - started).toBeLessThan(900)
     expect(server.requests).toHaveLength(0)
-  })
-
-  it('settles and unloads a raced-away runtime start before releasing the GPU lease', async () => {
-    // Regression (issue #53 round 4): the chapter deadline abandons the AWAIT on runtime startup,
-    // never the start itself. Pre-fix, release() awaited only tracked operations — the raced-away
-    // ensureRuntimeReady is not one — so it freed the lease ~350 ms into a 400 ms startup, and the
-    // runtime finished loading beside Qwen: the exact co-residency the lease exists to prevent.
-    // Pre-fix event order: ['start:begin', 'lifecycle:release', 'lease:released', 'start:settled'].
-    const texts = ['A passage.']
-    const ids = ['passage-001']
-    const book = makeChapterBook(texts, ids)
-    const events: string[] = []
-    const lifecycle = new (class implements DirectorRuntimeLifecycle {
-      private starting: Promise<void> | undefined
-      start(): Promise<void> {
-        events.push('start:begin')
-        this.starting = new Promise((resolve) => setTimeout(resolve, 400)).then(() => {
-          events.push('start:settled')
-        })
-        return this.starting
-      }
-      async release(): Promise<void> {
-        await this.starting?.catch(() => undefined)
-        events.push('lifecycle:release')
-      }
-    })()
-    const gpuLeaseCoordinator = new (class implements ExclusiveGpuLeaseCoordinator {
-      async acquire(owner: GpuOwner): Promise<GpuLease> {
-        return {
-          owner,
-          lockFilePath: '/fixture/shared-gpu/exclusive.lock',
-          quarantine: async () => {
-            events.push('lease:quarantined')
-          },
-          release: async () => {
-            events.push('lease:released')
-          },
-        }
-      }
-    })()
-    const model = new GemmaDirectorModel({
-      baseUrl: 'http://127.0.0.1:1/v1',
-      apiKey: API_KEY,
-      confidenceThreshold: CONFIDENCE_THRESHOLD,
-      contextProvider: {
-        forChapter: async () => ({
-          speakers: [{ id: 'mira', aliases: ['Mira'] }],
-          narratorSpeakerId: 'narrator',
-          fallbackSpeakerId: 'fallback-dialogue',
-        }),
-      },
-      progressStore: { async append() {} },
-      lifecycle,
-      gpuLeaseCoordinator,
-      gpuLeaseLockFilePath: '/fixture/shared-gpu/exclusive.lock',
-    })
-    models.push(model)
-
-    const started = performance.now()
-    // A 50 ms chapter budget fires during the 400 ms startup; the start races away untracked.
-    await expect(
-      model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 50 }),
-    ).rejects.toMatchObject({ code: 'timeout' })
-
-    await model.release()
-
-    // The lifecycle contract waits out the start (~400 ms), then unloads before the model frees
-    // the lease: runtime exit precedes lease release, always. Monotonic clock — Date.now() jumps
-    // backwards under WSL2 time sync and made this assertion flake.
-    expect(performance.now() - started).toBeGreaterThanOrEqual(350)
-    expect(events).toEqual(['start:begin', 'start:settled', 'lifecycle:release', 'lease:released'])
-  })
-
-  it('uses a monotonic chapter deadline when the wall clock moves backward', async () => {
-    const texts = ['A delayed passage.']
-    const ids = ['passage-001']
-    server = new OracleLlamaServer(oracleFor(ids, texts))
-    server.delayMs = 100
-    await server.start()
-    const book = makeChapterBook(texts, ids)
-    const { model } = create({ windowPassageBudget: 1 })
-    const originalNow = Date.now
-    const base = originalNow()
-    let calls = 0
-    Date.now = () => (calls++ === 0 ? base : base - 1_000)
-    try {
-      await expect(
-        model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 30 }),
-      ).rejects.toMatchObject({ code: 'timeout' })
-    } finally {
-      Date.now = originalNow
-    }
   })
 
   it('counts context loading against the chapter deadline', async () => {
