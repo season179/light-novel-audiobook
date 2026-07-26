@@ -1,3 +1,4 @@
+import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import type {
   ChapterAudioListing,
   EpubUploadView,
@@ -21,6 +22,8 @@ export interface AudiobookClient {
   startGeneration(input: {
     readonly uploadId: string
     readonly recoverAbandoned?: boolean
+    /** Bounds the render to a slice of the book. Absent, the whole book is generated. */
+    readonly slice?: SliceLimits
   }): Promise<WebApiResult<StartedGeneration>>
   getJobState(input: { readonly jobId: string }): Promise<WebApiResult<JobStateView | null>>
   listChapterAudio(input: { readonly jobId: string }): Promise<WebApiResult<ChapterAudioListing>>
@@ -50,6 +53,7 @@ export type {
   EpubUploadView,
   FallbackReviewView,
   JobStateView,
+  SliceLimits,
   StartedGeneration,
   WebApiResult,
 }

@@ -104,16 +104,45 @@ describe('SlicingEpubExtractor chapter selection', () => {
     expect(extractor.report?.sliced).toBe(true)
   })
 
-  it('keeps the original chapter ID while renumbering position for the domain invariant', async () => {
+  it('keeps the original chapter position in the ID while renumbering position for the invariant', async () => {
     const bookId = StableIds.book(SOURCE_SHA256)
     const extractor = new SlicingEpubExtractor(new StubExtractor(), { firstChapter: 3 })
     const sliced = await extractor.extract(REQUEST)
 
     // `Book` requires position === index + 1, so the window is renumbered...
     expect(sliced.chapters[0]?.position).toBe(1)
-    // ...but the ID still names the real chapter, which is what identity and every passage ID use.
-    expect(sliced.chapters[0]?.id).toBe(StableIds.chapter(bookId, 3))
-    expect(sliced.chapters[0]?.sourcePassages[0]?.chapterId).toBe(StableIds.chapter(bookId, 3))
+    // ...but the ID suffix still names the real chapter, which is what labels and filenames use.
+    expect(sliced.chapters[0]?.id).toMatch(/-ch0003$/)
+    expect(sliced.chapters[0]?.sourcePassages[0]?.chapterId).toBe(sliced.chapters[0]?.id)
+    // The window gets its own book ID, so the script, segment and approval rows it writes can
+    // never collide with another window of the same upload.
+    expect(sliced.id).not.toBe(bookId)
+    expect(sliced.chapters[0]?.id).not.toBe(StableIds.chapter(bookId, 3))
+    expect(sliced.chapters[0]?.bookId).toBe(sliced.id)
+  })
+
+  it('gives two windows of one book disjoint book, chapter and passage IDs', async () => {
+    const inner = new StubExtractor()
+    const first = await new SlicingEpubExtractor(inner, { maxChapters: 1 }).extract(REQUEST)
+    const third = await new SlicingEpubExtractor(inner, {
+      firstChapter: 3,
+      maxChapters: 1,
+    }).extract(REQUEST)
+    // Overlapping windows isolate too: the shared chapter exists once per window.
+    const prefix = await new SlicingEpubExtractor(inner, { maxChapters: 2 }).extract(REQUEST)
+    const offset = await new SlicingEpubExtractor(inner, { firstChapter: 2 }).extract(REQUEST)
+
+    expect(first.id).not.toBe(third.id)
+    expect(first.chapters[0]?.id).not.toBe(third.chapters[0]?.id)
+    expect(prefix.id).not.toBe(offset.id)
+    const prefixChapterTwo = prefix.chapters[1]
+    const offsetChapterTwo = offset.chapters[0]
+    expect(prefixChapterTwo?.id).toMatch(/-ch0002$/)
+    expect(offsetChapterTwo?.id).toMatch(/-ch0002$/)
+    expect(prefixChapterTwo?.id).not.toBe(offsetChapterTwo?.id)
+    expect(prefixChapterTwo?.sourcePassages[0]?.id).not.toBe(
+      offsetChapterTwo?.sourcePassages[0]?.id,
+    )
   })
 
   it('still takes a prefix when no selector is given', async () => {

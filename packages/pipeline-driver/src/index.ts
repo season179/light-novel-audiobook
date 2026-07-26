@@ -10,7 +10,12 @@ export {
 } from '@light-novel-audiobook/gemma-director'
 export { type RunPipelineOptions, type RunPipelineReport, runPipeline } from './driver.js'
 export { NarrationEchoDirectorServer } from './fake-director-server.js'
-export { type SliceLimits, type SliceReport, SlicingEpubExtractor } from './slice.js'
+export {
+  canonicalSliceDescriptor,
+  type SliceLimits,
+  type SliceReport,
+  SlicingEpubExtractor,
+} from './slice.js'
 export {
   createFakeTransports,
   createRealTransports,

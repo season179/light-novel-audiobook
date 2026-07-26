@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import type { SliceLimits } from '@light-novel-audiobook/pipeline-driver'
 import type {
   ChapterAudioListing,
   EpubUploadView,
@@ -34,15 +35,28 @@ export const uploadEpubFn = createServerFn({ method: 'POST' })
   )
 
 export const startGenerationFn = createServerFn({ method: 'POST' })
-  .validator((data: { uploadId: string; recoverAbandoned?: boolean }) => data)
+  .validator((data: { uploadId: string; recoverAbandoned?: boolean; slice?: SliceLimits }) => data)
   .handler(
     async ({ data }): Promise<WebApiResult<StartedGeneration>> =>
-      toWebApiResult('startGeneration', async () =>
-        (await api()).startGeneration({
+      toWebApiResult('startGeneration', async () => {
+        // Only the three known bounds pass; anything else the payload carried is not a bound.
+        // Validation of the values happens where the job ID is derived, so a malformed bound is
+        // rejected as `invalid_request`, never silently dropped into a whole-book render.
+        const slice: SliceLimits = {
+          ...(data.slice?.firstChapter === undefined
+            ? {}
+            : { firstChapter: data.slice.firstChapter }),
+          ...(data.slice?.maxChapters === undefined ? {} : { maxChapters: data.slice.maxChapters }),
+          ...(data.slice?.maxPassagesPerChapter === undefined
+            ? {}
+            : { maxPassagesPerChapter: data.slice.maxPassagesPerChapter }),
+        }
+        return (await api()).startGeneration({
           uploadId: requireIdInput(data.uploadId, 'Upload ID'),
           recoverAbandoned: data.recoverAbandoned === true,
-        }),
-      ),
+          slice,
+        })
+      }),
   )
 
 /** `value: null` means no such job. That is part of the contract, not a failure. */

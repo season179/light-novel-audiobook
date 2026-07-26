@@ -12,8 +12,15 @@ import { toPublicFailureMessage } from './errors.js'
  * terminal — `GemmaDirectorModel.release()` memoises its shutdown and every later `directChapter()`
  * throws `Gemma Director has been released`. A process-wide use case would therefore succeed for the
  * first book and fail every later one before direction even started.
+ *
+ * It receives the command so per-run inputs that identity depends on can be derived from the one
+ * carrier every caller already agrees on: the job ID. The composition root reads the slice bounds
+ * out of `command.jobId` and wraps the extractor to match — a run whose extractor ignores the
+ * bounds its job ID states is impossible to express.
  */
-export type GenerateAudiobookFactory = () => Promise<GenerateAudiobook>
+export type GenerateAudiobookFactory = (
+  command: GenerateAudiobookCommand,
+) => Promise<GenerateAudiobook>
 
 export type GenerationRunStatus = 'idle' | 'queued' | 'running'
 
@@ -63,7 +70,7 @@ export class GenerationRunner {
     const run = this.tail.then(async () => {
       this.statuses.set(command.jobId, 'running')
       try {
-        const generate = await this.createGenerate()
+        const generate = await this.createGenerate(command)
         await generate.execute(command)
       } catch (error: unknown) {
         // Sanitized: this message is read back by the browser when the run failed before the use
