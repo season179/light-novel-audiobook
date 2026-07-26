@@ -43,6 +43,14 @@ export interface RunPipelineOptions {
   readonly ffmpegDirectory?: string
   /** Direction progress, which #21 needs to surface and a run needs in order to be diagnosable. */
   readonly onDirectorProgress?: (event: DirectorProgressEvent) => void
+  /**
+   * Fake-only roster override for review-gate acceptance. It lets the fake director name a speaker
+   * deliberately absent from the render cast, producing a real `missing_speaker_voice` decision.
+   * Real transports reject it; production direction always receives exactly the approved cast.
+   */
+  readonly fakeDirectorSpeakers?:
+    | readonly { readonly id: string; readonly aliases: readonly string[] }[]
+    | undefined
 }
 
 export interface RunPipelineReport {
@@ -99,6 +107,9 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   // report is how that surfaces.
   const startedAt = performance.now()
   const { transports } = options
+  if (options.fakeDirectorSpeakers !== undefined && transports.mode !== 'fake') {
+    throw new Error('A fake director speaker override cannot be used with real transports')
+  }
 
   const epubBytes = new Uint8Array(await readFile(options.epubPath))
   const epubSha256 = createHash('sha256').update(epubBytes).digest('hex')
@@ -159,11 +170,11 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
             apiKey: runtime.apiKey,
             confidenceThreshold: options.confidenceThreshold ?? 0.5,
             contextProvider: {
-              // The story bible does not exist yet, so the cast itself is the context: the director may
-              // only attribute dialogue to a speaker this run can actually render. The roster excludes
-              // narrator/fallback role IDs because Gemma rejects them as character speakers.
+              // Production uses the cast itself as context, so every named speaker is renderable.
+              // Fake review-gate acceptance may deliberately inject an uncast context speaker to
+              // exercise `missing_speaker_voice`. Narrator/fallback role IDs remain excluded.
               forChapter: async () => ({
-                speakers: castSpeakers,
+                speakers: options.fakeDirectorSpeakers ?? castSpeakers,
                 narratorSpeakerId: narratorProfileId,
                 fallbackSpeakerId: fallbackProfileId,
               }),
