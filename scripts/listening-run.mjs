@@ -29,7 +29,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { appendFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import {
@@ -117,7 +117,8 @@ const parseArgs = (argv) => {
  * Runs one pnpm command as its own process group with output tee'd to a private log file, and
  * always reaps the group. The driver's own output is sanitized by design (audited: counts,
  * hashes, paths and rule messages only — see the report); stderr is streamed through, stdout is
- * buffered for the caller to parse.
+ * buffered for the caller to parse. A content-free command receipt is appended after every actual
+ * invocation so review-path acceptance can distinguish a branch that ran from one silently skipped.
  */
 const runPnpmScript = async ({ args, env, logFile, streamStderr = true }) => {
   const child = spawn('pnpm', args, {
@@ -144,6 +145,17 @@ const runPnpmScript = async ({ args, env, logFile, streamStderr = true }) => {
   }).finally(() => {
     stream.end()
   })
+  const separator = args.indexOf('--')
+  const segmentFlag = args.indexOf('--segment-id')
+  await appendFile(
+    path.join(path.dirname(logFile), 'listening-run-commands.jsonl'),
+    `${JSON.stringify({
+      command: args[0],
+      action: args[0] === 'pipeline:review' ? args[separator + 1] : 'run',
+      segmentId: segmentFlag === -1 ? null : args[segmentFlag + 1],
+      exitCode,
+    })}\n`,
+  )
   return { exitCode, stdout, stderr, kill: () => killGroup(child) }
 }
 

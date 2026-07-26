@@ -42,7 +42,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import { runPipeline } from '../src/driver.js'
-import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
+import { type FakeDirectorMode, NarrationEchoDirectorServer } from '../src/fake-director-server.js'
 import type { SliceLimits } from '../src/slice.js'
 import {
   createFakeTransports,
@@ -76,6 +76,20 @@ function required(name: string): string {
 const epubPath = path.resolve(required('epub'))
 const mode = flag('transports') ?? 'fake'
 if (mode !== 'fake' && mode !== 'real') throw new Error('--transports must be fake or real')
+const fakeDirectorMode = process.env.LNA_FAKE_DIRECTOR_MODE ?? 'narration'
+const fakeDirectorModes: readonly FakeDirectorMode[] = [
+  'narration',
+  'dialogue',
+  'thought',
+  'unresolved-homogeneous',
+  'fallback-heterogeneous',
+]
+if (!fakeDirectorModes.includes(fakeDirectorMode as FakeDirectorMode)) {
+  throw new Error('LNA_FAKE_DIRECTOR_MODE is not a supported fake mode')
+}
+if (mode === 'real' && process.env.LNA_FAKE_DIRECTOR_MODE !== undefined) {
+  throw new Error('LNA_FAKE_DIRECTOR_MODE cannot be used with real transports')
+}
 
 const workspaceRoot = flag('workspace')
   ? path.resolve(flag('workspace') as string)
@@ -90,7 +104,10 @@ const limits: SliceLimits = {
     : { firstChapter: positiveInteger('from-chapter', 1) }),
 }
 
-const directorServer = mode === 'fake' ? new NarrationEchoDirectorServer() : undefined
+const directorServer =
+  mode === 'fake'
+    ? new NarrationEchoDirectorServer(fakeDirectorMode as FakeDirectorMode)
+    : undefined
 await directorServer?.start()
 
 const transports =
@@ -125,6 +142,9 @@ try {
     repositoryRoot: REPOSITORY_ROOT,
     transports,
     limits,
+    ...(fakeDirectorMode === 'fallback-heterogeneous'
+      ? { fakeDirectorSpeakers: [{ id: 'fake-context-speaker', aliases: [] }] }
+      : {}),
     onDirectorProgress: (event) => {
       process.stderr.write(
         `[direction] ${event.state} ${event.completedPassages}/${event.totalPassages}\n`,

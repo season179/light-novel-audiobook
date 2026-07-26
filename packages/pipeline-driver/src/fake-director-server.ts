@@ -9,11 +9,10 @@ import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
  * tests and useless here: to direct an arbitrary real chapter the response has to echo that chapter's
  * actual passages, or `ExactSourceCoverage` correctly rejects it as rewritten text.
  *
- * So this reads the passages out of the request and returns one narration fragment per passage,
- * copying the text verbatim as one whole-passage fragment. Every segment is narration, whose speaker
- * the adapter derives deterministically rather than asking this transport to choose a role. That is
- * what makes a first real run survivable: no unresolved speaker means no fallback approval is
- * required (issue #45) and no character voice is needed beyond the pinned narrator.
+ * So this reads the passages out of the request and returns one whole-passage fragment each, always
+ * copying source text verbatim. The default is narration, preserving the original no-review fake
+ * path. Explicit acceptance modes can instead emit unresolved dialogue or alternate unresolved and
+ * named dialogue, exercising the real fallback gate without changing fidelity behavior.
  *
  * It is a stand-in for the transport, not for the director: the real `GemmaDirectorModel` still builds
  * the request, streams the response, validates the schema, checks confidence, and maps to domain
@@ -23,6 +22,13 @@ export interface FakeDirectorRequest {
   readonly chapterId: string
   readonly passageCount: number
 }
+
+export type FakeDirectorMode =
+  | 'narration'
+  | 'dialogue'
+  | 'thought'
+  | 'unresolved-homogeneous'
+  | 'fallback-heterogeneous'
 
 /** The wire payload is snake_case, and differs from the port's camelCase `DirectorSourcePassage`. */
 interface PromptPassage {
@@ -68,7 +74,7 @@ export class NarrationEchoDirectorServer {
   #port = 0
   readonly requests: FakeDirectorRequest[] = []
 
-  constructor(private readonly characterKind?: 'dialogue' | 'thought') {}
+  constructor(private readonly mode: FakeDirectorMode = 'narration') {}
 
   get baseUrl(): string {
     if (this.#port === 0) throw new Error('Fake director server is not running')
@@ -116,26 +122,47 @@ export class NarrationEchoDirectorServer {
           passageCount: passages.length,
         })
         const selectedSpeaker = input.speakers[0]
-        if (this.characterKind !== undefined && selectedSpeaker === undefined) {
+        if (
+          (this.mode === 'dialogue' ||
+            this.mode === 'thought' ||
+            this.mode === 'fallback-heterogeneous') &&
+          selectedSpeaker === undefined
+        ) {
           response.writeHead(400, { 'content-type': 'application/json' })
           response.end(JSON.stringify({ error: { message: 'character mode requires a roster' } }))
           return
         }
-        const segments = passages.map((passage) => ({
-          source_passage_id: passage.source_passage_id,
-          source_text: passage.source_text,
-          kind: this.characterKind ?? 'narration',
-          ...(selectedSpeaker === undefined || this.characterKind === undefined
-            ? {}
-            : { speaker_id: selectedSpeaker.speaker_id, speaker_reason: null }),
-          confidence: 1,
-          delivery: {
-            emotion: 'neutral',
-            pace: 'normal',
-            volume: 'normal',
-            pause_after_ms: 0,
-          },
-        }))
+        const segments = passages.map((passage, index) => {
+          const unresolved =
+            this.mode === 'unresolved-homogeneous' ||
+            (this.mode === 'fallback-heterogeneous' && index % 2 === 0)
+          const resolved =
+            this.mode === 'dialogue' ||
+            this.mode === 'thought' ||
+            (this.mode === 'fallback-heterogeneous' && !unresolved)
+          return {
+            source_passage_id: passage.source_passage_id,
+            source_text: passage.source_text,
+            kind:
+              this.mode === 'thought'
+                ? 'thought'
+                : unresolved || resolved
+                  ? 'dialogue'
+                  : 'narration',
+            ...(unresolved
+              ? { speaker_id: null, speaker_reason: 'No roster match in fake review-gate mode.' }
+              : resolved
+                ? { speaker_id: selectedSpeaker?.speaker_id, speaker_reason: null }
+                : {}),
+            confidence: 1,
+            delivery: {
+              emotion: 'neutral',
+              pace: 'normal',
+              volume: 'normal',
+              pause_after_ms: 0,
+            },
+          }
+        })
         this.#sendStream(response, JSON.stringify({ segments }))
       })
     })
