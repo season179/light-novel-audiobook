@@ -2,7 +2,7 @@ import { DirectorError } from './errors.js'
 import type { DirectedAnnotation, DirectionRequest, DirectorWarning } from './port.js'
 import {
   type DirectedWireSegment,
-  type DirectionWireOutput,
+  type NormalizedDirectionWireOutput,
   parseDirectionOutputForValidation,
 } from './schema.js'
 
@@ -165,9 +165,12 @@ function textDifferenceFinding(
 /**
  * The model supplies exact fragment text and semantic annotations; this function owns coordinates.
  * A per-passage sequential cursor derives UTF-16 ranges only after the concatenated model text equals
- * the immutable source exactly. Model-reported @2 offsets have already been stripped by the parser.
+ * the immutable source exactly. The clean @4 wire schema cannot carry model-reported offsets.
  */
-function analyzeFidelity(output: DirectionWireOutput, request: DirectionRequest): FidelityAnalysis {
+function analyzeFidelity(
+  output: NormalizedDirectionWireOutput,
+  request: DirectionRequest,
+): FidelityAnalysis {
   const findings: FidelityFinding[] = []
   const derived: DerivedWireSegment[] = []
   const passageIndex = new Map(request.passages.map((passage, index) => [passage.id, index]))
@@ -294,9 +297,9 @@ export function validateDirectionOutput(
   if (!Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
     throw new Error('Director confidence threshold must be between zero and one')
   }
-  let parsed: DirectionWireOutput
+  let parsed: NormalizedDirectionWireOutput
   try {
-    parsed = parseDirectionOutputForValidation(input)
+    parsed = parseDirectionOutputForValidation(input, request)
   } catch (cause: unknown) {
     throw new DirectorError(
       'schema_validation',
@@ -326,8 +329,6 @@ export function validateDirectionOutput(
         volume: item.delivery.volume,
         pauseAfterMs: item.delivery.pause_after_ms,
       },
-      unresolvedSpeaker: item.unresolved_speaker,
-      speakerReason: item.speaker_reason,
     }),
   )
   const warnings = analysis.segments.flatMap((segment): DirectorWarning[] => {

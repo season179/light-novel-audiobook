@@ -144,7 +144,12 @@ export class GenerateAudiobook {
         ? await this.loadDirected(existing)
         : (await this.direction.execute(command)).book
 
-    const reconciliation = await this.review.reconcile({ book: directed })
+    const reviewJob = await this.jobs.findJob(command.jobId)
+    if (reviewJob === undefined) throw new DomainError('Directed audiobook job was not persisted')
+    const reconciliation = await this.review.reconcile({
+      book: directed,
+      warnings: reviewJob.warnings,
+    })
     if (reconciliation.pending.length > 0) {
       throw new PendingFallbackReviewError(command.jobId, reconciliation.pending)
     }

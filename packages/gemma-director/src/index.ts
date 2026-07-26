@@ -91,9 +91,12 @@ export {
 export {
   type DirectedWireSegment,
   type DirectionWireOutput,
-  directedWireSegmentSchema,
   directionRequestSchema,
-  directionWireOutputSchema,
+  directionWireOutputIdentitySchema,
+  directionWireOutputSchemaFor,
+  type ModelDirectedWireSegment,
+  type NormalizedDirectionWireOutput,
+  parseDirectionOutputForValidation,
   parseDirectionRequest,
 } from './schema.js'
 export {

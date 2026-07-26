@@ -27,14 +27,18 @@ it does not add another benchmark or provider framework.
   allowing narration/dialogue/thought changes inside a paragraph. It copies fragment text but does
   not calculate source coordinates: deterministic validation derives inclusive `sourceStart` and
   exclusive `sourceEnd` UTF-16 offsets with a per-passage sequential cursor.
-- Zod constrains the wire response. Separate deterministic validation requires each passage's ordered
-  fragment texts to concatenate to the immutable source exactly, rejects unknown passages/speakers,
-  text insertion/duplication/omission/substitution, passage reorder, and surrogate splits, and maps
+- Zod constructs a request-specific wire response. Narration/sound cues carry no model-chosen
+  speaker; dialogue/thought/message speaker IDs are limited to that request's character roster or
+  `null`, with `null` requiring a reason. The adapter derives narrator/fallback roles and unresolved
+  status. Separate deterministic validation requires each passage's ordered fragment texts to
+  concatenate to the immutable source exactly, rejects unknown passages, text
+  insertion/duplication/omission/substitution, passage reorder, and surrogate splits, and maps
   downstream text from immutable source slices. Issue #29's `ExactSourceCoverage` validates the mapped
-  fragments again at the application boundary. Legacy @2 offsets are accepted only for offline replay,
-  stripped before validation, and never used as source authority.
+  fragments again at the application boundary. The @4 schema is a clean break with no legacy offset,
+  role-ID, or unresolved-boolean compatibility shape.
 - Explicit unresolved speakers and known-speaker assignments below the configured threshold map to
-  domain `speakerId: null`, forcing issue #29 fallback voice semantics. The threshold applies to
+  domain `speakerId: null`, forcing issue #29 fallback voice semantics. The director's unresolved
+  explanation is preserved into the human approval queue. The threshold applies to
   every kind: narrator-owned narration and sound cues below it raise a review-required
   `low_confidence_kind` warning that keeps the narrator voice instead of rerouting to fallback.
   The concrete result also exposes review-required warnings with source ranges, candidate speaker,

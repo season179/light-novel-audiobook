@@ -67,7 +67,7 @@ export function FallbackReviewPanel({
                 {item.speakerId === null
                   ? 'no speaker could be identified'
                   : `${item.speakerId} has no cast voice`}
-                . “{item.sourceTextExcerpt}”{' '}
+                . {item.speakerReason} “{item.sourceTextExcerpt}”{' '}
                 <em>
                   {item.decision === 'approved'
                     ? `approved by ${item.decidedBy ?? 'a reviewer'}`

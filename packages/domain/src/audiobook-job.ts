@@ -56,6 +56,8 @@ export interface FallbackVoiceWarning {
   readonly speakerId: string | null
   readonly voiceProfileId: string
   readonly reason: FallbackReason
+  /** Model explanation for unresolved attribution, or a deterministic cast explanation. */
+  readonly speakerReason?: string | undefined
 }
 
 export interface AudiobookJobProgress {
@@ -608,14 +610,20 @@ export class AudiobookJob {
       stableSimpleIdPattern.test(warning.voiceProfileId)
     const stableSpeakerId =
       typeof warning.speakerId === 'string' && stableSimpleIdPattern.test(warning.speakerId)
-    const validSpeakerReason =
+    const validFallbackReason =
       (warning.reason === 'unresolved_speaker' && warning.speakerId === null) ||
       (warning.reason === 'missing_speaker_voice' && stableSpeakerId)
+    const validSpeakerReason =
+      warning.speakerReason === undefined ||
+      (typeof warning.speakerReason === 'string' &&
+        warning.speakerReason.trim().length > 0 &&
+        warning.speakerReason.length <= 240)
     if (
       !stableSegmentPositions ||
       bookId === null ||
       !warning.segmentId.startsWith(`${bookId}-ch`) ||
       !stableVoiceId ||
+      !validFallbackReason ||
       !validSpeakerReason
     ) {
       throw new DomainError('Fallback warning is invalid')

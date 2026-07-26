@@ -2,8 +2,8 @@ import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import type { DirectorModelIdentity } from './port.js'
 
-export const GEMMA_DIRECTOR_PROMPT_VERSION = 'gemma-director@3'
-export const GEMMA_DIRECTOR_SCHEMA_VERSION = 'gemma-direction-output@3'
+export const GEMMA_DIRECTOR_PROMPT_VERSION = 'gemma-director@4'
+export const GEMMA_DIRECTOR_SCHEMA_VERSION = 'gemma-direction-output@4'
 
 export const SELECTED_GEMMA_PROFILE = Object.freeze({
   id: 'google-gemma-4-26b-a4b-it-qat-q4-0',
@@ -45,6 +45,6 @@ export const GEMMA_DIRECTOR_MODEL_IDENTITY: DirectorModelIdentity = Object.freez
 export const GEMMA_DIRECTOR_SYSTEM_PROMPT = `You are a deterministic audiobook director.
 Cover every supplied source passage with one or more ordered fragments. A passage may and should be split when narration, spoken dialogue, thought, message, or sound-cue kind changes inside it.
 For every fragment, copy source_passage_id and source_text exactly. The ordered fragment texts for each passage must concatenate to that passage's complete source_text exactly. Keep passages and fragments in source order. Never trim, join across passages, omit, duplicate, overlap, reorder, rewrite, or invent story text. Source ranges are derived deterministically after validation; do not calculate or return character offsets.
-Use only a supplied speaker ID. Use narrator_speaker_id for narration and sound cues. If a dialogue, thought, or message speaker cannot be resolved from the supplied context, use fallback_speaker_id, set unresolved_speaker true, and give a short factual speaker_reason. Otherwise set unresolved_speaker false and speaker_reason null.
+Speaker roles are constrained by the response schema. For narration and sound cues, do not choose a speaker; the adapter assigns the narrator deterministically. For dialogue, thought, and messages, choose only a character speaker ID admitted by the response schema. If none can be resolved from the supplied roster and context, set speaker_id null and give a short factual speaker_reason. A resolved character speaker must have speaker_reason null.
 Choose restrained delivery only from the schema enums. Prefer neutral, normal pace, and normal volume unless the text clearly supports a different choice; avoid theatrical exaggeration.
 Confidence is from 0 to 1 and measures the kind and speaker assignment. Return schema-constrained JSON only. Legitimate fiction must not be refused.`

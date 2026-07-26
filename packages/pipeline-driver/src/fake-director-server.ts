@@ -10,10 +10,9 @@ import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
  * actual passages, or `ExactSourceCoverage` correctly rejects it as rewritten text.
  *
  * So this reads the passages out of the request and returns one narration fragment per passage,
- * copying the text verbatim with offsets `0 .. text.length`. Those are UTF-16 code-unit offsets and
- * the director validates them as a contiguous partition of the passage, so a whole-passage fragment is
- * the only shape that needs no arithmetic. Every segment is narration attributed to the narrator,
- * which is what makes a first real run survivable: no unresolved speaker means no fallback approval is
+ * copying the text verbatim as one whole-passage fragment. Every segment is narration, whose speaker
+ * the adapter derives deterministically rather than asking this transport to choose a role. That is
+ * what makes a first real run survivable: no unresolved speaker means no fallback approval is
  * required (issue #45) and no character voice is needed beyond the pinned narrator.
  *
  * It is a stand-in for the transport, not for the director: the real `GemmaDirectorModel` still builds
@@ -23,8 +22,6 @@ import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 export interface FakeDirectorRequest {
   readonly chapterId: string
   readonly passageCount: number
-  /** Recorded so a run can show which speaker the narration was attributed to. */
-  readonly narratorSpeakerId: string
 }
 
 /** The wire payload is snake_case, and differs from the port's camelCase `DirectorSourcePassage`. */
@@ -35,7 +32,6 @@ interface PromptPassage {
 
 interface PromptInput {
   readonly chapterId: string
-  readonly narratorSpeakerId: string
   readonly passages: readonly PromptPassage[]
 }
 
@@ -53,16 +49,11 @@ function findPromptInput(messages: readonly { content?: unknown }[]): PromptInpu
     const candidate = parsed as {
       passages?: unknown
       chapter?: { chapter_id?: unknown }
-      narrator_speaker_id?: unknown
     }
     if (!Array.isArray(candidate.passages)) continue
     return {
       chapterId:
         typeof candidate.chapter?.chapter_id === 'string' ? candidate.chapter.chapter_id : '',
-      narratorSpeakerId:
-        typeof candidate.narrator_speaker_id === 'string'
-          ? candidate.narrator_speaker_id
-          : 'narrator',
       passages: candidate.passages as readonly PromptPassage[],
     }
   }
@@ -115,17 +106,14 @@ export class NarrationEchoDirectorServer {
           return
         }
         const passages = input.passages
-        const narratorSpeakerId = input.narratorSpeakerId
         this.requests.push({
           chapterId: input.chapterId,
           passageCount: passages.length,
-          narratorSpeakerId,
         })
         const segments = passages.map((passage) => ({
           source_passage_id: passage.source_passage_id,
           source_text: passage.source_text,
           kind: 'narration',
-          speaker_id: narratorSpeakerId,
           confidence: 1,
           delivery: {
             emotion: 'neutral',
@@ -133,8 +121,6 @@ export class NarrationEchoDirectorServer {
             volume: 'normal',
             pause_after_ms: 0,
           },
-          unresolved_speaker: false,
-          speaker_reason: null,
         }))
         this.#sendStream(response, JSON.stringify({ segments }))
       })

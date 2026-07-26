@@ -116,8 +116,6 @@ class RequestResponsiveLlamaServer {
         readonly source_passage_id: string
         readonly source_text: string
       }[]
-      readonly narrator_speaker_id: string
-      readonly fallback_speaker_id: string
     }
     // The first passage of every chapter is an unattributed dialogue line. That is the director's own
     // declared channel for "this speaker cannot be resolved from the supplied context", and it maps to
@@ -131,7 +129,6 @@ class RequestResponsiveLlamaServer {
           source_passage_id: passage.source_passage_id,
           source_text: passage.source_text,
           kind: unresolved ? 'dialogue' : 'narration',
-          speaker_id: unresolved ? user.fallback_speaker_id : user.narrator_speaker_id,
           confidence: 0.95,
           delivery: {
             emotion: 'neutral',
@@ -139,8 +136,9 @@ class RequestResponsiveLlamaServer {
             volume: 'normal',
             pause_after_ms: 250,
           },
-          unresolved_speaker: unresolved,
-          speaker_reason: unresolved ? 'The fixture line names no speaker.' : null,
+          ...(unresolved
+            ? { speaker_id: null, speaker_reason: 'The fixture line names no speaker.' }
+            : {}),
         }
       }),
     })
@@ -328,6 +326,9 @@ describe('whole pipeline with the real extractor cover contract', () => {
         const pending = (stopped as PendingFallbackReviewError).pending
         expect(pending.length).toBeGreaterThan(0)
         expect(pending.every((item) => item.decision === 'pending')).toBe(true)
+        expect(
+          pending.every((item) => item.speakerReason === 'The fixture line names no speaker.'),
+        ).toBe(true)
 
         // Phase 2: nothing was spoken. The real Qwen engine writes one WAV per rendered segment into
         // its output directory, so an empty directory is proof that no render happened before the
@@ -348,6 +349,11 @@ describe('whole pipeline with the real extractor cover contract', () => {
         expect(reconciliation.created.every((r) => r.decidedBy === 'integration-evidence')).toBe(
           true,
         )
+        expect(
+          (await review.list(command.jobId)).every(
+            (item) => item.speakerReason === 'The fixture line names no speaker.',
+          ),
+        ).toBe(true)
         expect(
           reconciliation.created.every((r) => r.grantId === reconciliation.grant?.grantId),
         ).toBe(true)

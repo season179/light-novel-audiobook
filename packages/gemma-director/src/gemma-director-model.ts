@@ -46,7 +46,7 @@ import {
 } from './profile.js'
 import {
   type DirectionWireOutput,
-  directionWireOutputSchema,
+  directionWireOutputSchemaFor,
   parseDirectionRequest,
 } from './schema.js'
 import { type ValidatedDirection, validateDirectionOutput } from './validation.js'
@@ -619,22 +619,27 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     }
 
     // Only fallback-bearing warnings drop the speaker; review-only warnings keep the voice.
-    const warningRanges = new Set(
+    const fallbackWarningByRange = new Map<string, DirectorWarning>(
       warnings
         .filter((warning) => warning.usesFallback)
         .map(
           (warning) =>
-            `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+            [
+              `${warning.sourcePassageId}\u0000${warning.sourceStart}\u0000${warning.sourceEnd}`,
+              warning,
+            ] as const,
         ),
     )
     const segments = annotations.map((annotation): DomainDirectedSegment => {
       const rangeKey = `${annotation.sourcePassageId}\u0000${annotation.sourceStart}\u0000${annotation.sourceEnd}`
       const useNarrator = annotation.kind === 'narration' || annotation.kind === 'sound_cue'
+      const fallbackWarning = fallbackWarningByRange.get(rangeKey)
       return Object.freeze({
         sourcePassageId: annotation.sourcePassageId,
         sourceText: annotation.sourceText,
         kind: annotation.kind,
-        speakerId: useNarrator || warningRanges.has(rangeKey) ? null : annotation.speakerId,
+        speakerId: useNarrator || fallbackWarning !== undefined ? null : annotation.speakerId,
+        speakerReason: fallbackWarning?.message ?? null,
         confidence: annotation.confidence,
         delivery: annotation.delivery,
       })
@@ -770,11 +775,12 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         defaultHeaders: { connection: 'close' },
         fetch: this.fetchImplementation,
       })
+      const outputSchema = directionWireOutputSchemaFor(request)
       const stream = chat({
         adapter,
         messages: requestPayload.messages,
         systemPrompts: requestPayload.systemPrompts,
-        outputSchema: directionWireOutputSchema,
+        outputSchema,
         stream: true,
         abortController: control.controller,
         debug: false,
@@ -830,7 +836,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
           throw event
         }
         if (event.type === 'CUSTOM' && event.name === 'structured-output.complete') {
-          output = directionWireOutputSchema.parse(event.value.object)
+          output = outputSchema.parse(event.value.object) as DirectionWireOutput
         }
       }
       if (control.controller.signal.aborted) {
@@ -875,8 +881,6 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         title: request.chapterTitle,
       },
       story_context: request.storyContext ?? '',
-      narrator_speaker_id: request.narratorSpeakerId,
-      fallback_speaker_id: request.fallbackSpeakerId,
       speakers: request.speakers.map((speaker) => ({
         speaker_id: speaker.id,
         aliases: speaker.aliases,

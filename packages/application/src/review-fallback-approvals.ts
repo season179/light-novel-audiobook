@@ -1,4 +1,9 @@
-import { type AudiobookJob, type Book, DomainError } from '@light-novel-audiobook/domain'
+import {
+  type AudiobookJob,
+  type Book,
+  DomainError,
+  type FallbackVoiceWarning,
+} from '@light-novel-audiobook/domain'
 import { type ApprovalCatalogAccess, approvalCatalogAccessFor } from './completed-output.js'
 import {
   approvalStillDescribes,
@@ -37,6 +42,8 @@ export interface ReviewFallbackApprovalsDependencies {
 
 export interface ReconcileFallbackApprovalsRequest {
   readonly book: Book
+  /** Persisted job warnings carry the director's explanation into the human review queue. */
+  readonly warnings?: readonly FallbackVoiceWarning[] | undefined
 }
 
 export interface FallbackApprovalDecisionRequest {
@@ -117,6 +124,9 @@ export class ReviewFallbackApprovals {
     const unchanged: PersistedFallbackApproval[] = []
     const invalidated: PersistedFallbackApproval[] = []
     const pending: PendingFallbackApproval[] = []
+    const speakerReasons = new Map(
+      (request.warnings ?? []).map((warning) => [warning.segmentId, warning.speakerReason]),
+    )
     const subjectIds = new Set(subjects.map((subject) => subject.segment.id))
 
     // Decisions whose segment no longer falls back at all — a re-direction resolved the speaker, or
@@ -149,15 +159,19 @@ export class ReviewFallbackApprovals {
       // silently re-create the approval on the next run and revocation would mean nothing.
       if (excluded.has(subject.segment.id)) {
         pending.push(
-          pendingFrom(subject, {
-            decision: 'excluded',
-            decidedBy: excludedBy.get(subject.segment.id) ?? null,
-          }),
+          pendingFrom(
+            subject,
+            {
+              decision: 'excluded',
+              decidedBy: excludedBy.get(subject.segment.id) ?? null,
+            },
+            speakerReasons.get(subject.segment.id),
+          ),
         )
         continue
       }
       if (catalog.grant === undefined) {
-        pending.push(pendingFrom(subject))
+        pending.push(pendingFrom(subject, {}, speakerReasons.get(subject.segment.id)))
         continue
       }
       const record = createFallbackApprovalRecord({
@@ -184,7 +198,10 @@ export class ReviewFallbackApprovals {
    * excerpt is story text: see `PendingFallbackApproval.sourceTextExcerpt`.
    */
   async list(jobId: string): Promise<readonly PendingFallbackApproval[]> {
-    const { book } = await this.load(jobId)
+    const { job, book } = await this.load(jobId)
+    const speakerReasons = new Map(
+      job.warnings.map((warning) => [warning.segmentId, warning.speakerReason]),
+    )
     const catalog = await this.approvals.readCatalog(book.id)
     const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
     const exclusions = new Map(
@@ -194,17 +211,25 @@ export class ReviewFallbackApprovals {
       collectFallbackSubjects(book).map((subject) => {
         const existing = live.get(subject.segment.id)
         if (existing !== undefined && approvalStillDescribes(existing, subject)) {
-          return pendingFrom(subject, {
-            decision: 'approved',
-            approvalId: existing.approvalId,
-            decidedBy: existing.decidedBy,
-          })
+          return pendingFrom(
+            subject,
+            {
+              decision: 'approved',
+              approvalId: existing.approvalId,
+              decidedBy: existing.decidedBy,
+            },
+            speakerReasons.get(subject.segment.id),
+          )
         }
         const withdrawnBy = exclusions.get(subject.segment.id)
         if (withdrawnBy !== undefined) {
-          return pendingFrom(subject, { decision: 'excluded', decidedBy: withdrawnBy })
+          return pendingFrom(
+            subject,
+            { decision: 'excluded', decidedBy: withdrawnBy },
+            speakerReasons.get(subject.segment.id),
+          )
         }
-        return pendingFrom(subject)
+        return pendingFrom(subject, {}, speakerReasons.get(subject.segment.id))
       }),
     )
   }
@@ -236,7 +261,7 @@ export class ReviewFallbackApprovals {
           decidedAt: this.decidedAt(),
         }),
       )
-      const reconciliation = await this.reconcileUnlocked({ book })
+      const reconciliation = await this.reconcileUnlocked({ book, warnings: job.warnings })
       await this.reopenIfCompletedSince(request.jobId)
       return reconciliation
     })
@@ -375,6 +400,7 @@ function pendingFrom(
     readonly approvalId?: string | null
     readonly decidedBy?: string | null
   } = {},
+  speakerReason?: string,
 ): PendingFallbackApproval {
   return Object.freeze({
     segmentId: subject.segment.id,
@@ -382,6 +408,11 @@ function pendingFrom(
     chapterTitle: subject.chapterTitle,
     speakerId: subject.speakerId,
     fallbackReason: subject.fallbackReason,
+    speakerReason:
+      speakerReason ??
+      (subject.fallbackReason === 'unresolved_speaker'
+        ? 'The director could not resolve a speaker from the supplied roster and context.'
+        : `Speaker ${subject.speakerId ?? 'unknown'} has no approved cast voice.`),
     proposedVoiceProfileId: subject.voiceProfileId,
     sourceTextExcerpt: fallbackApprovalExcerpt(subject.segment.sourceText),
     decision: decided.decision ?? 'pending',
