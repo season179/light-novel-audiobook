@@ -36,6 +36,16 @@ export {
   directorErrorChainText,
 } from './errors.js'
 export {
+  type DirectionSamplingParameters,
+  DirectorFidelityExhaustedError,
+  FIDELITY_RECOVERY_POLICY,
+  type FidelityRecoveryAttempt,
+  fidelitySamplingAttempts,
+  type MechanicalSourceRepair,
+  type MechanicalSourceRepairResult,
+  repairMechanicalSourceEcho,
+} from './fidelity-recovery.js'
+export {
   GemmaDirectorModel,
   type GemmaDirectorModelOptions,
 } from './gemma-director-model.js'

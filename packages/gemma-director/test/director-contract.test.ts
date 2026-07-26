@@ -17,11 +17,14 @@ import {
   type DirectionRequest,
   DirectorError,
   DirectorFidelityError,
+  DirectorFidelityExhaustedError,
   type DirectorProgressEvent,
   type DirectorProgressStore,
   type DirectorRuntimeLifecycle,
   type ExclusiveGpuLeaseCoordinator,
+  FIDELITY_RECOVERY_POLICY,
   FileGpuLeaseCoordinator,
+  fidelitySamplingAttempts,
   GemmaDirectorEndpoint,
   GemmaDirectorModel,
   type GpuLease,
@@ -143,6 +146,34 @@ function makeBook(): Book {
     source: { epubPath: '/private/fixture.epub', sha256: 'a'.repeat(64) },
     chapters: [chapter],
   })
+}
+
+function makeSinglePassageBook(sourceText: string): Book {
+  const chapter = new Chapter({
+    id: 'chapter-01',
+    bookId: 'book-01',
+    position: 1,
+    title: 'Synthetic Recovery',
+    sourcePassages: [
+      new SourcePassage({
+        id: 'passage-001',
+        chapterId: 'chapter-01',
+        sourceText,
+      }),
+    ],
+  })
+  return new Book({
+    id: 'book-01',
+    title: 'Synthetic Fixture Book',
+    author: 'Fixture Author',
+    coverPath: null,
+    source: { epubPath: '/private/synthetic-fixture.epub', sha256: 'b'.repeat(64) },
+    chapters: [chapter],
+  })
+}
+
+function singleNarrationOutput(sourceText: string): { segments: Array<Record<string, unknown>> } {
+  return { segments: [wireSegment('passage-001', 0, sourceText.length, sourceText)] }
 }
 
 function voiceProfile(id: string, role: VoiceRole, speakerId: string | null): VoiceProfile {
@@ -387,7 +418,97 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     expect(JSON.stringify(progress.events)).not.toContain('Rain.')
   })
 
-  it('binds adapter, model, prompt, schema, runtime, generation, and GPU lease settings in identity', () => {
+  it('repairs only the synthetic no-break-space echo normalization before exact validation', async () => {
+    const sourceText = 'Copper\u00a0gears turn beneath a painted dial.'
+    const normalizedEcho = sourceText.replace('\u00a0', ' ')
+    const request: DirectionRequest = {
+      ...validationRequest,
+      bookSourceSha256: 'b'.repeat(64),
+      chapterTitle: 'Synthetic Recovery',
+      passages: [{ id: 'passage-001', text: sourceText }],
+    }
+    const raw = singleNarrationOutput(normalizedEcho)
+
+    expect(() => validateDirectionOutput(raw, request, CONFIDENCE_THRESHOLD)).toThrowError(
+      DirectorFidelityError,
+    )
+
+    server.respondWith(raw)
+    const book = makeSinglePassageBook(sourceText)
+    const { model } = create()
+    const result = await model.directChapter(book, book.chapters[0] as Chapter)
+
+    expect(server.requests).toHaveLength(1)
+    expect(result.segments.map((segment) => segment.sourceText).join('')).toBe(sourceText)
+    expect(result.segments.map((segment) => segment.sourceText).join('')).not.toBe(normalizedEcho)
+  })
+
+  it('recovers a genuine synthetic substitution with a distinct bounded re-request', async () => {
+    const sourceText = 'Copper gears turn beneath a painted dial.'
+    const substituted = 'Silver gears turn beneath a painted dial.'
+    const bad = singleNarrationOutput(substituted)
+    const good = singleNarrationOutput(sourceText)
+    server.respondInSequence([bad, good])
+    const book = makeSinglePassageBook(sourceText)
+    const { model } = create()
+
+    const first = await model.directChapter(book, book.chapters[0] as Chapter)
+    expect(server.requests).toHaveLength(2)
+    expect(first.segments.map((segment) => segment.sourceText).join('')).toBe(sourceText)
+    const firstSampling = server.requests.slice(0, 2).map((request) => ({
+      seed: request.body.seed,
+      temperature: request.body.temperature,
+      topP: request.body.top_p,
+    }))
+    expect(firstSampling[0]).not.toEqual(firstSampling[1])
+
+    // Same inputs and same response sequence select the same script and identity receipt.
+    server.respondInSequence([bad, good])
+    const second = await model.directChapter(book, book.chapters[0] as Chapter)
+    expect(second.requestSha256).toBe(first.requestSha256)
+    expect(second.outputSha256).toBe(first.outputSha256)
+  })
+
+  it('fails closed with a recorded decision after every distinct fidelity attempt is exhausted', async () => {
+    const sourceText = 'Copper gears turn beneath a painted dial.'
+    const bad = singleNarrationOutput('Silver gears turn beneath a painted dial.')
+    server.respondInSequence([bad, bad, bad])
+    const book = makeSinglePassageBook(sourceText)
+    const { model, progress } = create()
+
+    let caught: unknown
+    try {
+      await model.directChapter(book, book.chapters[0] as Chapter)
+    } catch (error: unknown) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(DirectorFidelityExhaustedError)
+    const exhausted = caught as DirectorFidelityExhaustedError
+    expect(exhausted.retryable).toBe(false)
+    expect(exhausted.findings.map((finding) => finding.code)).toEqual(['text_substitution'])
+    expect(exhausted.attempts).toHaveLength(3)
+    expect(new Set(exhausted.attempts.map((attempt) => attempt.requestSha256)).size).toBe(3)
+    expect(server.requests).toHaveLength(3)
+    expect(progress.events.at(-1)).toMatchObject({
+      state: 'failed',
+      error: { code: 'fidelity', retryable: false },
+    })
+  })
+
+  it('defines two re-requests and never counts identical sampling as another attempt', () => {
+    const attempts = fidelitySamplingAttempts({
+      seed: 42,
+      temperature: 0,
+      topP: 1,
+      maxTokens: 8192,
+      confidenceThreshold: CONFIDENCE_THRESHOLD,
+    })
+    expect(FIDELITY_RECOVERY_POLICY.maxRerequests).toBe(2)
+    expect(attempts).toHaveLength(3)
+    expect(new Set(attempts.map((attempt) => JSON.stringify(attempt))).size).toBe(3)
+  })
+
+  it('binds adapter, model, prompt, schema, recovery, runtime, generation, and GPU lease settings in identity', () => {
     const first = create().model
     const second = create().model
     const changedThreshold = create({ confidenceThreshold: 0.7 }).model
@@ -438,6 +559,14 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
         },
       },
       generation: { confidenceThreshold: 0.8, seed: 42, maxTokens: 8192 },
+      fidelityRecovery: {
+        version: 'gemma-fidelity-recovery@1',
+        maxRerequests: 2,
+        retrySampling: [
+          { seedOffset: 1, temperature: 0.2, topP: 0.95 },
+          { seedOffset: 2, temperature: 0.4, topP: 0.9 },
+        ],
+      },
     })
   })
 

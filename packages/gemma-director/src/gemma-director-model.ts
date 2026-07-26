@@ -24,6 +24,14 @@ import {
 } from './chunking.js'
 import { GemmaDirectorEndpoint } from './config.js'
 import { classifyDirectorError, DirectorError, directorErrorChainText } from './errors.js'
+import {
+  type DirectionSamplingParameters,
+  DirectorFidelityExhaustedError,
+  FIDELITY_RECOVERY_POLICY,
+  type FidelityRecoveryAttempt,
+  fidelitySamplingAttempts,
+  repairMechanicalSourceEcho,
+} from './fidelity-recovery.js'
 import { createGemmaDirectorIdentity } from './identity.js'
 import type {
   DirectedAnnotation,
@@ -49,7 +57,12 @@ import {
   directionWireOutputSchemaFor,
   parseDirectionRequest,
 } from './schema.js'
-import { type ValidatedDirection, validateDirectionOutput } from './validation.js'
+import {
+  DirectorFidelityError,
+  type FidelityFinding,
+  type ValidatedDirection,
+  validateDirectionOutput,
+} from './validation.js'
 
 export interface GemmaDirectorModelOptions {
   readonly baseUrl?: string
@@ -100,6 +113,20 @@ const DEFAULT_CHAPTER_TIMEOUT_MS = 60 * 60_000
  */
 const CONTEXT_OVERFLOW_WORDING =
   /context[_ -]length|context[_ -]window|context[_ -]size|n_ctx|too many (tokens|prompt)|prompt (is )?too long|exceed\w* (the )?(available )?context|context.{0,24}exceed/i
+
+/** One rejected model response plus text-free evidence needed by the bounded retry controller. */
+class WindowFidelityAttemptError extends DirectorFidelityError {
+  override readonly name = 'WindowFidelityAttemptError'
+
+  constructor(
+    findings: readonly FidelityFinding[],
+    readonly requestSha256: string,
+    readonly rawOutputSha256: string,
+    readonly validatedOutputSha256: string,
+  ) {
+    super(findings)
+  }
+}
 
 /**
  * The chapter is one request, so intra-chapter progress can only be inferred from the stream:
@@ -438,7 +465,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     const annotations: DirectedAnnotation[] = []
     const warnings: DirectorWarning[] = []
     const windowRequestSha256s: string[] = []
-    const windowOutputs: DirectionWireOutput[] = []
+    const windowOutputIdentities: unknown[] = []
     const sentWindows: Array<{ readonly start: number; readonly end: number }> = []
     let settings = this.chunking
     let shrinks = 0
@@ -547,7 +574,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
           annotations.push(...result.validated.annotations)
           warnings.push(...result.validated.warnings)
           windowRequestSha256s.push(result.requestSha256)
-          windowOutputs.push(result.output)
+          windowOutputIdentities.push(result.outputIdentity)
           sentWindows.push(window)
           nextIndex = window.end
         } catch (error: unknown) {
@@ -604,7 +631,7 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     // cannot silently break stitching. ExactSourceCoverage independently re-proves coverage
     // from the fragments themselves at the application boundary.
     const tiledCorrectly =
-      sentWindows.length === windowOutputs.length &&
+      sentWindows.length === windowOutputIdentities.length &&
       sentWindows.length > 0 &&
       sentWindows[0]?.start === 0 &&
       sentWindows[sentWindows.length - 1]?.end === totalPassages &&
@@ -649,7 +676,9 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
       requestId: baseRequestId,
       requestSha256: canonicalSha256({ requestId: baseRequestId, windows: windowRequestSha256s }),
       outputSha256: canonicalSha256(
-        windowOutputs.length === 1 ? windowOutputs[0] : { windows: windowOutputs },
+        windowOutputIdentities.length === 1
+          ? windowOutputIdentities[0]
+          : { windows: windowOutputIdentities },
       ),
       directorIdentity: this.identity,
       modelIdentity: this.modelIdentity,
@@ -719,6 +748,11 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     return CONTEXT_OVERFLOW_WORDING.test(directorErrorChainText(error))
   }
 
+  /**
+   * Retries only deterministic fidelity rejections, with a fixed number of distinct sampling
+   * profiles. Every rejected response and the selected response are folded into the request/output
+   * identities; exhaustion throws a text-free terminal error and cannot yield annotations.
+   */
   private async executeWindowDirection(
     request: DirectionRequest,
     parameters: DirectorParameters,
@@ -736,7 +770,103 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
   ): Promise<{
     validated: ValidatedDirection
     output: DirectionWireOutput
+    outputIdentity: unknown
     requestSha256: string
+  }> {
+    const startedAt = performance.now()
+    const timeoutBudgetMs = options.timeoutMs ?? this.requestTimeoutMs
+    const samplingAttempts = fidelitySamplingAttempts(parameters)
+    const rejectedAttempts: FidelityRecoveryAttempt[] = []
+
+    for (const [index, sampling] of samplingAttempts.entries()) {
+      const remainingMs = Math.floor(timeoutBudgetMs - (performance.now() - startedAt))
+      if (remainingMs < 1) {
+        throw new DirectorError(
+          'timeout',
+          'Gemma Director fidelity recovery exceeded the direction request deadline',
+          true,
+        )
+      }
+      try {
+        const result = await this.executeWindowDirectionAttempt(
+          request,
+          sampling,
+          progressBase,
+          emit,
+          {
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+            timeoutMs: remainingMs,
+          },
+        )
+        const acceptedAttempt = Object.freeze({
+          attemptNumber: index + 1,
+          sampling,
+          requestSha256: result.requestSha256,
+          rawOutputSha256: result.rawOutputSha256,
+          validatedOutputSha256: result.validatedOutputSha256,
+          repairs: result.repairs,
+        })
+        const recoveryIdentity = Object.freeze({
+          policyVersion: FIDELITY_RECOVERY_POLICY.version,
+          rejectedAttempts: Object.freeze([...rejectedAttempts]),
+          acceptedAttempt,
+        })
+        return {
+          validated: result.validated,
+          output: result.output,
+          requestSha256: canonicalSha256(recoveryIdentity),
+          outputIdentity: Object.freeze({
+            output: result.output,
+            fidelityRecovery: recoveryIdentity,
+          }),
+        }
+      } catch (error: unknown) {
+        if (!(error instanceof WindowFidelityAttemptError)) throw error
+        const attempt: FidelityRecoveryAttempt = Object.freeze({
+          attemptNumber: index + 1,
+          sampling,
+          requestSha256: error.requestSha256,
+          rawOutputSha256: error.rawOutputSha256,
+          validatedOutputSha256: error.validatedOutputSha256,
+          findingCodes: Object.freeze(error.findings.map((finding) => finding.code)),
+          sourcePassageIds: Object.freeze([
+            ...new Set(error.findings.map((finding) => finding.sourcePassageId)),
+          ]),
+        })
+        rejectedAttempts.push(attempt)
+        if (index === samplingAttempts.length - 1) {
+          throw new DirectorFidelityExhaustedError(
+            error.findings,
+            Object.freeze([...rejectedAttempts]),
+          )
+        }
+      }
+    }
+
+    throw new DirectorError('fidelity', 'Gemma Director has no fidelity sampling attempts')
+  }
+
+  private async executeWindowDirectionAttempt(
+    request: DirectionRequest,
+    parameters: DirectionSamplingParameters,
+    progressBase: { readonly completed: number; readonly total: number },
+    emit: (
+      state: DirectorRunState,
+      completedPassages: number,
+      message: string,
+      error?: DirectorProgressEvent['error'],
+      warningCount?: number,
+      eventRequestId?: string,
+      eventRequestSha256?: string,
+    ) => Promise<void>,
+    options: DirectionOptions,
+  ): Promise<{
+    validated: ValidatedDirection
+    output: DirectionWireOutput
+    requestSha256: string
+    rawOutputSha256: string
+    validatedOutputSha256: string
+    repairs: ReturnType<typeof repairMechanicalSourceEcho>['repairs']
   }> {
     const requestPayload = this.requestPayload(request)
     const requestSha256 = canonicalSha256({
@@ -851,8 +981,31 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         progress.completedPassages,
         'Validating exact source ranges and speaker semantics',
       )
-      const validated = validateDirectionOutput(output, request, this.confidenceThreshold)
-      return { validated, output, requestSha256 }
+      const repaired = repairMechanicalSourceEcho(output, request)
+      const rawOutputSha256 = canonicalSha256(output)
+      const validatedOutputSha256 = canonicalSha256(repaired.output)
+      let validated: ValidatedDirection
+      try {
+        validated = validateDirectionOutput(repaired.output, request, this.confidenceThreshold)
+      } catch (error: unknown) {
+        if (error instanceof DirectorFidelityError) {
+          throw new WindowFidelityAttemptError(
+            error.findings,
+            requestSha256,
+            rawOutputSha256,
+            validatedOutputSha256,
+          )
+        }
+        throw error
+      }
+      return {
+        validated,
+        output: repaired.output,
+        requestSha256,
+        rawOutputSha256,
+        validatedOutputSha256,
+        repairs: repaired.repairs,
+      }
     } catch (error: unknown) {
       throw classifyDirectorError(error, {
         timedOut: control.timedOut(),
