@@ -195,6 +195,53 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     expect(castRun.jobState).toBe('completed')
   }, 600_000)
 
+  it('rejects an approved cast whose recorded book identity differs from the extracted book', async () => {
+    const workspaceRoot = await workspace('mismatched-book-id')
+    const server = await directorServer()
+    const transports = await createFakeTransports(
+      { runtimeDirectory: path.join(workspaceRoot, 'runtime'), repositoryRoot: REPOSITORY_ROOT },
+      server.baseUrl,
+    )
+    const epubSha256 = createHash('sha256')
+      .update(await readFile(FIXTURE_EPUB))
+      .digest('hex')
+    // The approval is bound to this EPUB by its exact epubSha256 (the ledger primary key), but its
+    // recorded bookId names a different extracted identity. The driver's defence-in-depth cross-check
+    // must catch the mismatch before the cast is trusted.
+    const database = openWorkspace(layoutFor(workspaceRoot))
+    try {
+      await new SqliteCastApprovalRepository(database).saveCastApproval(
+        createCastApprovalRecord({
+          bookId: 'book-mismatched-identity',
+          epubSha256,
+          assignments: [
+            {
+              speakerId: 'speaker-amber',
+              aliases: ['Amber'],
+              materialProfileId: 'ryan-energetic-baseline',
+              sharingGroupId: null,
+            },
+          ],
+          decidedBy: 'Reviewer One',
+          decidedAt: '2026-07-26T12:00:00.000Z',
+        }),
+      )
+    } finally {
+      database.close()
+    }
+
+    await expect(
+      runPipeline({
+        jobId: 'driver-mismatched-book-id',
+        epubPath: FIXTURE_EPUB,
+        workspaceRoot,
+        repositoryRoot: REPOSITORY_ROOT,
+        transports,
+        limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+      }),
+    ).rejects.toThrow(/belongs to a different extracted book identity/)
+  }, 600_000)
+
   it('reuses completed segment audio when the same job is run again', async () => {
     const workspaceRoot = await workspace('resume')
     const first = await directorServer()
