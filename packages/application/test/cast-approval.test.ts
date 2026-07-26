@@ -203,4 +203,17 @@ describe('cast proposal and human approval', () => {
       }),
     ).toThrow(/cannot claim to be shared/)
   })
+
+  it('rejects a non-canonical decision time even though the use case always emits ISO', () => {
+    // decidedAt is always Date.toISOString() from the use case, so the validator is otherwise
+    // unreachable; pin it directly. '2026-07-26T12:00:00Z' parses as a valid date but is not the
+    // canonical form Date.toISOString() produces (it lacks the millisecond component).
+    expect(() =>
+      createCastApprovalRecord({
+        ...proposal(),
+        decidedBy: 'Reviewer One',
+        decidedAt: '2026-07-26T12:00:00Z',
+      }),
+    ).toThrow(/canonical ISO 8601/)
+  })
 })
