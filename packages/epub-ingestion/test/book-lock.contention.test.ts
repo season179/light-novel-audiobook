@@ -323,7 +323,7 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
     budgetMs: number,
     work: Promise<unknown>,
   ): Promise<{ settled: 'resolved' | 'rejected'; elapsedMs: number; error?: unknown }> {
-    const startedAt = Date.now()
+    const startedAt = performance.now()
     let timer: NodeJS.Timeout | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error(`did not settle within ${budgetMs} ms`)), budgetMs)
@@ -331,10 +331,10 @@ describe.each(filesystems)('book lock release on %s', (label, parentDirectory) =
     try {
       const outcome = await Promise.race([
         work.then(
-          () => ({ settled: 'resolved' as const, elapsedMs: Date.now() - startedAt }),
+          () => ({ settled: 'resolved' as const, elapsedMs: performance.now() - startedAt }),
           (error: unknown) => ({
             settled: 'rejected' as const,
-            elapsedMs: Date.now() - startedAt,
+            elapsedMs: performance.now() - startedAt,
             error,
           }),
         ),
