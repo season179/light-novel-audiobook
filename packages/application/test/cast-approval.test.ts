@@ -205,23 +205,44 @@ describe('cast proposal and human approval', () => {
     expect(repository.approval).toBeUndefined()
   })
 
-  it('rejects an exclusive material claiming a sharing group, which would otherwise be invisible', () => {
+  it('rejects an exclusive material claiming a sharing group, which would otherwise be invisible', async () => {
     // A lone sharing-group claim names no co-sharer, so sharedVoiceMaterialGroups (which only surfaces
     // material reused by two or more speakers) would hide it. Reject it at the proposal boundary.
-    expect(() =>
-      parseCastProposal({
-        bookId: 'book-abc123',
-        epubSha256: 'a'.repeat(64),
-        assignments: [
-          {
-            speakerId: 'speaker-amber',
-            aliases: ['Amber'],
-            materialProfileId: 'material-bright',
-            sharingGroupId: 'lone-claim',
-          },
-        ],
-      }),
-    ).toThrow(/cannot claim to be shared/)
+    // Two exclusive materials are needed: with a single assignment the correct per-material scope
+    // (`group.length === 1`) is indistinguishable from a proposal-wide scope (`assignments.length
+    // === 1`), so the latter narrowing still throws and survives. One of the two groups carries the
+    // lone sharing claim while the proposal as a whole has more than one assignment.
+    const repository = new InMemoryCastApprovals()
+    const review = new ReviewCastApprovals({
+      approvals: repository,
+      allowedMaterialProfileIds: ['material-bright', 'material-low'],
+    })
+    const exclusiveClaimingShared: CastProposal = {
+      bookId: 'book-abc123',
+      epubSha256: 'a'.repeat(64),
+      assignments: [
+        {
+          speakerId: 'speaker-amber',
+          aliases: ['Amber'],
+          materialProfileId: 'material-bright',
+          sharingGroupId: 'lone-claim',
+        },
+        {
+          speakerId: 'speaker-basil',
+          aliases: ['Basil'],
+          materialProfileId: 'material-low',
+          sharingGroupId: null,
+        },
+      ],
+    }
+
+    // The wire boundary rejects it before a typed proposal can be trusted...
+    expect(() => parseCastProposal(exclusiveClaimingShared)).toThrow(/cannot claim to be shared/)
+    // ...and the approval path therefore never persists an invisible cast.
+    await expect(
+      review.approve({ proposal: exclusiveClaimingShared, decidedBy: 'Reviewer One' }),
+    ).rejects.toThrow(/cannot claim to be shared/)
+    expect(repository.approval).toBeUndefined()
   })
 
   it('rejects a non-canonical decision time even though the use case always emits ISO', () => {
