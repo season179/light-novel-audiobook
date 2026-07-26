@@ -6,7 +6,7 @@ import type {
   Segment,
 } from '@light-novel-audiobook/domain'
 import { DomainError, type VoiceCast } from '@light-novel-audiobook/domain'
-import { inspectCompletedOutput } from './completed-output.js'
+import { CompletedOutputAuthority } from './completed-output.js'
 import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
 import { errorMessage } from './direct-audiobook.js'
 import {
@@ -43,6 +43,7 @@ export interface RenderAudiobookDependencies {
   readonly audioAssembler: AudioAssembler
   readonly jobs: JobRepository
   readonly approvals: FallbackApprovalRepository
+  readonly completedOutputs?: CompletedOutputAuthority | undefined
 }
 
 interface PlannedSegment {
@@ -122,12 +123,15 @@ export class RenderAudiobook {
   private readonly audioAssembler: AudioAssembler
   private readonly jobs: JobRepository
   private readonly approvals: FallbackApprovalRepository
+  private readonly completedOutputs: CompletedOutputAuthority
 
   constructor(dependencies: RenderAudiobookDependencies) {
     this.speechEngineFactory = dependencies.speechEngineFactory
     this.audioAssembler = dependencies.audioAssembler
     this.jobs = dependencies.jobs
     this.approvals = dependencies.approvals
+    this.completedOutputs =
+      dependencies.completedOutputs ?? new CompletedOutputAuthority(dependencies.approvals)
   }
 
   async execute(command: RenderAudiobookCommand): Promise<RenderAudiobookResult> {
@@ -139,21 +143,20 @@ export class RenderAudiobook {
     // persist past `resumeApprovedRender()`, and the failure path below really can see 'running'.
     const initialState = job.state
     if (initialState === 'completed') {
-      if (job.output === null) throw new DomainError('Completed job has no audiobook output')
       if (job.bookId === null) throw new DomainError('A completed job must have an attached book')
-      // The same gate every other reader of a stored output uses. A revocation can land in the
-      // instant between this render's final catalog check and its commit, so a completed output is
-      // served only while the catalog it was produced under still stands; otherwise the job goes
-      // back to review and is re-derived. The decision wins, not the race.
-      const status = await inspectCompletedOutput(job, this.approvals)
-      if (status.exposable) {
-        return {
+      // The same authority every other consumer uses. It does not expose a raw output: construction
+      // of this return value is the authorized consumption and shares a critical section with every
+      // approval mutation.
+      const authorization = await this.completedOutputs.authorize(
+        job,
+        (output): RenderAudiobookResult => ({
           job,
-          output: status.output,
+          output,
           generatedSegments: 0,
           reusedSegments: job.progress.totalSegments,
-        }
-      }
+        }),
+      )
+      if (authorization.exposable) return authorization.value
       job.reopenForReview()
       await this.jobs.saveJob(job)
     } else if (initialState !== 'awaiting_review') {

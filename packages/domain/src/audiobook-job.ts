@@ -162,7 +162,22 @@ export class AudiobookJob {
     return this.fallbackWarnings
   }
 
-  get output(): AudiobookOutput | null {
+  /**
+   * A completed output is never exposed without a caller presenting the live approval-catalog
+   * revision it just read. This removes the former raw `job.output` escape hatch: application code
+   * must go through its completed-output authority, which coordinates this check with consumption.
+   */
+  completedOutputAtCatalogRevision(catalogRevision: number): AudiobookOutput | null {
+    if (!Number.isSafeInteger(catalogRevision) || catalogRevision < 0) {
+      throw new DomainError('Approval catalog revision must be a non-negative safe integer')
+    }
+    if (
+      this.currentState !== 'completed' ||
+      this.completedCatalogRevision !== catalogRevision ||
+      this.completedOutput === null
+    ) {
+      return null
+    }
     return this.completedOutput
   }
 
@@ -406,6 +421,10 @@ export class AudiobookJob {
     this.currentProgress = Object.freeze({ ...this.currentProgress, latestMessage: error })
   }
 
+  /**
+   * Persistence representation, not an output-authorization API. Its output field exists so a job
+   * can survive restart; consumers must never expose it without `CompletedOutputAuthority`.
+   */
   snapshot(): AudiobookJobSnapshot {
     return Object.freeze({
       schemaVersion: 3,

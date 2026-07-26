@@ -1,7 +1,9 @@
 export {
+  ApprovalCatalogAccess,
+  approvalCatalogAccessFor,
+  CompletedOutputAuthority,
+  type CompletedOutputAuthorization,
   type CompletedOutputDenial,
-  type CompletedOutputStatus,
-  inspectCompletedOutput,
 } from './completed-output.js'
 export { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
 export {

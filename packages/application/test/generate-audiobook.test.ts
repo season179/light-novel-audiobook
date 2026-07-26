@@ -691,7 +691,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
     const reopened = await app.repository.findJob(command.jobId)
     expect(reopened?.state).toBe('awaiting_review')
-    expect(reopened?.output).toBeNull()
+    expect(reopened?.snapshot().output).toBeNull()
     expect(app.assembler.calls).toHaveLength(assembliesBeforeRevocation)
   })
 

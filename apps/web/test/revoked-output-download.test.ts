@@ -89,7 +89,7 @@ const completedAudiobook = async (
   if (first === undefined) throw new Error('fixture produced no fallback segments')
   await api.approveAllFallbacks({ jobId: started.jobId })
   await api.renderApprovedScript({ jobId: started.jobId })
-  await settle((job) => job !== null && job.finished)
+  await settle((job) => job?.finished === true)
   const bookId = (await api.getJobState({ jobId: started.jobId }))?.bookId
   if (bookId === null || bookId === undefined) throw new Error('job has no book')
   return { api, jobId: started.jobId, bookId, approvals, firstFallbackSegmentId: first.segmentId }
@@ -265,10 +265,22 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
 
     pause.release()
     const opened = await opening
-    await opened.close()
     await revoking
+    let streamedAfterCommit = 0
+    try {
+      const reader = opened.body().getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        streamedAfterCommit += value.byteLength
+      }
+    } finally {
+      await opened.close()
+    }
 
     expect(committedWhileOpening).toBe(false)
+    // The descriptor was authorized before commit, so this already-open stream may finish.
+    expect(streamedAfterCommit).toBeGreaterThan(0)
     await expect(api.openAudiobookFile({ jobId })).rejects.toMatchObject({
       code: 'output_unavailable',
     })
@@ -299,7 +311,7 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
     const deadline = Date.now() + 20_000
     while (Date.now() < deadline) {
       const job = await api.getJobState({ jobId })
-      if (job !== null && job.finished) break
+      if (job?.finished === true) break
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
 

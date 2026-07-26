@@ -430,7 +430,7 @@ describe('audiobook job and numbered output lifecycle', () => {
       JSON.parse(JSON.stringify(completed.snapshot())),
     )
     expect(completedReloaded.snapshot()).toEqual(completed.snapshot())
-    expect(completedReloaded.output?.version.label).toBe('v003')
+    expect(completedReloaded.snapshot().output?.version).toBe(3)
 
     const failed = new AudiobookJob('job-snapshot-failed')
     failed.bindCommand(commandIdentity)

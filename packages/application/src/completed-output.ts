@@ -10,49 +10,102 @@ export type CompletedOutputDenial =
    */
   | 'approval-catalog-moved'
 
-export type CompletedOutputStatus =
+export type CompletedOutputAuthorization<T> =
   | {
       readonly exposable: true
-      readonly output: AudiobookOutput
+      readonly value: T
       readonly catalogRevision: number
     }
   | { readonly exposable: false; readonly denial: CompletedOutputDenial }
 
 /**
- * **The one authority on whether a completed audiobook may be exposed.** Every reader of a stored
- * output — job projection, chapter listings, and both file-open paths — must go through this.
+ * A short, fair, per-book critical section shared by approval writers and completed-output readers.
  *
- * Round 3 recorded the approval catalog revision alongside the output, which made a revoked
- * audiobook *detectable*, and then only the render path looked. Round 3's own review streamed
- * 101,324 bytes of a revoked M4B through the download route because the web boundary never compared
- * the revision. Detectability that one consumer checks is not a gate.
- *
- * It is deliberately a **recomputed read**, not a stored flag and not a consequence of the reopen
- * that follows a revocation. That is what makes the denial durable: if the post-revocation reopen
- * fails, or is interrupted, or races a render's commit, the very next read still compares the
- * recorded revision against a live catalog and still refuses. Nothing has to have succeeded earlier
- * for the file to be denied now.
- *
- * Callers may reopen the job on a `'approval-catalog-moved'` denial so the UI agrees with reality,
- * but they must not make the denial conditional on that reopen succeeding.
+ * It lasts only until an output consumer has committed to its read. For a file response that means
+ * the descriptor has been opened; the stream itself deliberately does not hold the section. Thus an
+ * already-authorized stream may finish, while no approval mutation can commit between the final live
+ * catalog check and descriptor acquisition. Mutations for one book do not block another book.
  */
-export const inspectCompletedOutput = async (
-  job: AudiobookJob,
-  approvals: FallbackApprovalRepository,
-): Promise<CompletedOutputStatus> => {
-  if (job.state !== 'completed' || job.output === null || job.bookId === null) {
-    return Object.freeze({ exposable: false as const, denial: 'not-completed' as const })
+export class ApprovalCatalogAccess {
+  private readonly tails = new Map<string, Promise<void>>()
+
+  async runExclusive<T>(bookId: string, operation: () => T | Promise<T>): Promise<T> {
+    if (bookId.trim().length === 0) throw new Error('Approval catalog access requires a book ID')
+    const previous = this.tails.get(bookId) ?? Promise.resolve()
+    let release: (() => void) | undefined
+    const turn = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const tail = previous.then(() => turn)
+    this.tails.set(bookId, tail)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release?.()
+      if (this.tails.get(bookId) === tail) this.tails.delete(bookId)
+    }
   }
-  const { revision } = await approvals.readCatalog(job.bookId)
-  if (job.catalogRevision !== revision) {
-    return Object.freeze({
-      exposable: false as const,
-      denial: 'approval-catalog-moved' as const,
+}
+
+const catalogAccessByRepository = new WeakMap<object, ApprovalCatalogAccess>()
+
+/** Keeps separately constructed application services coordinated when they share one repository. */
+export const approvalCatalogAccessFor = (
+  approvals: FallbackApprovalRepository,
+): ApprovalCatalogAccess => {
+  const key = approvals as object
+  const existing = catalogAccessByRepository.get(key)
+  if (existing !== undefined) return existing
+  const created = new ApprovalCatalogAccess()
+  catalogAccessByRepository.set(key, created)
+  return created
+}
+
+/**
+ * The sole application authority for consuming a completed output.
+ *
+ * It intentionally never returns a raw `output` field. A caller supplies the operation that consumes
+ * the output, and that operation runs inside the same short catalog critical section as the final
+ * authorization. Returning a file descriptor, a result DTO, or an authorized snapshot is safe;
+ * opening a path later, outside the callback, is not.
+ */
+export class CompletedOutputAuthority {
+  private readonly approvals: FallbackApprovalRepository
+  readonly catalogAccess: ApprovalCatalogAccess
+
+  constructor(
+    approvals: FallbackApprovalRepository,
+    catalogAccess: ApprovalCatalogAccess = approvalCatalogAccessFor(approvals),
+  ) {
+    this.approvals = approvals
+    this.catalogAccess = catalogAccess
+  }
+
+  async authorize<T>(
+    job: AudiobookJob,
+    consume: (output: AudiobookOutput) => T | Promise<T>,
+  ): Promise<CompletedOutputAuthorization<T>> {
+    if (job.state !== 'completed' || job.bookId === null) {
+      return Object.freeze({ exposable: false as const, denial: 'not-completed' as const })
+    }
+    return this.catalogAccess.runExclusive(job.bookId, async () => {
+      const { revision } = await this.approvals.readCatalog(job.bookId as string)
+      const output = job.completedOutputAtCatalogRevision(revision)
+      if (output === null) {
+        return Object.freeze({
+          exposable: false as const,
+          denial:
+            job.state === 'completed'
+              ? ('approval-catalog-moved' as const)
+              : ('not-completed' as const),
+        })
+      }
+      return Object.freeze({
+        exposable: true as const,
+        value: await consume(output),
+        catalogRevision: revision,
+      })
     })
   }
-  return Object.freeze({
-    exposable: true as const,
-    output: job.output,
-    catalogRevision: revision,
-  })
 }

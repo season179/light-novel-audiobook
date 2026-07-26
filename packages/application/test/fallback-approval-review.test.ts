@@ -437,7 +437,7 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
       }),
     ).toBe(true)
     expect(job.state).toBe('awaiting_review')
-    expect(job.output).toBeNull()
+    expect(job.snapshot().output).toBeNull()
     // The reuse ledger is untouched: only the revoked segment's content address became unreachable.
     expect(app.approvals.approvals.has(`${BOOK_ID}:${UNRESOLVED_SEGMENT}`)).toBe(true)
 
@@ -689,7 +689,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     // And the stale output is gone rather than still downloadable.
     const after = await app.jobs.findJob('job-review')
     expect(after?.state).toBe('awaiting_review')
-    expect(after?.output).toBeNull()
+    expect(after?.snapshot().output).toBeNull()
     expect(after?.catalogRevision).toBeNull()
   })
 
@@ -779,7 +779,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     // The post-write re-read caught the completion and put the job back into review.
     const after = await app.jobs.findJob('job-review')
     expect(after?.state).toBe('awaiting_review')
-    expect(after?.output).toBeNull()
+    expect(after?.snapshot().output).toBeNull()
   })
 })
 
