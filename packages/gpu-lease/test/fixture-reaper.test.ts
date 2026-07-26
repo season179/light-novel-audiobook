@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -189,6 +189,32 @@ describe('reaper containment (#67)', () => {
     expect(() => process.kill(-decoyPgid, 0)).not.toThrow()
     expect((await stat(decoyRoot)).isDirectory()).toBe(true)
     expect(await registry.loadRegistry()).toHaveLength(2)
+  })
+
+  it('never acts through a symlinked parent that escapes the fixture roots', async () => {
+    const registry = await makeRegistry(async () => 'dead')
+    const decoyPgid = await spawnStubbornHolder()
+    // Lexically under tmpdir(), but the parent is a symlink whose target is outside every
+    // fixture root: only realpath containment can see the escape.
+    const realDecoy = await mkdtemp(join('/dev/shm', 'lna-reaper-decoy-real-'))
+    roots.add(realDecoy)
+    const linkParent = join(tmpdir(), `lna-reaper-decoy-link-${crypto.randomUUID()}`)
+    roots.add(linkParent)
+    await symlink(realDecoy, linkParent, 'dir')
+    const linkedRoot = join(linkParent, 'child')
+    await mkdir(linkedRoot)
+    await writeFile(
+      registry.registryPath,
+      JSON.stringify({
+        schema: 1,
+        entries: [{ ownerPid: 2, ownerStartTime: 1, holderPgid: decoyPgid, rootDir: linkedRoot }],
+      }),
+    )
+
+    expect(await registry.reapOrphanedHolders()).toBe(0)
+    expect(() => process.kill(-decoyPgid, 0)).not.toThrow()
+    expect((await stat(linkedRoot)).isDirectory()).toBe(true)
+    expect(await registry.loadRegistry()).toHaveLength(1)
   })
 })
 

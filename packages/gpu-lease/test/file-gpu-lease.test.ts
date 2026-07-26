@@ -341,17 +341,22 @@ afterEach(async () => {
 // never touched. This runs once before the suite, and its outcome is surfaced by the test
 // below: a reaper failure must never be swallowed silently, because this mechanism is what
 // prevents leaks for exactly this issue.
-let startupReap: { readonly reaped: number } | { readonly error: unknown } | undefined
+type StartupReap =
+  | { readonly outcome: 'ok'; readonly reaped: number }
+  | { readonly outcome: 'error'; readonly error: unknown }
+let startupReap: StartupReap | undefined
 beforeAll(async () => {
   startupReap = await reapOrphanedHolders().then(
-    (reaped) => ({ reaped }),
-    (error: unknown) => ({ error }),
+    (reaped) => ({ outcome: 'ok' as const, reaped }),
+    (error: unknown) => ({ outcome: 'error' as const, error }),
   )
 })
 
 it('startup reaping of orphaned holders surfaced no failure (#67)', () => {
-  expect(startupReap, 'beforeAll must record the startup reap outcome').not.toBeUndefined()
-  if (startupReap !== undefined && 'error' in startupReap) throw startupReap.error
+  if (startupReap?.outcome === 'error') throw startupReap.error
+  // The outcome tag is load-bearing: an error branch that forged a success shape (e.g.
+  // `{ reaped: 0 }`) has no tag, so a swallowed failure still fails here.
+  expect(startupReap?.outcome, 'beforeAll must record a genuine startup reap outcome').toBe('ok')
 })
 
 describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name', ({ base }) => {

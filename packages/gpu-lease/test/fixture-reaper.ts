@@ -5,7 +5,7 @@
 // proves that exact worker instance is gone. All process-shared mutations use the package's existing
 // kernel-flock coordinator and atomic replacement.
 
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { FileGpuLeaseCoordinator, GpuLeaseError } from '../src/index.js'
@@ -194,24 +194,46 @@ async function readPidMax(): Promise<number | undefined> {
 }
 
 /** Directories a fixture may own: under the OS temp dir, or under this repository. */
-function containedRoots(): readonly string[] {
-  return [resolve(tmpdir()), process.cwd()]
+async function containedRoots(): Promise<readonly string[]> {
+  return await Promise.all([realpath(tmpdir()), realpath(process.cwd())])
+}
+
+/**
+ * Real path of the deepest existing ancestor of `rootDir`: every symlink in every existing
+ * component is resolved, and a tail that does not exist cannot escape what its ancestor cannot.
+ * Any error other than a missing component fails closed.
+ */
+async function resolveExistingAncestor(rootDir: string): Promise<string | undefined> {
+  let candidate = resolve(rootDir)
+  for (;;) {
+    try {
+      return await realpath(candidate)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined
+      const parent = dirname(candidate)
+      if (parent === candidate) return undefined
+      candidate = parent
+    }
+  }
 }
 
 /**
  * The reaper turns a registry value into SIGKILL and `rm -rf`, so shape-valid is not enough:
- * an entry whose root resolves outside every fixture root, or whose pids cannot exist, is
- * retained but never acted on. This bounds the blast radius of a wrong entry without changing
- * what happens to any entry a fixture actually wrote.
+ * an entry whose root cannot be proven to resolve - through every symlink, including symlinked
+ * parents - inside a fixture root is retained but never acted on. Failing to resolve the real
+ * path fails closed the same way, because then containment cannot be proven either. This bounds
+ * the blast radius of a wrong entry without changing what happens to any entry a fixture
+ * actually wrote.
  */
-function isContainedEntry(entry: HolderRegistryEntry, pidMax: number | undefined): boolean {
-  const root = resolve(entry.rootDir)
-  const contained = containedRoots().some(
-    (base) => root === base || root.startsWith(`${base}${sep}`),
-  )
-  if (!contained) return false
+async function isContainedEntry(
+  entry: HolderRegistryEntry,
+  pidMax: number | undefined,
+  bases: readonly string[],
+): Promise<boolean> {
   if (pidMax !== undefined && (entry.ownerPid >= pidMax || entry.holderPgid >= pidMax)) return false
-  return true
+  const realRoot = await resolveExistingAncestor(entry.rootDir)
+  if (realRoot === undefined) return false
+  return bases.some((base) => realRoot === base || realRoot.startsWith(`${base}${sep}`))
 }
 
 export class FixtureHolderRegistry {
@@ -263,10 +285,11 @@ export class FixtureHolderRegistry {
   async reapOrphanedHolders(): Promise<number> {
     let reaped = 0
     const pidMax = await readPidMax()
+    const bases = await containedRoots()
     await this.#transaction(async (entries) => {
       const retained: HolderRegistryEntry[] = []
       for (const entry of entries) {
-        if (!isContainedEntry(entry, pidMax)) {
+        if (!(await isContainedEntry(entry, pidMax, bases))) {
           retained.push(entry)
           continue
         }
