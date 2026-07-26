@@ -1,9 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FixtureHolderRegistry, type StatReader } from './fixture-reaper.js'
+
+/** Resolved from this file, never from the shell cwd, so the package's own test script works. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 const children: ChildProcess[] = []
 const groups = new Set<number>()
@@ -301,13 +305,13 @@ describe('fixture holder registry (#67)', () => {
     const registry = await makeRegistry()
     const barrierPath = join(tmpdir(), `fixture-registry-barrier-${crypto.randomUUID()}`)
     roots.add(barrierPath)
-    const writerPath = join(process.cwd(), 'packages/gpu-lease/test/fixtures/registry-writer.mjs')
+    const writerPath = join(REPO_ROOT, 'packages/gpu-lease/test/fixtures/registry-writer.mjs')
     const moduleUrl = new URL('./fixture-reaper.ts', import.meta.url).href
     const writers = Array.from({ length: 8 }, () =>
       spawn(
         process.execPath,
         [
-          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          join(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs'),
           writerPath,
           moduleUrl,
           barrierPath,

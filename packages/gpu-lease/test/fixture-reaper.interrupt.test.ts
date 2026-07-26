@@ -1,9 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadRegistry, reapOrphanedHolders } from './fixture-reaper.js'
+
+/** Resolved from this file, never from the shell cwd, so the package's own test script works. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 interface RegisteredMarker {
   readonly workerPid: number
@@ -51,9 +55,9 @@ function startProbe(
 ): ChildProcess {
   const child = spawn(
     process.execPath,
-    [join(process.cwd(), 'node_modules/vitest/vitest.mjs'), 'run', fixturePath],
+    [join(REPO_ROOT, 'node_modules/vitest/vitest.mjs'), 'run', fixturePath],
     {
-      cwd: process.cwd(),
+      cwd: REPO_ROOT,
       detached: true,
       env: { ...process.env, VITEST_MAX_WORKERS: '2', ...environment },
       stdio: 'ignore',
@@ -100,7 +104,7 @@ afterEach(async () => {
 describe('interrupt fixture reaper round trip (#67)', () => {
   it('registers before worker SIGINT and the next suite startup reaps that exact holder', async () => {
     const fixturePath = join(
-      process.cwd(),
+      REPO_ROOT,
       'packages/gpu-lease/test/fixtures/interrupt-holder.fixture.test.ts',
     )
     const probeDir = join(tmpdir(), `gpu-lease-interrupt-probe-${crypto.randomUUID()}`)
