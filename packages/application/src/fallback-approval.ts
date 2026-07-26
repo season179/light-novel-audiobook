@@ -104,6 +104,16 @@ export interface FallbackApprovalExclusion {
   readonly decidedAt: string
 }
 
+/** Canonical persistence-boundary construction for one human withdrawal. */
+export const createFallbackApprovalExclusion = (input: FallbackApprovalExclusion) => {
+  if (input.bookId.length === 0 || input.segmentId.length === 0) {
+    throw new DomainError('A fallback withdrawal requires a book and segment')
+  }
+  validateActor(input.decidedBy)
+  validateDecidedAt(input.decidedAt)
+  return Object.freeze({ ...input })
+}
+
 /**
  * Why a recorded decision is being removed.
  *

@@ -20,6 +20,7 @@ export {
   type BookFallbackGrantSubject,
   collectFallbackSubjects,
   createBookFallbackGrant,
+  createFallbackApprovalExclusion,
   createFallbackApprovalRecord,
   FALLBACK_EXCERPT_MAX_LENGTH,
   type FallbackApprovalCatalog,

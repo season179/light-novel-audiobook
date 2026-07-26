@@ -334,6 +334,35 @@ describe('fallback approval ledger (issue #45)', () => {
     )
   })
 
+  it('rejects invalid withdrawal provenance before writing an exclusion', async () => {
+    const { approvals } = await workspace()
+    const segmentId = StableIds.segment(StableIds.passage(StableIds.chapter(BOOK_ID, 1), 1), 4)
+    for (const decidedBy of [
+      ' padded-reviewer ',
+      `control${String.fromCharCode(9)}reviewer`,
+      undefined,
+    ]) {
+      await expect(
+        approvals.revoke(BOOK_ID, segmentId, {
+          reason: 'human-withdrawal',
+          decidedBy: decidedBy as string,
+          decidedAt: DECIDED_AT,
+        }),
+      ).rejects.toThrow('valid actor without control characters')
+    }
+    await expect(
+      approvals.revoke(BOOK_ID, segmentId, {
+        reason: 'human-withdrawal',
+        decidedBy: 'synthetic-reviewer',
+        decidedAt: 'not-a-time',
+      }),
+    ).rejects.toThrow('canonical ISO 8601 decision time')
+    expect(await approvals.readCatalog(BOOK_ID)).toMatchObject({
+      revision: 0,
+      exclusions: [],
+    })
+  })
+
   it('bumps the catalog revision on every mutation and never on a read', async () => {
     // This counter is what lets a render claim a catalog and prove nothing moved under it, so a
     // mutation that failed to bump it would silently reopen the race it exists to close.

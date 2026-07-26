@@ -10,6 +10,7 @@ import type {
 } from '@light-novel-audiobook/application'
 import {
   createBookFallbackGrant,
+  createFallbackApprovalExclusion,
   createFallbackApprovalRecord,
 } from '@light-novel-audiobook/application'
 import { DomainError } from '@light-novel-audiobook/domain'
@@ -176,6 +177,15 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
     ) {
       throw new DomainError('Unsupported fallback revocation')
     }
+    const exclusion =
+      revocation.reason === 'human-withdrawal'
+        ? createFallbackApprovalExclusion({
+            bookId,
+            segmentId,
+            decidedBy: revocation.decidedBy,
+            decidedAt: revocation.decidedAt,
+          })
+        : undefined
     return withBusyRetryingTransaction(
       this.db,
       (): boolean => {
@@ -186,7 +196,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
         // book-wide grant would re-create the approval on the next reconciliation and the
         // revocation would mean nothing; recording a *system* invalidation would instead
         // permanently block a segment whose decision merely needs re-deriving.
-        if (revocation.reason === 'human-withdrawal') {
+        if (exclusion !== undefined) {
           this.db
             .prepare(
               `INSERT INTO fallback_approval_exclusions (book_id, segment_id, decided_by, decided_at)
@@ -195,7 +205,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
                  decided_by = excluded.decided_by,
                  decided_at = excluded.decided_at`,
             )
-            .run(bookId, segmentId, revocation.decidedBy, revocation.decidedAt)
+            .run(exclusion.bookId, exclusion.segmentId, exclusion.decidedBy, exclusion.decidedAt)
         }
         this.bumpRevision(bookId)
         return Number(result.changes) > 0
