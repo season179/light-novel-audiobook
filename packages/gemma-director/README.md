@@ -24,15 +24,12 @@ it does not add another benchmark or provider framework.
   schema versions are fixed. The configured confidence threshold is also recorded in every
   concrete result.
 - The model receives exact passage IDs/text. It may return multiple ordered fragments per passage,
-  allowing narration/dialogue/thought changes inside a paragraph. It copies fragment text but does
-  not calculate source coordinates: deterministic validation derives inclusive `sourceStart` and
-  exclusive `sourceEnd` UTF-16 offsets with a per-passage sequential cursor.
-- Zod constrains the wire response. Separate deterministic validation requires each passage's ordered
-  fragment texts to concatenate to the immutable source exactly, rejects unknown passages/speakers,
-  text insertion/duplication/omission/substitution, passage reorder, and surrogate splits, and maps
-  downstream text from immutable source slices. Issue #29's `ExactSourceCoverage` validates the mapped
-  fragments again at the application boundary. Legacy @2 offsets are accepted only for offline replay,
-  stripped before validation, and never used as source authority.
+  allowing narration/dialogue/thought changes inside a paragraph. Every fragment carries inclusive
+  `source_start` and exclusive `source_end` UTF-16 offsets.
+- Zod constrains the wire response. Separate deterministic validation rejects malformed output,
+  unknown passages/speakers, gaps, overlaps, duplicate ranges, invalid ranges, passage/fragment
+  reorder, text changes, and trailing omissions. Issue #29's `ExactSourceCoverage` validates the
+  mapped fragments again at the application boundary.
 - Explicit unresolved speakers and known-speaker assignments below the configured threshold map to
   domain `speakerId: null`, forcing issue #29 fallback voice semantics. The threshold applies to
   every kind: narrator-owned narration and sound cues below it raise a review-required

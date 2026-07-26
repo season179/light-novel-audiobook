@@ -1,8 +1,5 @@
 import {
-  ApprovalCatalogAccess,
   type AudioAssembler,
-  CompletedOutputAuthority,
-  type DirectChapterOptions,
   type DirectorModel,
   type EpubExtractor,
   type FallbackApprovalRepository,
@@ -90,8 +87,6 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly workspace?: LocalWorkspace | undefined
   /** Overrides the pinned Qwen production configuration the default cast is derived from. */
   readonly qwenConfigPath?: string | undefined
-  /** Operational cancellation/deadline controls forwarded to every director call. */
-  readonly directorOptions?: DirectChapterOptions | undefined
 }
 
 export const createAudiobookWebApi = async (
@@ -129,11 +124,6 @@ export const createAudiobookWebApi = async (
   const approvals = withSanitizedFailures.approvals(
     options.approvals ?? new InMemoryFallbackApprovalRepository(),
   )
-  // One coordinator per process and catalog. Completed-output consumers hold it only through their
-  // final catalog check and, for files, descriptor acquisition; review mutations hold it through the
-  // catalog commit. Streams themselves never hold it.
-  const catalogAccess = new ApprovalCatalogAccess()
-  const completedOutputs = new CompletedOutputAuthority(approvals, jobs, catalogAccess)
 
   // One use case per run, with adapters that have not been released or batched yet.
   //
@@ -158,7 +148,6 @@ export const createAudiobookWebApi = async (
       audioAssembler: withSanitizedFailures.audioAssembler(audioAssembler),
       jobs,
       approvals,
-      completedOutputs,
     })
   })
 
@@ -169,10 +158,9 @@ export const createAudiobookWebApi = async (
     books,
     runner,
     voices,
-    review: new ReviewFallbackApprovals({ jobs, approvals, catalogAccess }),
-    completedOutputs,
+    review: new ReviewFallbackApprovals({ jobs, approvals }),
+    approvals,
     reviewer: options.reviewer ?? resolveReviewerIdentity(),
-    ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
   })
 }
 

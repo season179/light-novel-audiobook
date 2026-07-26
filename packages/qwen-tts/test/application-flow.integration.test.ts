@@ -33,6 +33,7 @@ import {
   RenderAudiobook,
   ReviewFallbackApprovals,
   StaleFallbackCatalogError,
+  UnapprovedFallbackSegmentsError,
 } from '@light-novel-audiobook/application'
 import {
   type AudiobookOutput,
@@ -275,7 +276,6 @@ class FixtureAssembler implements AudioAssembler {
 
 class FixtureGpuGate implements ExclusiveGpuGate {
   acquisitions = 0
-  quarantines = 0
   releases = 0
 
   async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
@@ -285,9 +285,6 @@ class FixtureGpuGate implements ExclusiveGpuGate {
     return {
       owner,
       lockFilePath: '/fixture/gpu.lock',
-      quarantine: async () => {
-        this.quarantines += 1
-      },
       release: async () => {
         if (!released) this.releases += 1
         released = true
@@ -559,7 +556,7 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     expect(afterRevoke.grant).not.toBeUndefined()
     const reopenedByRevoke = await fixture.jobs.findJob(command.jobId)
     expect(reopenedByRevoke?.state).toBe('awaiting_review')
-    expect(reopenedByRevoke?.catalogRevision).toBeNull()
+    expect(reopenedByRevoke?.output).toBeNull()
 
     const refusal = await generate
       .execute(command)
@@ -710,7 +707,7 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     // Nothing was published: no output, and the job records the failure rather than completing.
     const job = await fixture.jobs.findJob('job-catalog-race')
     expect(job?.state).toBe('failed')
-    expect(job?.state).toBe('failed')
+    expect(job?.output).toBeNull()
     expect(fixture.assembler.assemblies).toBe(0)
   }, 180_000)
 })

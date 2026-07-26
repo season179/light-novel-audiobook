@@ -1,7 +1,6 @@
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { canonicalSha256 } from './canonical-json.js'
-import { type DirectionChunkingSettings, resolveChunkingSettings } from './chunking.js'
 import {
   GEMMA_DIRECTOR_PROMPT_VERSION,
   GEMMA_DIRECTOR_SCHEMA_VERSION,
@@ -17,11 +16,6 @@ export interface GemmaDirectorIdentitySettings {
   readonly baseUrl: string
   readonly confidenceThreshold: number
   readonly gpuLeaseLockFilePath: string
-  /**
-   * Issue #53 passage-window budgets. Window boundaries can change fragmentation and therefore
-   * direction output, so the resolved values are part of the identity. Omitted means defaults.
-   */
-  readonly chunking?: Partial<DirectionChunkingSettings>
 }
 
 /** Application identity material for every stable setting that can affect direction/runtime. */
@@ -79,7 +73,6 @@ export function gemmaDirectorIdentityMaterial(settings: GemmaDirectorIdentitySet
       maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
       confidenceThreshold: settings.confidenceThreshold,
     },
-    chunking: resolveChunkingSettings(settings.chunking),
   } as const
 }
 

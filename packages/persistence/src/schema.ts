@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withTransaction } from './transaction.js'
 
-export const SCHEMA_VERSION = 3 satisfies number
+export const SCHEMA_VERSION = 2 satisfies number
 
 const migrations = new Map<number, string>()
 
@@ -186,23 +186,6 @@ migrations.set(
   CREATE TABLE fallback_catalog_revisions (
     book_id TEXT PRIMARY KEY NOT NULL,
     revision INTEGER NOT NULL
-  );
-`,
-)
-
-migrations.set(
-  3,
-  `
-  -- Issue #45 round 7. Completed output paths are authority-protected persistence data, not public
-  -- AudiobookJob state. Pre-release workspaces are disposable, so old embedded-output job snapshots
-  -- are invalidated rather than translated or accepted through a compatibility shim.
-  DELETE FROM jobs;
-
-  CREATE TABLE completed_outputs (
-    job_id TEXT PRIMARY KEY NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    version INTEGER NOT NULL,
-    m4b_path TEXT NOT NULL,
-    chapters_json TEXT NOT NULL
   );
 `,
 )

@@ -4,7 +4,7 @@ import type {
   OutputReservation,
   ReusableSegmentQuery,
 } from '@light-novel-audiobook/application'
-import type { AudiobookJob, AudiobookOutput, Book } from '@light-novel-audiobook/domain'
+import type { AudiobookJob, Book } from '@light-novel-audiobook/domain'
 
 export interface ChapterReadModel {
   readonly chapterId: string
@@ -64,14 +64,6 @@ export class ProjectingJobRepository implements JobRepository {
 
   saveJob(job: AudiobookJob): Promise<void> {
     return this.inner.saveJob(job)
-  }
-
-  saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
-    return this.inner.saveCompletedJob(job, output)
-  }
-
-  findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
-    return this.inner.findCompletedOutput(jobId)
   }
 
   async saveBook(book: Book): Promise<void> {

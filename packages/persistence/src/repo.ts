@@ -10,7 +10,6 @@ import type {
 import {
   AudiobookJob,
   type AudiobookJobSnapshot,
-  type AudiobookOutput,
   Book,
   Chapter,
   type DeliveryDirection,
@@ -56,56 +55,18 @@ export class SqliteJobRepository implements JobRepository {
 
   async saveJob(job: AudiobookJob): Promise<void> {
     if (!job.id) throw new DomainError('Job ID is required')
-    if (job.state === 'completed') {
-      throw new DomainError('Completed jobs must be persisted with their separate output')
-    }
-    const json = JSON.stringify(job.snapshot())
 
-    await withBusyRetryingTransaction(
-      this.db,
-      () => this.replaceJob(job.id, json),
-      `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
-    )
-  }
-
-  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
-    if (job.state !== 'completed') {
-      throw new DomainError('Only a completed job can persist an audiobook output')
-    }
-    const json = JSON.stringify(job.snapshot())
-    const chaptersJson = JSON.stringify(output.chapters)
-    // Validate the persistence value before replacing the old terminal record.
-    const canonical = completedOutputFromRow({
-      version: output.version.value,
-      m4b_path: output.m4bPath,
-      chapters_json: chaptersJson,
-    })
+    const snapshot = job.snapshot()
+    const json = JSON.stringify(snapshot)
 
     await withBusyRetryingTransaction(
       this.db,
       () => {
-        this.replaceJob(job.id, json)
-        this.db
-          .prepare(
-            'INSERT INTO completed_outputs (job_id, version, m4b_path, chapters_json) VALUES (?, ?, ?, ?)',
-          )
-          .run(job.id, canonical.version.value, canonical.m4bPath, chaptersJson)
+        this.db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id)
+        this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(job.id, json)
       },
-      `Could not save completed audiobook job ${job.id}; the workspace database stayed locked`,
+      `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
     )
-  }
-
-  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
-    if (!jobId) throw new DomainError('Job ID is required')
-    const row = this.db
-      .prepare('SELECT version, m4b_path, chapters_json FROM completed_outputs WHERE job_id = ?')
-      .get(jobId) as CompletedOutputRow | undefined
-    return row === undefined ? undefined : completedOutputFromRow(row)
-  }
-
-  private replaceJob(jobId: string, snapshotJson: string): void {
-    this.db.prepare('DELETE FROM jobs WHERE id = ?').run(jobId)
-    this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(jobId, snapshotJson)
   }
 
   async saveBook(book: Book): Promise<void> {
@@ -530,53 +491,6 @@ export class SqliteJobRepository implements JobRepository {
 // ============================================================
 // Private helpers
 // ============================================================
-
-interface CompletedOutputRow {
-  readonly version: number
-  readonly m4b_path: string
-  readonly chapters_json: string
-}
-
-function completedOutputFromRow(row: CompletedOutputRow): AudiobookOutput {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(row.chapters_json)
-  } catch {
-    throw new DomainError('Stored completed output has unreadable chapter metadata')
-  }
-  if (
-    typeof row.m4b_path !== 'string' ||
-    row.m4b_path.trim().length === 0 ||
-    !Array.isArray(parsed) ||
-    parsed.length === 0
-  ) {
-    throw new DomainError('Stored completed output is invalid')
-  }
-  const chapters = parsed.map((value): { chapterId: string; path: string } => {
-    if (
-      typeof value !== 'object' ||
-      value === null ||
-      !('chapterId' in value) ||
-      !('path' in value) ||
-      typeof value.chapterId !== 'string' ||
-      typeof value.path !== 'string' ||
-      value.chapterId.trim().length === 0 ||
-      value.path.trim().length === 0
-    ) {
-      throw new DomainError('Stored completed output chapter metadata is invalid')
-    }
-    return Object.freeze({ chapterId: value.chapterId, path: value.path })
-  })
-  const paths = [row.m4b_path, ...chapters.map((chapter) => chapter.path)]
-  if (new Set(paths).size !== paths.length) {
-    throw new DomainError('Stored completed output paths are not distinct')
-  }
-  return Object.freeze({
-    version: new OutputVersion(row.version),
-    m4bPath: row.m4b_path,
-    chapters: Object.freeze(chapters),
-  })
-}
 
 /** NUL and the C0 controls, DEL and the C1 controls, and both path separators. */
 function isUnsafePathCharacter(character: string): boolean {

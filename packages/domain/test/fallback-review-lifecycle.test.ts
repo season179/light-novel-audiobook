@@ -101,13 +101,13 @@ describe('awaiting-review job lifecycle (issue #45)', () => {
 
   it('reopens a completed job for review, keeping its directed script and dropping its output', () => {
     const job = completedJob()
-    expect(job.state).toBe('completed')
+    expect(job.output).not.toBeNull()
 
     job.reopenForReview()
 
     expect(job.state).toBe('awaiting_review')
     expect(job.stage).toBe('directing')
-    expect(job.catalogRevision).toBeNull()
+    expect(job.output).toBeNull()
     expect(job.error).toBeNull()
     expect(job.progress.completedSegments).toBe(0)
     expect(job.progress.totalSegments).toBe(0)
@@ -119,32 +119,6 @@ describe('awaiting-review job lifecycle (issue #45)', () => {
     job.resumeApprovedRender()
     job.beginRendering(1)
     expect(job.stage).toBe('rendering')
-  })
-
-  it('contains no public or reflected route to stored output paths or metadata', () => {
-    const job = completedJob()
-    const prototype = AudiobookJob.prototype as unknown as Record<string, unknown>
-    const instance = job as unknown as Record<string, unknown>
-    const snapshot = job.snapshot() as unknown as Record<string, unknown>
-
-    expect(Object.getOwnPropertyDescriptor(AudiobookJob.prototype, 'output')).toBeUndefined()
-    expect(
-      Object.getOwnPropertyDescriptor(AudiobookJob.prototype, 'completedOutputAtCatalogRevision'),
-    ).toBeUndefined()
-    expect(prototype.output).toBeUndefined()
-    expect(prototype.completedOutputAtCatalogRevision).toBeUndefined()
-    expect(instance.output).toBeUndefined()
-    expect(instance.completedOutputAtCatalogRevision).toBeUndefined()
-
-    // The three previously exploitable routes are all absent as a property, reflected own key, and
-    // public snapshot value. This checks the output/path property, not only old accessor spellings.
-    expect(Reflect.get(job, 'completedOutput')).toBeUndefined()
-    expect(Reflect.ownKeys(job)).not.toContain('completedOutput')
-    expect(snapshot.output).toBeUndefined()
-    expect(JSON.stringify(snapshot)).not.toContain('/workspace/story-v001.m4b')
-    expect(JSON.stringify(job)).not.toContain('/workspace/story-v001.m4b')
-    // The recorded revision remains useful metadata, but a bare number grants no output access.
-    expect(job.catalogRevision).toBe(0)
   })
 
   it('only reopens a completed job', () => {

@@ -3,7 +3,6 @@ import type {
   AudioAssembler,
   BookFallbackGrant,
   CompletedSegmentAudio,
-  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
   DirectorModelFactory,
@@ -66,14 +65,8 @@ class SanitizedDirectorModel implements DirectorModel {
     this.identity = inner.identity
   }
 
-  directChapter(
-    book: Book,
-    chapter: Chapter,
-    options?: DirectChapterOptions,
-  ): Promise<DirectedChapter> {
-    return sanitize('directorModel.directChapter', () =>
-      this.inner.directChapter(book, chapter, options),
-    )
+  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
+    return sanitize('directorModel.directChapter', () => this.inner.directChapter(book, chapter))
   }
 
   release(): Promise<void> {
@@ -130,14 +123,6 @@ class SanitizedJobRepository implements JobRepository {
 
   saveJob(job: AudiobookJob): Promise<void> {
     return sanitize('jobs.saveJob', () => this.inner.saveJob(job))
-  }
-
-  saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
-    return sanitize('jobs.saveCompletedJob', () => this.inner.saveCompletedJob(job, output))
-  }
-
-  findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
-    return sanitize('jobs.findCompletedOutput', () => this.inner.findCompletedOutput(jobId))
   }
 
   saveBook(book: Book): Promise<void> {

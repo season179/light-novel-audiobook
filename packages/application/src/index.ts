@@ -1,10 +1,7 @@
 export {
-  ApprovalCatalogAccess,
-  ApprovalCatalogReentryError,
-  approvalCatalogAccessFor,
-  CompletedOutputAuthority,
-  type CompletedOutputAuthorization,
   type CompletedOutputDenial,
+  type CompletedOutputStatus,
+  inspectCompletedOutput,
 } from './completed-output.js'
 export { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
 export {
@@ -47,7 +44,6 @@ export type {
   AssemblySegment,
   AudioAssembler,
   CompletedSegmentAudio,
-  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
   DirectorModelFactory,

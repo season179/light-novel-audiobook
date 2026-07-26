@@ -266,36 +266,6 @@ function processGroupAlive(groupId: number): boolean {
   }
 }
 
-/**
- * Reaps coordinator-spawned holders the test never recorded or never released. Such a holder is a
- * detached process-group leader whose parent is this process (the coordinator runs in-process), so
- * a group SIGKILL also reaches a nested holder (the wedged node holder under `flock`) that ignores
- * SIGTERM. This is the cleanup `children`/`holderGroups` miss when a test fails or times out before
- * its happy-path release, and it runs in afterEach so it still fires on a failure. Non-detached
- * test spawns share this process's group (`pgid !== pid`) and are skipped, so it never signals the
- * runner's own group or an unrelated process.
- */
-async function reapDetachedHolderGroups(): Promise<void> {
-  for (const entry of await readdir('/proc')) {
-    if (!/^\d+$/u.test(entry)) continue
-    const pid = Number(entry)
-    const raw = await readFile(`/proc/${entry}/stat`, 'utf8').catch(() => undefined)
-    if (raw === undefined) continue
-    const fields = raw
-      .slice(raw.lastIndexOf(')') + 1)
-      .trim()
-      .split(/\s+/u)
-    // fields[1] is ppid, fields[2] is pgid (state is fields[0]); NaN comparisons just skip the entry.
-    if (Number(fields[1]) !== process.pid) continue
-    if (Number(fields[2]) !== pid) continue
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      // Already gone, which is the expected outcome of a clean test.
-    }
-  }
-}
-
 /** Rejects instead of hanging, so an unbounded release fails the test rather than the run. */
 async function settleWithin<T>(
   work: Promise<T>,
@@ -328,9 +298,6 @@ afterEach(async () => {
       // Already gone, which is the expected outcome of every test here.
     }
   }
-  // Catch holders no array tracks: a test that fails or times out before release leaves a
-  // coordinator-spawned holder alive, so reap every detached group leader this process parented.
-  await reapDetachedHolderGroups()
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
 })
 
@@ -509,44 +476,6 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
 })
 
 describe('FileGpuLeaseCoordinator', () => {
-  it('keeps a durable quarantine after its owner exits until an operator explicitly clears it', async () => {
-    const root = await makeRoot('gpu-flock-quarantine')
-    const path = join(root, 'exclusive.lock')
-    const quarantined = await runDetachedLeaseCaller(
-      [
-        "const lease = await coordinator().acquire('gemma')",
-        "await lease.quarantine('fixture runtime cleanup remained unknown')",
-        '// Even an accidental normal release must not clear quarantine or hand off the lock.',
-        'await lease.release()',
-        "record('quarantined')",
-      ],
-      path,
-    )
-    expect(quarantined).toMatchObject({ outcome: 'quarantined', code: 0 })
-
-    // The child process and its kernel flock are now gone. Only the persisted marker can block this.
-    await expect(coordinator(path).acquire('qwen3-tts')).rejects.toMatchObject({
-      code: 'quarantined',
-      message: expect.stringContaining(`${path}.quarantined`),
-    })
-    const marker = JSON.parse(await readFile(`${path}.quarantined`, 'utf8')) as {
-      schema: number
-      owner: string
-      reason: string
-    }
-    expect(marker).toMatchObject({
-      schema: 1,
-      owner: 'gemma',
-      reason: 'fixture runtime cleanup remained unknown',
-    })
-
-    // Explicit operator recovery is intentionally outside the lease API: the coordinator cannot
-    // prove that no pending spawn exists. Once that proof is made, removing the marker restores use.
-    await rm(`${path}.quarantined`)
-    const recovered = await coordinator(path).acquire('qwen3-tts')
-    await recovered.release()
-  })
-
   it('treats nvidia-smi as a post-lock diagnostic and releases after a diagnostic failure', async () => {
     const root = await makeRoot('gpu-flock-diagnostic')
     const path = join(root, 'exclusive.lock')
@@ -686,41 +615,3 @@ describe('FileGpuLeaseCoordinator', () => {
     await lease.release()
   })
 })
-
-it('release deadline is monotonic: a backward-jumping wall clock does not extend it (#monotonic)', async () => {
-  // The group-poll deadline in #awaitSubtreeExit only runs when the direct holder has already exited
-  // but a nested descendant survives (the orphan case) -- so reproduce that, then move the wall
-  // clock backward, the WSL2 failure mode. A monotonic deadline still fires and escalates to
-  // SIGKILL; a regressed Date.now() deadline would never be reached by the decreasing clock, so
-  // release would hang until the test times out.
-  const scripts = await makeRoot('gpu-flock-monotonic-scripts')
-  const root = await makeRoot('gpu-flock-monotonic')
-  const path = join(root, 'exclusive.lock')
-  const lease = await new FileGpuLeaseCoordinator({
-    lockFilePath: path,
-    flockExecutable: await wedgedHolderFlock(scripts),
-    inspectExistingComputeProcesses: false,
-    releaseGraceMs: RELEASE_GRACE_MS,
-  }).acquire('gemma')
-  const directPid = await directHolderPid(path) // also records the group for afterEach
-  process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
-  expect(processGroupAlive(directPid)).toBe(true)
-
-  const realDateNow = Date.now
-  let clock = realDateNow()
-  Date.now = () => (clock -= 5) // move the wall clock backward 5 ms on every read
-  const started = performance.now()
-  let thrown: unknown
-  try {
-    await lease.release()
-  } catch (error) {
-    thrown = error
-  } finally {
-    Date.now = realDateNow
-  }
-  const elapsed = performance.now() - started
-
-  expect(thrown).toMatchObject({ code: 'unavailable' }) // escalated to SIGKILL on the monotonic deadline
-  expect(processGroupAlive(directPid)).toBe(false) // the nested holder was reaped
-  expect(elapsed).toBeLessThan(RELEASE_DEADLINE_MS) // bounded; a regressed Date.now() deadline would hang
-}, 15_000)

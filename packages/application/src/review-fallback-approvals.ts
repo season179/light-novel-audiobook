@@ -1,5 +1,4 @@
 import { type AudiobookJob, type Book, DomainError } from '@light-novel-audiobook/domain'
-import { type ApprovalCatalogAccess, approvalCatalogAccessFor } from './completed-output.js'
 import {
   approvalStillDescribes,
   type BookFallbackGrant,
@@ -29,8 +28,6 @@ export interface FallbackApprovalReconciliation {
 export interface ReviewFallbackApprovalsDependencies {
   readonly jobs: JobRepository
   readonly approvals: FallbackApprovalRepository
-  /** Shared with completed-output consumers; defaults by approval-repository identity. */
-  readonly catalogAccess?: ApprovalCatalogAccess | undefined
   /** Injected so a decision time is reproducible in tests; defaults to the wall clock. */
   readonly now?: (() => Date) | undefined
 }
@@ -76,14 +73,11 @@ export class RenderInProgressError extends DomainError {
 export class ReviewFallbackApprovals {
   private readonly jobs: JobRepository
   private readonly approvals: FallbackApprovalRepository
-  private readonly catalogAccess: ApprovalCatalogAccess
   private readonly now: () => Date
 
   constructor(dependencies: ReviewFallbackApprovalsDependencies) {
     this.jobs = dependencies.jobs
     this.approvals = dependencies.approvals
-    this.catalogAccess =
-      dependencies.catalogAccess ?? approvalCatalogAccessFor(dependencies.approvals)
     this.now = dependencies.now ?? ((): Date => new Date())
   }
 
@@ -96,12 +90,6 @@ export class ReviewFallbackApprovals {
    * explicitly excluded. With no grant, every undecided fallback segment comes back pending.
    */
   async reconcile(
-    request: ReconcileFallbackApprovalsRequest,
-  ): Promise<FallbackApprovalReconciliation> {
-    return this.catalogAccess.runExclusive(request.book.id, () => this.reconcileUnlocked(request))
-  }
-
-  private async reconcileUnlocked(
     request: ReconcileFallbackApprovalsRequest,
   ): Promise<FallbackApprovalReconciliation> {
     const subjects = collectFallbackSubjects(request.book)
@@ -226,51 +214,46 @@ export class ReviewFallbackApprovals {
     request: BookFallbackGrantRequest,
   ): Promise<FallbackApprovalReconciliation> {
     const { job, book } = await this.load(request.jobId)
-    return this.catalogAccess.runExclusive(book.id, async () => {
-      this.assertNoRenderOwns(job)
-      await this.reopenIfCompleted(job)
-      await this.approvals.saveBookGrant(
-        createBookFallbackGrant({
-          bookId: book.id,
-          decidedBy: request.decidedBy,
-          decidedAt: this.decidedAt(),
-        }),
-      )
-      const reconciliation = await this.reconcileUnlocked({ book })
-      await this.reopenIfCompletedSince(request.jobId)
-      return reconciliation
-    })
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    await this.approvals.saveBookGrant(
+      createBookFallbackGrant({
+        bookId: book.id,
+        decidedBy: request.decidedBy,
+        decidedAt: this.decidedAt(),
+      }),
+    )
+    const reconciliation = await this.reconcile({ book })
+    await this.reopenIfCompletedSince(request.jobId)
+    return reconciliation
   }
 
   /** Withdraws the book-wide grant. Records already written stay; nothing new is derived from it. */
   async revokeBookFallback(request: BookFallbackGrantRequest): Promise<boolean> {
     const { job, book } = await this.load(request.jobId)
-    return this.catalogAccess.runExclusive(book.id, async () => {
-      this.assertNoRenderOwns(job)
-      await this.reopenIfCompleted(job)
-      const removed = await this.approvals.revokeBookGrant(book.id)
-      await this.reopenIfCompletedSince(request.jobId)
-      return removed
-    })
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    const removed = await this.approvals.revokeBookGrant(book.id)
+    await this.reopenIfCompletedSince(request.jobId)
+    return removed
   }
 
   /** Records one human decision, clearing any earlier withdrawal of the same segment. */
   async approve(request: FallbackApprovalDecisionRequest): Promise<PersistedFallbackApproval> {
     const { job, book } = await this.load(request.jobId)
-    return this.catalogAccess.runExclusive(book.id, async () => {
-      const subject = this.subjectFor(book, request.segmentId)
-      this.assertNoRenderOwns(job)
-      // Reopened BEFORE the decision is written, so the unsafe failure direction is impossible: if
-      // the approval write then fails, the job is merely awaiting review with an unchanged decision.
-      await this.reopenIfCompleted(job)
-      const record = createFallbackApprovalRecord({
-        ...this.decisionFor(subject, book.id, request.decidedBy),
-        grantId: null,
-      })
-      await this.approvals.save(record)
-      await this.reopenIfCompletedSince(request.jobId)
-      return record
+    const subject = this.subjectFor(book, request.segmentId)
+    this.assertNoRenderOwns(job)
+    // Reopened BEFORE the decision is written, so the unsafe failure direction is impossible: if the
+    // approval write then fails, the job is merely awaiting review with an unchanged decision. The
+    // reverse order could leave a completed, publishable output beside a decision that had moved.
+    await this.reopenIfCompleted(job)
+    const record = createFallbackApprovalRecord({
+      ...this.decisionFor(subject, book.id, request.decidedBy),
+      grantId: null,
     })
+    await this.approvals.save(record)
+    await this.reopenIfCompletedSince(request.jobId)
+    return record
   }
 
   /**
@@ -280,20 +263,18 @@ export class ReviewFallbackApprovals {
    */
   async revoke(request: FallbackApprovalDecisionRequest): Promise<boolean> {
     const { job, book } = await this.load(request.jobId)
-    return this.catalogAccess.runExclusive(book.id, async () => {
-      // Proves the segment exists and does fall back, so a typo cannot look like a successful
-      // revocation of a segment that was never gated.
-      this.subjectFor(book, request.segmentId)
-      this.assertNoRenderOwns(job)
-      await this.reopenIfCompleted(job)
-      const removed = await this.approvals.revoke(book.id, request.segmentId, {
-        reason: 'human-withdrawal',
-        decidedBy: request.decidedBy,
-        decidedAt: this.decidedAt(),
-      })
-      await this.reopenIfCompletedSince(request.jobId)
-      return removed
+    // Proves the segment exists and does fall back, so a typo cannot look like a successful
+    // revocation of a segment that was never gated.
+    this.subjectFor(book, request.segmentId)
+    this.assertNoRenderOwns(job)
+    await this.reopenIfCompleted(job)
+    const removed = await this.approvals.revoke(book.id, request.segmentId, {
+      reason: 'human-withdrawal',
+      decidedBy: request.decidedBy,
+      decidedAt: this.decidedAt(),
     })
+    await this.reopenIfCompletedSince(request.jobId)
+    return removed
   }
 
   private async load(jobId: string): Promise<{ job: AudiobookJob; book: Book }> {

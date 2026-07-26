@@ -399,10 +399,10 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
   }
 
   async #waitForGroupExit(groupPid: number, budgetMs: number): Promise<boolean> {
-    const deadline = performance.now() + budgetMs
+    const deadline = Date.now() + budgetMs
     while (processGroupAlive(groupPid)) {
-      if (performance.now() >= deadline) return false
-      await delay(Math.min(GROUP_EXIT_POLL_MS, Math.max(1, deadline - performance.now())))
+      if (Date.now() >= deadline) return false
+      await delay(Math.min(GROUP_EXIT_POLL_MS, Math.max(1, deadline - Date.now())))
     }
     return true
   }

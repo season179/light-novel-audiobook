@@ -18,7 +18,6 @@ import {
   type AudioAssembler,
   type CompletedSegmentAudio,
   createGenerationCommandIdentity,
-  type DirectChapterOptions,
   type DirectedChapter,
   type DirectorModel,
   type DirectorModelFactory,
@@ -37,7 +36,6 @@ import {
   type SpeechEngineFactory,
   type SpeechRenderRequest,
 } from '../src/index.js'
-import { splitterIdentity } from '../src/split-directed-segments.js'
 import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
 
 const sourceHash = 'b'.repeat(64)
@@ -177,7 +175,6 @@ class FakeDirector implements DirectorModel {
   readonly corrupt: boolean
   releaseCalls = 0
   failRelease = false
-  receivedOptions: (DirectChapterOptions | undefined)[] = []
 
   constructor(
     events: string[],
@@ -189,12 +186,7 @@ class FakeDirector implements DirectorModel {
     this.identity = identity
   }
 
-  async directChapter(
-    _book: Book,
-    chapter: Chapter,
-    options?: DirectChapterOptions,
-  ): Promise<DirectedChapter> {
-    this.receivedOptions.push(options)
+  async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
     this.events.push(`direct:${chapter.id}`)
     const segments = directionFor(chapter)
     if (this.corrupt && chapter.position === 1) {
@@ -409,7 +401,6 @@ class InMemoryJobRepository implements JobRepository {
   readonly jobs = new Map<string, AudiobookJob>()
   readonly books = new Map<string, Book>()
   readonly audio = new Map<string, CompletedSegmentAudio>()
-  readonly completedOutputs = new Map<string, AudiobookOutput>()
   readonly reservations: OutputReservation[] = []
   returnInvalidReusableMetadata = false
   reserveDuplicatePaths = false
@@ -424,16 +415,6 @@ class InMemoryJobRepository implements JobRepository {
 
   async saveJob(job: AudiobookJob): Promise<void> {
     this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
-    if (job.state !== 'completed') this.completedOutputs.delete(job.id)
-  }
-
-  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
-    this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
-    this.completedOutputs.set(job.id, output)
-  }
-
-  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
-    return this.completedOutputs.get(jobId)
   }
 
   async saveBook(book: Book): Promise<void> {
@@ -629,27 +610,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     )
   })
 
-  it('forwards operational director options to every chapter without changing identity', async () => {
-    const controller = new AbortController()
-    const command: GenerateAudiobookCommand = {
-      jobId: 'job-options',
-      epubPath: '/uploads/story.epub',
-      epubSha256: sourceHash,
-      voices: makeCast(),
-      directorOptions: { signal: controller.signal, timeoutMs: 42_000 },
-    }
-    const result = await generate(app, command)
-
-    expect(result.job.state).toBe('completed')
-    expect(app.director.receivedOptions).toHaveLength(2)
-    for (const received of app.director.receivedOptions) {
-      expect(received?.timeoutMs).toBe(42_000)
-      expect(received?.signal).toBe(controller.signal)
-    }
-    const repeat = await generate(app, { ...command, directorOptions: undefined })
-    expect(repeat.output.m4bPath).toBe(result.output.m4bPath)
-  })
-
   it('reuses every unchanged completed segment and reserves successive outputs without overwrite', async () => {
     const first = await generate(app, {
       jobId: 'job-first',
@@ -704,35 +664,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.speech.renderCalls).toHaveLength(calls.render)
     expect(app.assembler.calls).toHaveLength(calls.assemble)
     expect(app.repository.reservations).toHaveLength(1)
-  })
-
-  it('does not expose a completed output after its approval catalog moves', async () => {
-    const command: GenerateAudiobookCommand = {
-      jobId: 'job-revoked-completed-fast-path',
-      epubPath: '/uploads/story.epub',
-      epubSha256: sourceHash,
-      voices: makeCast(),
-    }
-    await generate(app, command)
-    const review = await app.review.list(command.jobId)
-    const fallback = review.find((item) => item.decision === 'approved')
-    if (fallback === undefined) throw new Error('fixture produced no approved fallback segment')
-    const assembliesBeforeRevocation = app.assembler.calls.length
-
-    // Construct the durable residue of a catalog commit whose best-effort job reopen did not land.
-    // GenerateAudiobook is itself a public output reader, so it must reject this even when nobody
-    // called RenderAudiobook or a web projection first.
-    await app.approvals.revoke(bookId, fallback.segmentId, {
-      reason: 'human-withdrawal',
-      decidedBy: REVIEWER,
-      decidedAt: DECIDED_AT.toISOString(),
-    })
-
-    await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
-    const reopened = await app.repository.findJob(command.jobId)
-    expect(reopened?.state).toBe('awaiting_review')
-    expect(reopened?.catalogRevision).toBeNull()
-    expect(app.assembler.calls).toHaveLength(assembliesBeforeRevocation)
   })
 
   it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
@@ -824,7 +755,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
         directorIdentity,
         speechEngineIdentity: app.speech.identity,
         audioAssemblerIdentity,
-        splitterIdentity: splitterIdentity(),
       })
     const original = identity(app.extractor.identity, app.director.identity, app.assembler.identity)
     expect(
@@ -848,7 +778,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       directorIdentity: app.director.identity,
       speechEngineIdentity: app.speech.identity,
       audioAssemblerIdentity: app.assembler.identity,
-      splitterIdentity: splitterIdentity(),
     })
     const active = new AudiobookJob('job-active')
     active.bindCommand(identity)
