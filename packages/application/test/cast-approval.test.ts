@@ -245,16 +245,34 @@ describe('cast proposal and human approval', () => {
     expect(repository.approval).toBeUndefined()
   })
 
-  it('rejects a non-canonical decision time even though the use case always emits ISO', () => {
-    // decidedAt is always Date.toISOString() from the use case, so the validator is otherwise
-    // unreachable; pin it directly. '2026-07-26T12:00:00Z' parses as a valid date but is not the
-    // canonical form Date.toISOString() produces (it lacks the millisecond component).
-    expect(() =>
-      createCastApprovalRecord({
+  it('rejects a non-canonical decision time, guarding the persistence trust boundary', () => {
+    // The use case always emits a canonical instant via Date#toISOString(), so this validator is not
+    // reached on the happy approval path. It is still a live trust boundary, not a dead branch:
+    // SqliteCastApprovalRepository reconstructs stored rows through createCastApprovalRecord in both
+    // findCastApproval (on load) and saveCastApproval (on write), so a row whose decided_at was
+    // poisoned to a valid-but-non-canonical value is rejected on reconstruction instead of trusted.
+    // Pin canonical equality itself, not one spelling: several distinct non-canonical forms that are
+    // all valid dates must each be rejected, so no single-character or length-only narrowing survives.
+    let record: PersistedCastApproval | undefined
+    // Missing milliseconds (length 20): parseable, carries T and Z, but not canonical. Kills the
+    // must-contain-T and trailing-Z / ends-with-Z narrowings, which this form would otherwise satisfy.
+    expect(() => {
+      record = createCastApprovalRecord({
         ...proposal(),
         decidedBy: 'Reviewer One',
         decidedAt: '2026-07-26T12:00:00Z',
-      }),
-    ).toThrow(/canonical ISO 8601/)
+      })
+    }).toThrow(/canonical ISO 8601/)
+    expect(record).toBeUndefined()
+    // Space instead of 'T' (length 24): parseable and the right length, but not canonical. Kills the
+    // length === 24 narrowing, which the millisecond-less form above cannot catch on its own.
+    expect(() => {
+      record = createCastApprovalRecord({
+        ...proposal(),
+        decidedBy: 'Reviewer One',
+        decidedAt: '2026-07-26 12:00:00.000Z',
+      })
+    }).toThrow(/canonical ISO 8601/)
+    expect(record).toBeUndefined()
   })
 })
