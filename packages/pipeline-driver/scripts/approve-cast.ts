@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  characterSharesFallbackMaterial,
   parseCastProposal,
   ReviewCastApprovals,
   resolveReviewerIdentity,
@@ -62,6 +63,10 @@ try {
           approval.assignments.map((assignment) => assignment.materialProfileId),
         ).size,
         sharedMaterialGroupCount: sharedGroups.length,
+        characterSharesFallbackMaterial: characterSharesFallbackMaterial(
+          production.value.fallbackVoiceProfileId,
+          approval.assignments,
+        ),
         decidedBy: approval.decidedBy,
         decidedAt: approval.decidedAt,
       },

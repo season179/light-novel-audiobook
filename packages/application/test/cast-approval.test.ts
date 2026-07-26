@@ -2,6 +2,7 @@ import { DomainError } from '@light-novel-audiobook/domain'
 import { describe, expect, it } from 'vitest'
 import {
   type CastProposal,
+  characterSharesFallbackMaterial,
   createCastApprovalRecord,
   type PersistedCastApproval,
   parseCastProposal,
@@ -49,6 +50,18 @@ const proposal = () =>
   })
 
 describe('cast proposal and human approval', () => {
+  it('flags when a character shares the fallback voice material, derived from config plus assignments', () => {
+    // The flag is derived from the pinned fallback profile id plus the approved assignments — a caller
+    // supplies the config id and the assignments, never the boolean, so it cannot be stated
+    // independently and drift. Pin both directions; gutting the derivation (always-false, always-true,
+    // `.every` instead of `.some`, `!==` instead of `===`, or comparing the wrong field) fails at least
+    // one assertion. It is not part of the approval record, so the ledger hash is unaffected.
+    const assignments = proposal().assignments // materials: material-bright, material-low, material-low
+    expect(characterSharesFallbackMaterial('ryan-low-weary', assignments)).toBe(false)
+    expect(characterSharesFallbackMaterial('material-low', assignments)).toBe(true)
+    expect(characterSharesFallbackMaterial('material-low', [])).toBe(false)
+  })
+
   it('records an actor-attributed decision and exposes deliberate material sharing', async () => {
     const repository = new InMemoryCastApprovals()
     const review = new ReviewCastApprovals({
@@ -274,5 +287,111 @@ describe('cast proposal and human approval', () => {
       })
     }).toThrow(/canonical ISO 8601/)
     expect(record).toBeUndefined()
+  })
+
+  it('rejects one alias shared across two different speakers', () => {
+    // The director receives `{ speaker_id, aliases }` pairs, so the same alias under two speaker ids
+    // makes the roster ambiguous. The fixture is shaped to defeat the natural narrowings: three
+    // speakers put the collision on the first and last (non-adjacent after sort), so an
+    // "adjacent speakers only" check misses it; the shared alias sits in the MIDDLE of each carrying
+    // speaker's three sorted aliases, so "check only the first" and "check only the last" miss it.
+    expect(() =>
+      parseCastProposal({
+        bookId: 'book-abc123',
+        epubSha256: 'a'.repeat(64),
+        assignments: [
+          {
+            speakerId: 'speaker-amber',
+            aliases: ['Amber', 'Pebble', 'Zulu'],
+            materialProfileId: 'material-bright',
+            sharingGroupId: null,
+          },
+          {
+            speakerId: 'speaker-basil',
+            aliases: ['Basil'],
+            materialProfileId: 'material-low',
+            sharingGroupId: null,
+          },
+          {
+            speakerId: 'speaker-coral',
+            aliases: ['Coral', 'Pebble', 'Stone'],
+            materialProfileId: 'material-soft',
+            sharingGroupId: null,
+          },
+        ],
+      }),
+    ).toThrow(/shared by speakers/)
+  })
+
+  it('accepts distinct aliases across distinct speakers', () => {
+    const parsed = parseCastProposal({
+      bookId: 'book-abc123',
+      epubSha256: 'a'.repeat(64),
+      assignments: [
+        {
+          speakerId: 'speaker-amber',
+          aliases: ['Amber'],
+          materialProfileId: 'material-bright',
+          sharingGroupId: null,
+        },
+        {
+          speakerId: 'speaker-basil',
+          aliases: ['Basil'],
+          materialProfileId: 'material-low',
+          sharingGroupId: null,
+        },
+      ],
+    })
+    expect(parsed.assignments).toHaveLength(2)
+  })
+
+  it('rejects a cross-speaker alias collision even with a leading-space variant', () => {
+    // canonicalProposal trims aliases, so ' Amber' and 'Amber' are the same canonical string and must
+    // still collide. A raw (untrimmed) comparison would miss this.
+    expect(() =>
+      parseCastProposal({
+        bookId: 'book-abc123',
+        epubSha256: 'a'.repeat(64),
+        assignments: [
+          {
+            speakerId: 'speaker-amber',
+            aliases: [' Amber'],
+            materialProfileId: 'material-bright',
+            sharingGroupId: null,
+          },
+          {
+            speakerId: 'speaker-basil',
+            aliases: ['Amber'],
+            materialProfileId: 'material-low',
+            sharingGroupId: null,
+          },
+        ],
+      }),
+    ).toThrow(/shared by speakers/)
+  })
+
+  it('treats case-only alias differences as distinct strings, not a collision', () => {
+    // Aliases collide on exact canonical (trimmed) string equality, matching the existing within-speaker
+    // duplicate check (Set equality). 'Amber' and 'amber' are different strings, so they do not collide.
+    expect(() =>
+      parseCastProposal({
+        bookId: 'book-abc123',
+        epubSha256: 'a'.repeat(64),
+        assignments: [
+          {
+            speakerId: 'speaker-amber',
+            aliases: ['Amber'],
+            materialProfileId: 'material-bright',
+            sharingGroupId: null,
+          },
+          {
+            speakerId: 'speaker-basil',
+            aliases: ['amber'],
+            materialProfileId: 'material-low',
+            sharingGroupId: null,
+          },
+        ],
+      }),
+    ).not.toThrow()
   })
 })

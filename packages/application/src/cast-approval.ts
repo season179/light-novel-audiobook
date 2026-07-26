@@ -92,6 +92,22 @@ export const createCastApprovalRecord = (decision: CastApprovalDecision): Persis
   })
 }
 
+/**
+ * True iff some approved assignment is rendered from the configured fallback voice material — the
+ * same `syntheticSpeaker`, `instruction` and `seedSalt` every unresolved fallback line uses, so the
+ * character is voice-indistinguishable from the lines the director failed to attribute.
+ *
+ * This is a derivation over the pinned production config plus the approved assignments, never a
+ * restatable field: the caller supplies the config's fallback profile id and the assignments, and the
+ * boolean is computed here, so it cannot be stated independently and silently drift. Sharing stays
+ * admissible; this only surfaces the fact to the human who signs the cast. It is not part of the
+ * approval record and does not affect the ledger hash.
+ */
+export const characterSharesFallbackMaterial = (
+  fallbackVoiceProfileId: string,
+  assignments: readonly CastAssignment[],
+): boolean => assignments.some((item) => item.materialProfileId === fallbackVoiceProfileId)
+
 /** Sharing groups shown to the human before approval; an empty result means all material is exclusive. */
 export const sharedVoiceMaterialGroups = (
   assignments: readonly CastAssignment[],
@@ -166,6 +182,24 @@ const canonicalProposal = (proposal: CastProposal): CastProposal => {
 
   if (new Set(assignments.map((item) => item.speakerId)).size !== assignments.length) {
     throw new DomainError('A cast proposal cannot assign one speaker more than once')
+  }
+
+  // No alias string may belong to two different speakers. The director receives `{ speaker_id,
+  // aliases }` pairs, so the same alias under two speaker ids makes the roster ambiguous and invites
+  // misattribution to the wrong voice. Aliases are already trimmed and sorted above, so a
+  // leading-space variant still collides. Roster discovery — the primary defence — does not exist
+  // yet for M1, so this approval gate is defence in depth, not the primary fix.
+  const aliasOwner = new Map<string, string>()
+  for (const assignment of assignments) {
+    for (const alias of assignment.aliases) {
+      const owner = aliasOwner.get(alias)
+      if (owner !== undefined && owner !== assignment.speakerId) {
+        throw new DomainError(
+          `Cast alias ${JSON.stringify(alias)} is shared by speakers ${JSON.stringify(owner)} and ${JSON.stringify(assignment.speakerId)}`,
+        )
+      }
+      aliasOwner.set(alias, assignment.speakerId)
+    }
   }
 
   const byMaterial = new Map<string, CastAssignment[]>()
