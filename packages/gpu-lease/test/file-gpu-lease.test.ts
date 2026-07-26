@@ -1,11 +1,9 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { FileGpuLeaseCoordinator, type GpuLease } from '../src/index.js'
-import { clearOwnEntries, reapOrphanedHolders, registerHolder } from './fixture-reaper.js'
-import { hostileCoordinator } from './hostile-coordinator.js'
 
 const roots: string[] = []
 const children: ChildProcess[] = []
@@ -15,21 +13,8 @@ const RELEASE_GRACE_MS = 500
 /** Any release that outlives this is the unbounded wait the lease must never perform again. */
 const RELEASE_DEADLINE_MS = 6_000
 
-function trackHolder(path: string, armGatePath?: string): (holderPgid: number) => Promise<void> {
-  return async (holderPgid) => {
-    await registerHolder(holderPgid, dirname(path))
-    // Arming is strictly after the durable registration above: a hostile holder must never exist
-    // while it is unreapable (#67).
-    if (armGatePath !== undefined) await writeFile(armGatePath, '', 'utf8')
-  }
-}
-
 function coordinator(path: string): FileGpuLeaseCoordinator {
-  return new FileGpuLeaseCoordinator({
-    lockFilePath: path,
-    inspectExistingComputeProcesses: false,
-    onHolderStarted: trackHolder(path),
-  })
+  return new FileGpuLeaseCoordinator({ lockFilePath: path, inspectExistingComputeProcesses: false })
 }
 
 async function makeRoot(name: string, base = tmpdir()): Promise<string> {
@@ -92,36 +77,52 @@ async function fakeNvidiaSmi(
 }
 
 /**
- * Stands in for flock with a holder that starts benign and survives stdin end and SIGTERM only
- * after its arming gate appears (written by `trackHolder` after durable registration), so release
- * must then escalate to SIGKILL. `$9` is the token the coordinator appends to the holder argv.
+ * Stands in for flock with a holder that survives stdin end and SIGTERM, so release must escalate
+ * to SIGKILL. `$9` is the token the coordinator appends to the holder argv.
  */
-async function fakeStubbornFlock(
-  root: string,
-  body: string,
-): Promise<{ readonly flockPath: string; readonly armGatePath: string }> {
-  const flockPath = join(root, 'fake-flock')
-  const armGatePath = join(root, 'go-hostile')
+async function fakeStubbornFlock(root: string, body: string): Promise<string> {
+  const path = join(root, 'fake-flock')
   await writeFile(
-    flockPath,
-    [
-      '#!/bin/sh',
-      '# Benign until the arming gate exists: the watcher ends us on stdin EOF and SIGTERM keeps',
-      '# its default disposition, so an interrupt before registration leaves nothing behind (#67).',
-      '# fd 3 keeps the real stdin: a backgrounded subshell in sh gets /dev/null instead.',
-      'exec 3<&0',
-      '( while read -r _ <&3; do :; done; kill -TERM $$ ) &',
-      `while [ ! -f '${armGatePath}' ]; do sleep 0.02; done`,
-      "trap '' TERM",
-      body,
-      'while true; do sleep 1; done',
-      '',
-    ].join('\n'),
+    path,
+    ['#!/bin/sh', body, "trap '' TERM", 'while true; do sleep 1; done', ''].join('\n'),
     {
       mode: 0o700,
     },
   )
-  return { flockPath, armGatePath }
+  return path
+}
+
+/**
+ * Reproduces the real two-process subtree - `flock` holding the descriptor open for a nested Node
+ * process - but with a nested holder that ignores stdin EOF and SIGTERM. Only a process-group
+ * SIGKILL can end this holder, which is exactly the wedged holder the release path must bound.
+ */
+async function wedgedHolderFlock(root: string): Promise<string> {
+  const holder = join(root, 'wedged-holder.cjs')
+  await writeFile(
+    holder,
+    [
+      "process.stdout.write(process.argv[2] + '\\n')",
+      'process.stdin.resume()',
+      "process.on('SIGTERM', () => {})",
+      "process.on('SIGHUP', () => {})",
+      'setInterval(() => {}, 1_000)',
+      '',
+    ].join('\n'),
+    { mode: 0o600 },
+  )
+  const path = join(root, 'wedged-flock')
+  await writeFile(
+    path,
+    [
+      '#!/bin/sh',
+      '# $5 is the lock file, $6 the node executable, $9 the handshake token.',
+      `exec flock --exclusive --nonblock --conflict-exit-code 75 "$5" "$6" '${holder}' "$9"`,
+      '',
+    ].join('\n'),
+    { mode: 0o700 },
+  )
+  return path
 }
 
 /** A live process inside this test's process tree, standing in for our own llama.cpp server. */
@@ -330,33 +331,7 @@ afterEach(async () => {
   // Catch holders no array tracks: a test that fails or times out before release leaves a
   // coordinator-spawned holder alive, so reap every detached group leader this process parented.
   await reapDetachedHolderGroups()
-  // Clear this run's own entries from the durable registry: afterEach reaped them in-process.
-  await clearOwnEntries().catch(() => undefined)
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
-})
-
-// Reap orphans left by a previous run that was interrupted by SIGINT (Ctrl-C). afterEach never
-// runs on SIGINT, so the deliberately-unkillable fixture holders survive as orphans. The durable
-// registry proves ownership via PID + start time (PIDs recycle), so concurrent live runs are
-// never touched. This runs once before the suite, and its outcome is surfaced by the test
-// below: a reaper failure must never be swallowed silently, because this mechanism is what
-// prevents leaks for exactly this issue.
-type StartupReap =
-  | { readonly outcome: 'ok'; readonly reaped: number }
-  | { readonly outcome: 'error'; readonly error: unknown }
-let startupReap: StartupReap | undefined
-beforeAll(async () => {
-  startupReap = await reapOrphanedHolders().then(
-    (reaped) => ({ outcome: 'ok' as const, reaped }),
-    (error: unknown) => ({ outcome: 'error' as const, error }),
-  )
-})
-
-it('startup reaping of orphaned holders surfaced no failure (#67)', () => {
-  if (startupReap?.outcome === 'error') throw startupReap.error
-  // The outcome tag is load-bearing: an error branch that forged a success shape (e.g.
-  // `{ reaped: 0 }`) has no tag, so a swallowed failure still fails here.
-  expect(startupReap?.outcome, 'beforeAll must record a genuine startup reap outcome').toBe('ok')
 })
 
 describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name', ({ base }) => {
@@ -391,7 +366,6 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       lockFilePath: path,
       inspectExistingComputeProcesses: false,
       releaseGraceMs: RELEASE_GRACE_MS,
-      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
 
     // The nested Node process, not this pid, is what holds the locked descriptor.
@@ -413,13 +387,12 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
     const scripts = await makeRoot('gpu-flock-wedged-scripts')
     const root = await makeRoot('gpu-flock-wedged', base)
     const path = join(root, 'exclusive.lock')
-    const lease = await (
-      await hostileCoordinator({
-        lockFilePath: path,
-        scriptsRoot: scripts,
-        releaseGraceMs: RELEASE_GRACE_MS,
-      })
-    ).acquire('gemma')
+    const lease = await new FileGpuLeaseCoordinator({
+      lockFilePath: path,
+      flockExecutable: await wedgedHolderFlock(scripts),
+      inspectExistingComputeProcesses: false,
+      releaseGraceMs: RELEASE_GRACE_MS,
+    }).acquire('gemma')
     const directPid = await directHolderPid(path)
     // The wedged nested holder really owns the kernel lock, not just the pipe.
     await expect(coordinator(path).acquire('qwen3-tts')).rejects.toMatchObject({ code: 'busy' })
@@ -442,13 +415,12 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
       const scripts = await makeRoot('gpu-flock-orphan-scripts')
       const root = await makeRoot('gpu-flock-orphan', base)
       const path = join(root, 'exclusive.lock')
-      const lease = await (
-        await hostileCoordinator({
-          lockFilePath: path,
-          scriptsRoot: scripts,
-          releaseGraceMs: RELEASE_GRACE_MS,
-        })
-      ).acquire('gemma')
+      const lease = await new FileGpuLeaseCoordinator({
+        lockFilePath: path,
+        flockExecutable: await wedgedHolderFlock(scripts),
+        inspectExistingComputeProcesses: false,
+        releaseGraceMs: RELEASE_GRACE_MS,
+      }).acquire('gemma')
 
       // The worst case from the issue: no direct child left to signal, and the descendant that
       // holds the descriptor ignores every EOF.
@@ -475,7 +447,6 @@ describe.each(filesystems)('FileGpuLeaseCoordinator with the lock file on $name'
         lockFilePath: path,
         inspectExistingComputeProcesses: false,
         releaseGraceMs: RELEASE_GRACE_MS,
-        onHolderStarted: trackHolder(path),
       }).acquire('gemma')
       const directPid = await directHolderPid(path)
 
@@ -582,7 +553,6 @@ describe('FileGpuLeaseCoordinator', () => {
     const diagnostic = new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable: '/bin/echo',
-      onHolderStarted: trackHolder(path),
     })
 
     await expect(diagnostic.acquire('qwen3-tts')).rejects.toMatchObject({ code: 'diagnostic' })
@@ -616,7 +586,6 @@ describe('FileGpuLeaseCoordinator', () => {
     const lease = await new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable,
-      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     expect(lease.lockFilePath).toBe(path)
     await lease.release()
@@ -631,11 +600,7 @@ describe('FileGpuLeaseCoordinator', () => {
     })
 
     await expect(
-      new FileGpuLeaseCoordinator({
-        lockFilePath: path,
-        nvidiaSmiExecutable,
-        onHolderStarted: trackHolder(path),
-      }).acquire('gemma'),
+      new FileGpuLeaseCoordinator({ lockFilePath: path, nvidiaSmiExecutable }).acquire('gemma'),
     ).rejects.toMatchObject({ code: 'diagnostic' })
     const lease = await coordinator(path).acquire('qwen3-tts')
     await lease.release()
@@ -649,7 +614,6 @@ describe('FileGpuLeaseCoordinator', () => {
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
         nvidiaSmiExecutable: loaded,
-        onHolderStarted: trackHolder(path),
       }).acquire('gemma'),
     ).rejects.toMatchObject({ code: 'diagnostic' })
 
@@ -658,7 +622,6 @@ describe('FileGpuLeaseCoordinator', () => {
     const lease = await new FileGpuLeaseCoordinator({
       lockFilePath: path,
       nvidiaSmiExecutable: idle,
-      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     await lease.release()
   })
@@ -666,7 +629,7 @@ describe('FileGpuLeaseCoordinator', () => {
   it('reports the diagnostic cause even when stopping the holder needs SIGKILL', async () => {
     const root = await makeRoot('gpu-flock-cause')
     const path = join(root, 'exclusive.lock')
-    const { flockPath, armGatePath } = await fakeStubbornFlock(root, `printf '%s\\n' "$9"`)
+    const flockExecutable = await fakeStubbornFlock(root, `printf '%s\\n' "$9"`)
     const nvidiaSmiExecutable = await fakeNvidiaSmi(root, {
       computeApps: '1, [Not Found], [N/A]',
       memoryUsedMiB: '231',
@@ -675,10 +638,9 @@ describe('FileGpuLeaseCoordinator', () => {
     await expect(
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
-        flockExecutable: flockPath,
+        flockExecutable,
         nvidiaSmiExecutable,
         releaseGraceMs: 200,
-        onHolderStarted: trackHolder(path, armGatePath),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'diagnostic',
@@ -689,7 +651,7 @@ describe('FileGpuLeaseCoordinator', () => {
   it('stops a holder whose handshake is unusable instead of waiting on a live process', async () => {
     const root = await makeRoot('gpu-flock-unusable')
     const path = join(root, 'exclusive.lock')
-    const stubborn = await fakeStubbornFlock(
+    const flockExecutable = await fakeStubbornFlock(
       root,
       // Comfortably past the 4 KB handshake ceiling without ever printing the token.
       'i=0; while [ $i -lt 400 ]; do printf "not-the-token-%s\\n" "$i"; i=$((i+1)); done',
@@ -698,10 +660,9 @@ describe('FileGpuLeaseCoordinator', () => {
     await expect(
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
-        flockExecutable: stubborn.flockPath,
+        flockExecutable,
         inspectExistingComputeProcesses: false,
         releaseGraceMs: 200,
-        onHolderStarted: trackHolder(path, stubborn.armGatePath),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'unavailable',
@@ -721,7 +682,6 @@ describe('FileGpuLeaseCoordinator', () => {
       lockFilePath: path,
       nvidiaSmiExecutable,
       residentGpuMemoryThresholdMiB: 512,
-      onHolderStarted: trackHolder(path),
     }).acquire('gemma')
     await lease.release()
   })
@@ -736,13 +696,12 @@ it('release deadline is monotonic: a backward-jumping wall clock does not extend
   const scripts = await makeRoot('gpu-flock-monotonic-scripts')
   const root = await makeRoot('gpu-flock-monotonic')
   const path = join(root, 'exclusive.lock')
-  const lease = await (
-    await hostileCoordinator({
-      lockFilePath: path,
-      scriptsRoot: scripts,
-      releaseGraceMs: RELEASE_GRACE_MS,
-    })
-  ).acquire('gemma')
+  const lease = await new FileGpuLeaseCoordinator({
+    lockFilePath: path,
+    flockExecutable: await wedgedHolderFlock(scripts),
+    inspectExistingComputeProcesses: false,
+    releaseGraceMs: RELEASE_GRACE_MS,
+  }).acquire('gemma')
   const directPid = await directHolderPid(path) // also records the group for afterEach
   process.kill(directPid, 'SIGKILL') // direct holder gone; the nested holder survives in the group
   expect(processGroupAlive(directPid)).toBe(true)
