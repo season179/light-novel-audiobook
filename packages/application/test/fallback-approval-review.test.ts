@@ -429,11 +429,7 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
 
   it('rejects omitted, control-bearing or untrimmed actors at the decision persistence boundary', async () => {
     directedJob(app.jobs, bookOf())
-    for (const decidedBy of [
-      undefined,
-      `bad${String.fromCharCode(9)}actor`,
-      ' padded-actor ',
-    ]) {
+    for (const decidedBy of [undefined, `bad${String.fromCharCode(9)}actor`, ' padded-actor ']) {
       await expect(
         app.review.grantBookFallback({ jobId: 'job-review', decidedBy: decidedBy as string }),
       ).rejects.toThrow('valid actor without control characters')
