@@ -20,6 +20,7 @@ import type {
   SpeechEngine,
 } from './ports.js'
 import { createRenderInputIdentity } from './render-input-identity.js'
+import { splitDirectedSegments, splitterIdentity } from './split-directed-segments.js'
 
 export interface GenerateAudiobookCommand {
   readonly jobId: string
@@ -77,6 +78,7 @@ export class GenerateAudiobook {
       directorIdentity: this.directorModel.identity,
       speechEngineIdentity: this.speechEngine.identity,
       audioAssemblerIdentity: this.audioAssembler.identity,
+      splitterIdentity: splitterIdentity(),
     })
     let job = await this.jobs.findJob(command.jobId)
     if (
@@ -185,7 +187,11 @@ export class GenerateAudiobook {
           )
         }
 
-        const segments = ExactSourceCoverage.createSegments(chapter, directed.segments)
+        // #55: split over-long directed fragments into an exact partition before coverage is proven,
+        // so no clip can exceed the TTS duration ceiling. createSegments still verifies once-only
+        // passage coverage on the (now-split) fragments.
+        const fragments = splitDirectedSegments(directed.segments)
+        const segments = ExactSourceCoverage.createSegments(chapter, fragments)
         for (const segment of segments) {
           const resolved = voices.resolve(segment)
           segment.assignVoice(resolved.assignment)
