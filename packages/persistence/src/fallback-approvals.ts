@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type {
   BookFallbackGrant,
+  BookFallbackGrantSubject,
   FallbackApprovalCatalog,
   FallbackApprovalExclusion,
   FallbackApprovalRepository,
@@ -9,6 +10,7 @@ import type {
 } from '@light-novel-audiobook/application'
 import {
   createBookFallbackGrant,
+  createFallbackApprovalExclusion,
   createFallbackApprovalRecord,
 } from '@light-novel-audiobook/application'
 import { DomainError } from '@light-novel-audiobook/domain'
@@ -39,6 +41,7 @@ interface GrantRow {
   readonly book_id: string
   readonly decided_by: string
   readonly decided_at: string
+  readonly subjects_json: string
   readonly grant_id: string
   readonly grant_sha256: string
 }
@@ -80,7 +83,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
           .all(bookId) as unknown as ExclusionRow[]
         const grantRow = this.db
           .prepare(
-            `SELECT book_id, decided_by, decided_at, grant_id, grant_sha256
+            `SELECT book_id, decided_by, decided_at, subjects_json, grant_id, grant_sha256
                FROM fallback_book_grants WHERE book_id = ?`,
           )
           .get(bookId) as GrantRow | undefined
@@ -174,6 +177,15 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
     ) {
       throw new DomainError('Unsupported fallback revocation')
     }
+    const exclusion =
+      revocation.reason === 'human-withdrawal'
+        ? createFallbackApprovalExclusion({
+            bookId,
+            segmentId,
+            decidedBy: revocation.decidedBy,
+            decidedAt: revocation.decidedAt,
+          })
+        : undefined
     return withBusyRetryingTransaction(
       this.db,
       (): boolean => {
@@ -184,7 +196,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
         // book-wide grant would re-create the approval on the next reconciliation and the
         // revocation would mean nothing; recording a *system* invalidation would instead
         // permanently block a segment whose decision merely needs re-deriving.
-        if (revocation.reason === 'human-withdrawal') {
+        if (exclusion !== undefined) {
           this.db
             .prepare(
               `INSERT INTO fallback_approval_exclusions (book_id, segment_id, decided_by, decided_at)
@@ -193,7 +205,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
                  decided_by = excluded.decided_by,
                  decided_at = excluded.decided_at`,
             )
-            .run(bookId, segmentId, revocation.decidedBy, revocation.decidedAt)
+            .run(exclusion.bookId, exclusion.segmentId, exclusion.decidedBy, exclusion.decidedAt)
         }
         this.bumpRevision(bookId)
         return Number(result.changes) > 0
@@ -214,11 +226,13 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
       () => {
         this.db
           .prepare(
-            `INSERT INTO fallback_book_grants (book_id, decided_by, decided_at, grant_id, grant_sha256)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO fallback_book_grants
+               (book_id, decided_by, decided_at, subjects_json, grant_id, grant_sha256)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(book_id) DO UPDATE SET
                decided_by = excluded.decided_by,
                decided_at = excluded.decided_at,
+               subjects_json = excluded.subjects_json,
                grant_id = excluded.grant_id,
                grant_sha256 = excluded.grant_sha256`,
           )
@@ -226,6 +240,7 @@ export class SqliteFallbackApprovalRepository implements FallbackApprovalReposit
             canonical.bookId,
             canonical.decidedBy,
             canonical.decidedAt,
+            JSON.stringify(canonical.subjects),
             canonical.grantId,
             canonical.grantSha256,
           )
@@ -294,10 +309,19 @@ function reconstructApproval(row: ApprovalRow): PersistedFallbackApproval {
 }
 
 function reconstructGrant(row: GrantRow): BookFallbackGrant {
+  let subjects: readonly BookFallbackGrantSubject[]
+  try {
+    const parsed: unknown = JSON.parse(row.subjects_json)
+    if (!Array.isArray(parsed)) throw new Error('grant subjects are not an array')
+    subjects = parsed as BookFallbackGrantSubject[]
+  } catch {
+    throw new DomainError(`Stored book fallback grant for ${row.book_id} has invalid subjects`)
+  }
   const grant = createBookFallbackGrant({
     bookId: row.book_id,
     decidedBy: row.decided_by,
     decidedAt: row.decided_at,
+    subjects,
   })
   if (grant.grantId !== row.grant_id || grant.grantSha256 !== row.grant_sha256) {
     throw new DomainError(

@@ -6,6 +6,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { resolveReviewerIdentity as resolveApplicationReviewerIdentity } from '@light-novel-audiobook/application'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { REVIEWER_ENV_VARIABLE, resolveReviewerIdentity } from '../src/server/reviewer-identity.js'
@@ -24,6 +25,10 @@ const workspaceRoot = async (): Promise<string> => {
 }
 
 describe('reviewer identity (issue #45, round 3)', () => {
+  it('delegates to the canonical application resolver by reference', () => {
+    expect(resolveReviewerIdentity).toBe(resolveApplicationReviewerIdentity)
+  })
+
   it('prefers the configured reviewer and trims it', () => {
     expect(resolveReviewerIdentity({ [REVIEWER_ENV_VARIABLE]: '  Ada Lovelace  ' })).toBe(
       'Ada Lovelace',
@@ -36,6 +41,12 @@ describe('reviewer identity (issue #45, round 3)', () => {
     const resolved = resolveReviewerIdentity({})
     expect(resolved.length).toBeGreaterThan(0)
     expect(resolved).not.toBe('local-user')
+  })
+
+  it('fails closed when neither configuration nor an OS account can identify the reviewer', () => {
+    expect(() => resolveReviewerIdentity({}, () => undefined)).toThrow(
+      'Cannot record who approves a fallback voice',
+    )
   })
 
   it('treats a blank, oversized or control-bearing configured value as absent', () => {

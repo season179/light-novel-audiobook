@@ -32,6 +32,7 @@
     "dev": "pnpm dev:direct",
     "dev:direct": "pnpm --parallel --filter @light-novel-audiobook/web --filter @light-novel-audiobook/worker dev",
     "pipeline:demo": "tsx packages/pipeline-driver/scripts/run.ts",
+    "pipeline:review": "tsx packages/pipeline-driver/scripts/review-fallbacks.ts",
     "build": "pnpm --recursive --if-present build",
     "typecheck": "pnpm verify:toolchain && pnpm --recursive typecheck",
     "test": "pnpm test:toolchain && pnpm test:topology && pnpm test:voxcpm2 && pnpm test:voices && pnpm test:qwen3-tts && pnpm test:qwen-tts-engine-python && vitest run",

@@ -17,8 +17,10 @@ export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   approvalStillDescribes,
   type BookFallbackGrant,
+  type BookFallbackGrantSubject,
   collectFallbackSubjects,
   createBookFallbackGrant,
+  createFallbackApprovalExclusion,
   createFallbackApprovalRecord,
   FALLBACK_EXCERPT_MAX_LENGTH,
   type FallbackApprovalCatalog,
@@ -83,3 +85,4 @@ export {
   ReviewFallbackApprovals,
   type ReviewFallbackApprovalsDependencies,
 } from './review-fallback-approvals.js'
+export { REVIEWER_ENV_VARIABLE, resolveReviewerIdentity } from './reviewer-identity.js'
