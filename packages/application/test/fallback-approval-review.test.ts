@@ -18,6 +18,7 @@ import {
 } from '@light-novel-audiobook/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  ApprovalCatalogAccess,
   ApprovalCatalogReentryError,
   CompletedOutputAuthority,
   collectFallbackSubjects,
@@ -768,6 +769,46 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
     expect((outcome.error as Error).name).toBe('ApprovalCatalogReentryError')
     expect((outcome.error as Error).message).toContain(BOOK_ID)
     expect((outcome.error as Error).message).toContain('must not re-enter')
+  })
+
+  it('rejects all nested catalog acquisition before cross-book ownership can cycle', async () => {
+    const access = new ApprovalCatalogAccess()
+    let releaseBarrier: (() => void) | undefined
+    let entered = 0
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    const arrive = (): Promise<void> => {
+      entered += 1
+      if (entered === 2) releaseBarrier?.()
+      return barrier
+    }
+
+    const first = access.runExclusive('book-a', async () => {
+      await arrive()
+      return access.runExclusive('book-b', () => 'unreachable')
+    })
+    const second = access.runExclusive('book-b', async () => {
+      await arrive()
+      return access.runExclusive('book-a', () => 'unreachable')
+    })
+    const outcome = await Promise.race([
+      Promise.allSettled([first, second]),
+      new Promise<'blocked'>((resolve) => {
+        setTimeout(() => resolve('blocked'), 100)
+      }),
+    ])
+
+    expect(outcome).not.toBe('blocked')
+    if (outcome === 'blocked') return
+    expect(outcome).toHaveLength(2)
+    for (const result of outcome) {
+      expect(result.status).toBe('rejected')
+      if (result.status === 'rejected') {
+        expect(result.reason).toBeInstanceOf(ApprovalCatalogReentryError)
+        expect((result.reason as Error).message).toContain('must not nest')
+      }
+    }
   })
 
   it('reopens a job that completed while a review decision was in flight', async () => {
