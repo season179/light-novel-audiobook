@@ -127,6 +127,23 @@ describe('request-specific speaker role schema', () => {
     })
   })
 
+  it('rejects the old role IDs and unresolved boolean without a compatibility shim', () => {
+    const schema = directionWireOutputSchemaFor(request(['mira']))
+    expect(
+      schema.safeParse({
+        segments: [
+          {
+            ...common,
+            kind: 'narration',
+            speaker_id: 'narrator-role',
+            unresolved_speaker: false,
+            speaker_reason: null,
+          },
+        ],
+      }).success,
+    ).toBe(false)
+  })
+
   it('requires a non-empty reason for unresolved character-bearing content', () => {
     const schema = directionWireOutputSchemaFor(request(['mira']))
     for (const speakerReason of [null, '']) {
