@@ -18,7 +18,8 @@ export const resolveReviewerIdentity = (
   accountName: () => string | undefined = localAccountName,
 ): string => {
   const configured = environment[REVIEWER_ENV_VARIABLE]
-  const candidate = usable(configured) ?? usable(accountName())
+  const candidate =
+    normalizeReviewerIdentity(configured) ?? normalizeReviewerIdentity(accountName())
   if (candidate === undefined) {
     throw new Error(
       `Cannot record who approves a fallback voice: set ${REVIEWER_ENV_VARIABLE} to the reviewer's name. ` +
@@ -28,7 +29,7 @@ export const resolveReviewerIdentity = (
   return candidate
 }
 
-const usable = (value: string | undefined): string | undefined => {
+export const normalizeReviewerIdentity = (value: string | undefined): string | undefined => {
   if (value === undefined) return undefined
   const trimmed = value.trim()
   if (trimmed.length === 0 || trimmed.length > MAX_LENGTH) return undefined

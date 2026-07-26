@@ -427,6 +427,16 @@ describe('ReviewFallbackApprovals (issue #45)', () => {
     expect(app.review.grantBookFallback.length).toBe(1)
   })
 
+  it('rejects control-bearing or untrimmed actors at the decision persistence boundary', async () => {
+    directedJob(app.jobs, bookOf())
+    for (const decidedBy of [`bad${String.fromCharCode(9)}actor`, ' padded-actor ']) {
+      await expect(
+        app.review.grantBookFallback({ jobId: 'job-review', decidedBy }),
+      ).rejects.toThrow('valid actor without control characters')
+    }
+    expect((await app.approvals.readCatalog(BOOK_ID)).grant).toBeUndefined()
+  })
+
   it('returns a completed job to review when one decision is revoked, and only then', async () => {
     const book = bookOf()
     const job = directedJob(app.jobs, book)

@@ -6,12 +6,10 @@ import {
   type Segment,
   type SegmentKind,
 } from '@light-novel-audiobook/domain'
+import { normalizeReviewerIdentity } from './reviewer-identity.js'
 
 /** Bumped only when the hashed decision fields change; every existing approval then restales. */
 const APPROVAL_SCHEMA_VERSION = 2
-
-/** An actor string is required on every decision. Nothing may record an anonymous approval. */
-const MAX_ACTOR_LENGTH = 128
 
 /** The identity shape `QwenTtsSpeechEngine` validates before it will render a fallback segment. */
 const APPROVAL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
@@ -325,8 +323,8 @@ function validateDecision(decision: FallbackApprovalDecision): void {
 }
 
 function validateActor(decidedBy: string): void {
-  if (decidedBy.trim().length === 0 || decidedBy.length > MAX_ACTOR_LENGTH) {
-    throw new DomainError('A fallback decision requires the actor who made it')
+  if (normalizeReviewerIdentity(decidedBy) !== decidedBy) {
+    throw new DomainError('A fallback decision requires a valid actor without control characters')
   }
 }
 
