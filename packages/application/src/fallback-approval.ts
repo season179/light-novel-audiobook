@@ -323,7 +323,8 @@ function validateDecision(decision: FallbackApprovalDecision): void {
 }
 
 function validateActor(decidedBy: string): void {
-  if (normalizeReviewerIdentity(decidedBy) !== decidedBy) {
+  const normalized = normalizeReviewerIdentity(decidedBy)
+  if (normalized === undefined || normalized !== decidedBy) {
     throw new DomainError('A fallback decision requires a valid actor without control characters')
   }
 }
