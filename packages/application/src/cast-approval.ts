@@ -184,6 +184,24 @@ const canonicalProposal = (proposal: CastProposal): CastProposal => {
     throw new DomainError('A cast proposal cannot assign one speaker more than once')
   }
 
+  // No alias string may belong to two different speakers. The director receives `{ speaker_id,
+  // aliases }` pairs, so the same alias under two speaker ids makes the roster ambiguous and invites
+  // misattribution to the wrong voice. Aliases are already trimmed and sorted above, so a
+  // leading-space variant still collides. Roster discovery — the primary defence — does not exist
+  // yet for M1, so this approval gate is defence in depth, not the primary fix.
+  const aliasOwner = new Map<string, string>()
+  for (const assignment of assignments) {
+    for (const alias of assignment.aliases) {
+      const owner = aliasOwner.get(alias)
+      if (owner !== undefined && owner !== assignment.speakerId) {
+        throw new DomainError(
+          `Cast alias ${JSON.stringify(alias)} is shared by speakers ${JSON.stringify(owner)} and ${JSON.stringify(assignment.speakerId)}`,
+        )
+      }
+      aliasOwner.set(alias, assignment.speakerId)
+    }
+  }
+
   const byMaterial = new Map<string, CastAssignment[]>()
   const materialBySharingGroup = new Map<string, string>()
   for (const assignment of assignments) {
