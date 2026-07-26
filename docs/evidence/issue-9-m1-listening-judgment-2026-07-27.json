@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "issue": 9,
+  "kind": "human listening judgment on the first end-to-end M1 result",
+  "decisionDate": "2026-07-27",
+  "criterion": "Epic #9 exit criterion: the user judges the first end-to-end result useful enough to continue improving. No automated, model, browser, container, or mutation evidence can substitute for it; it was the last unproven criterion on the epic.",
+  "humanReview": {
+    "status": "completed-without-numeric-scores",
+    "reviewerIdentity": "omitted",
+    "numericScoresProvided": false,
+    "numericScores": null,
+    "verbatimScope": "the user reported listening to all staged audio and judged all of it good",
+    "judgment": "good; useful enough to continue improving"
+  },
+  "listened": {
+    "audiobooks": [
+      {
+        "label": "the user's own light novel, single chapter",
+        "note": "Title and all story content withheld: the source EPUB is copyrighted and this repository is public. Only container measurements and hashes are recorded.",
+        "bytes": 3534845,
+        "durationSeconds": 314.66,
+        "chapterMarkers": 1,
+        "sha256": "5ffd6f6fc6ad6f995509d1b70db2f0ae271eeedb16b3f793ef7745912eb828f6"
+      },
+      {
+        "label": "the user's own light novel, two chapters",
+        "note": "Same withholding. This run exercised the review gate for real: 2 unresolved speakers, 1 decision group, one book-wide approval.",
+        "bytes": 2605817,
+        "durationSeconds": 213.42,
+        "chapterMarkers": 2,
+        "sha256": "a4b09183f9e47773d4a29c601094ea089f09f3fed707b4c0f9f3477f196004cc"
+      },
+      {
+        "label": "the committed CC0 acceptance fixture",
+        "note": "Openly nameable because the fixture exists precisely so real prose can be discussed.",
+        "bytes": 957806,
+        "durationSeconds": 120.08,
+        "chapterMarkers": 2,
+        "sha256": "236a680c528d63ae78c976f1c9c49fe6157901892cf4cb074b3b9d87c5e638d3"
+      }
+    ],
+    "voiceSamples": {
+      "note": "One line per approved profile, rendered through the production worker path at the seeds production derives. Lines were written for the render and come from no book.",
+      "count": 10,
+      "outputs": [
+        {
+          "profileId": "aiden-calm-narrator",
+          "bytes": 126764,
+          "sha256": "f26d14f224d6cf1fbff358250770b8f21b8e772eb31913a231fe33b26c007b07"
+        },
+        {
+          "profileId": "dylan-neutral-read",
+          "bytes": 126764,
+          "sha256": "5b4b7dc50024f6345c58b668b6ce320de5019be5a281bcdc6ea6977740f5219f"
+        },
+        {
+          "profileId": "eric-neutral-read",
+          "bytes": 103724,
+          "sha256": "aa11e628b3485d696039d9341ea7ff1c489a67883a53d096430c37be193a6ac2"
+        },
+        {
+          "profileId": "ono-anna-neutral-read",
+          "bytes": 130604,
+          "sha256": "e9c2b15795ed2bb58dfc9a4f56da97452a2f8807603df2d203efda8c317e9aba"
+        },
+        {
+          "profileId": "ryan-energetic-baseline",
+          "bytes": 153644,
+          "sha256": "77aad338525d8cfe7dd42aac1e019eda967d12babc965b174a1e54b11bcd75b7"
+        },
+        {
+          "profileId": "ryan-low-weary",
+          "bytes": 207404,
+          "sha256": "49a6b7754501be5a25e3a1fd91d258c46e43ba1f6f0c2c717b9628d8e0becef5"
+        },
+        {
+          "profileId": "serena-neutral-read",
+          "bytes": 153644,
+          "sha256": "eff7d4ef4a190fa1286069743aaaa24c59e3f7a1d461076a9c7aa5eac4d11f1a"
+        },
+        {
+          "profileId": "sohee-neutral-read",
+          "bytes": 134444,
+          "sha256": "dc1698212ad566a36c0f21fddc26ac250f04b26219ba389e09989e658bb1f28f"
+        },
+        {
+          "profileId": "uncle-fu-neutral-read",
+          "bytes": 119084,
+          "sha256": "77720485af3e00923b2ba4afba55c97ef25ac826ab28e82456feeb604afb8634"
+        },
+        {
+          "profileId": "vivian-neutral-read",
+          "bytes": 126764,
+          "sha256": "c63c6e185ef0aa62ffa1674ca6434593fc18ab92468748e2b6b165f439555f30"
+        }
+      ]
+    }
+  },
+  "decision": {
+    "result": "GO",
+    "epic9Closure": "all exit criteria satisfied",
+    "explanation": "The listening judgment was the only criterion no engineering could close. With it given, M1 has no open exit criterion. This approves the M1 result as useful enough to keep improving; it is not an approval of M2 scope, of any voice under an instruction it was not auditioned with, or of any output not hashed above."
+  },
+  "redaction": {
+    "bookTitle": "withheld",
+    "sourceText": "none",
+    "chapterTitles": "none",
+    "characterNames": "none",
+    "absolutePaths": "omitted",
+    "reviewerIdentity": "omitted",
+    "audio": "external only; never committed"
+  }
+}
