@@ -1,0 +1,117 @@
+{
+  "schema": "issue-21-gemma-provenance@1",
+  "generatedAt": "2026-07-26T20:51:32.704Z",
+  "fixture": {
+    "sha256": "0a4e0e6723a788ca824b0aac6a2c3d641a6505eec4dfb0252bef61eb7a1af570",
+    "byteLength": 5662,
+    "slice": {
+      "firstChapter": 1,
+      "maxChapters": 1,
+      "maxPassagesPerChapter": 1
+    }
+  },
+  "sampling": {
+    "intervalMs": 75,
+    "samples": 192
+  },
+  "llamaServer": {
+    "pid": 2789715,
+    "executablePath": "/home/windows_11/.cache/light-novel-audiobook/issue-6-brain/llama.cpp/build/bin/llama-server",
+    "processStartTimeTicks": "7553234",
+    "firstObservedAtMonotonicNs": "75532371066154",
+    "lastObservedAtMonotonicNs": "75539746250982",
+    "deathObservedAtMonotonicNs": "75539936628060",
+    "commandModelPath": "/home/windows_11/.cache/light-novel-audiobook/issue-6-brain/models/gemma-4-26B_q4_0-it.gguf",
+    "commandAlias": "google-gemma-4-26b-a4b-it-qat-q4-0",
+    "listenerOwnedAtModelProbe": true,
+    "modelEndpointStatus": 200,
+    "reportedModelIds": [
+      "google-gemma-4-26b-a4b-it-qat-q4-0"
+    ],
+    "pinnedGgufPath": "/home/windows_11/.cache/light-novel-audiobook/issue-6-brain/models/gemma-4-26B_q4_0-it.gguf",
+    "pinnedGgufByteLength": 14439363584
+  },
+  "directorRequests": [
+    {
+      "schema": "gemma-director-request-receipt@1",
+      "ordinal": 1,
+      "requestId": "direction-d8acf28f36159bd465de16415b4ce5b3-w001",
+      "requestSha256": "00085b45e2b1467693d5541f579c83e9149b12a3a8c3a82ced4b90772aa47c7c",
+      "passageIds": [
+        "book-59b6080ec65dac5f9898fdb1-ch0001-p000001"
+      ],
+      "passageCount": 1,
+      "responseStatus": 200,
+      "responseCompleted": true,
+      "startedAtMonotonicNs": "75537570322164",
+      "completedAtMonotonicNs": "75539477532569",
+      "llamaServerPid": 2789715
+    }
+  ],
+  "kernelFlockIntervals": [
+    {
+      "owner": "gemma",
+      "holderPid": 2789701,
+      "mode": "WRITE",
+      "startedAtMonotonicNs": "75532137906774",
+      "endedAtMonotonicNs": "75539936628060",
+      "samples": 58,
+      "releaseObserved": true,
+      "holderAliveAfterRelease": false
+    },
+    {
+      "owner": "qwen3-tts",
+      "holderPid": 2789858,
+      "mode": "WRITE",
+      "startedAtMonotonicNs": "75539936628060",
+      "endedAtMonotonicNs": "75553259013057",
+      "samples": 115,
+      "releaseObserved": true,
+      "holderAliveAfterRelease": false
+    }
+  ],
+  "qwen": {
+    "workerPids": [
+      2789874
+    ]
+  },
+  "run": {
+    "state": "completed",
+    "stage": "completed",
+    "generatedSegments": 1,
+    "reusedSegments": 0,
+    "m4bBytes": 15264,
+    "m4bSha256": "5247ad1a4b5deae89c73b2bd773da10210c29a23f46ba8bc9df7f8d8a013fa4a"
+  },
+  "cleanup": {
+    "gpuBefore": {
+      "memoryUsedMiB": 379,
+      "memoryTotalMiB": 16303,
+      "utilizationPercent": 0
+    },
+    "gpuAfter": {
+      "memoryUsedMiB": 379,
+      "memoryTotalMiB": 16303,
+      "utilizationPercent": 0
+    },
+    "expectedIdleMemoryMiB": 379,
+    "modelProcessesRemaining": 0,
+    "kernelFlockHoldersRemaining": 0,
+    "webPortFree": true,
+    "directorPortFree": true,
+    "quarantineMarkerPresent": false
+  },
+  "assertions": {
+    "realLlamaServerObserved": true,
+    "listenerOwnedByObservedLlamaServer": true,
+    "selectedModelReportedByServer": true,
+    "directorRequestCount": 1,
+    "everyDirectorRequestServedByObservedLlamaServer": true,
+    "gemmaFlockHolderPid": 2789701,
+    "qwenFlockHolderPid": 2789858,
+    "gemmaAndQwenIntervalsDisjoint": true,
+    "llamaDeadBeforeQwen": true,
+    "noLlamaQwenCoResidency": true,
+    "postRunClean": true
+  }
+}

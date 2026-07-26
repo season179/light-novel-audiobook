@@ -20,6 +20,7 @@ import {
   DirectorFidelityExhaustedError,
   type DirectorProgressEvent,
   type DirectorProgressStore,
+  type DirectorRequestReceipt,
   type DirectorRuntimeLifecycle,
   type ExclusiveGpuLeaseCoordinator,
   FIDELITY_RECOVERY_POLICY,
@@ -306,6 +307,7 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
       gpuLeaseLockFilePath?: string
       lifecycleEvents?: string[]
       lifecycle?: CountingLifecycle
+      onRequestReceipt?: (receipt: DirectorRequestReceipt) => void | Promise<void>
     } = {},
   ): {
     model: GemmaDirectorModel
@@ -338,6 +340,7 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
         }),
       },
       progressStore: progress,
+      onRequestReceipt: overrides.onRequestReceipt,
       lifecycle,
       gpuLeaseCoordinator,
       gpuLeaseLockFilePath,
@@ -345,6 +348,38 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     models.push(model)
     return { model, progress, lifecycle, gpuLeaseCoordinator }
   }
+
+  it('emits a content-free receipt for each served direction request', async () => {
+    const receipts: DirectorRequestReceipt[] = []
+    const book = makeBook()
+    const { model } = create({
+      onRequestReceipt: (receipt) => {
+        receipts.push(receipt)
+      },
+    })
+
+    await model.directChapter(book, book.chapters[0] as Chapter)
+
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toEqual({
+      schema: 'gemma-director-request-receipt@1',
+      ordinal: 1,
+      requestId: expect.any(String),
+      requestSha256: expect.stringMatching(/^[a-f\d]{64}$/u),
+      passageIds: ['passage-001', 'passage-002'],
+      passageCount: 2,
+      responseStatus: 200,
+      responseCompleted: true,
+      startedAtMonotonicNs: expect.stringMatching(/^\d+$/u),
+      completedAtMonotonicNs: expect.stringMatching(/^\d+$/u),
+    })
+    expect(BigInt(receipts[0]?.completedAtMonotonicNs ?? '0')).toBeGreaterThanOrEqual(
+      BigInt(receipts[0]?.startedAtMonotonicNs ?? '1'),
+    )
+    expect(Object.keys(receipts[0] ?? {})).not.toEqual(
+      expect.arrayContaining(['body', 'content', 'message', 'prompt', 'sourceText']),
+    )
+  })
 
   it('implements directChapter(Book, Chapter) with exact issue #29 DirectedChapter mapping', async () => {
     const book = makeBook()

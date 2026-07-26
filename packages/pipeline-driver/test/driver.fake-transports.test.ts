@@ -73,6 +73,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       server.baseUrl,
     )
 
+    const requestReceipts: Array<Record<string, unknown>> = []
     const report = await runPipeline({
       jobId: 'driver-fixture-run',
       epubPath: FIXTURE_EPUB,
@@ -80,6 +81,9 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       repositoryRoot: REPOSITORY_ROOT,
       transports,
       limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+      onDirectorRequestReceipt: (receipt) => {
+        requestReceipts.push({ ...receipt })
+      },
     })
 
     // A real export exists on disk, produced by pinned ffmpeg from real segment audio.
@@ -123,6 +127,14 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     // The fake transport was asked for exactly the sliced chapters, one request each.
     expect(server.requests).toHaveLength(1)
     expect(server.requests.map((request) => request.passageCount)).toEqual([1])
+    expect(requestReceipts).toHaveLength(1)
+    expect(requestReceipts[0]).toMatchObject({
+      schema: 'gemma-director-request-receipt@1',
+      ordinal: 1,
+      passageCount: 1,
+      responseStatus: 200,
+      responseCompleted: true,
+    })
   }, 600_000)
 
   it('loads the approved cast from the review ledger and resolves character-bearing segments', async () => {

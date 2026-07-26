@@ -36,7 +36,7 @@
  *
  * Only sanitized evidence is printed — counts, hashes, byte sizes, durations, paths. Never story text.
  */
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,6 +90,10 @@ if (!fakeDirectorModes.includes(fakeDirectorMode as FakeDirectorMode)) {
 if (mode === 'real' && process.env.LNA_FAKE_DIRECTOR_MODE !== undefined) {
   throw new Error('LNA_FAKE_DIRECTOR_MODE cannot be used with real transports')
 }
+const directorReceiptsPath = process.env.LNA_DIRECTOR_RECEIPTS_PATH
+if (directorReceiptsPath !== undefined && mode !== 'real') {
+  throw new Error('LNA_DIRECTOR_RECEIPTS_PATH is real-mode provenance only')
+}
 
 const workspaceRoot = flag('workspace')
   ? path.resolve(flag('workspace') as string)
@@ -133,8 +137,12 @@ const transports =
 process.stderr.write(
   `[driver] mode=${mode} job=${jobId} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
 )
-
+let directorReceipts: Awaited<ReturnType<typeof open>> | undefined
 try {
+  directorReceipts =
+    directorReceiptsPath === undefined
+      ? undefined
+      : await open(path.resolve(directorReceiptsPath), 'wx', 0o600)
   const report = await runPipeline({
     jobId,
     epubPath,
@@ -150,6 +158,15 @@ try {
         `[direction] ${event.state} ${event.completedPassages}/${event.totalPassages}\n`,
       )
     },
+    onDirectorRequestReceipt:
+      directorReceipts === undefined
+        ? undefined
+        : async (receipt) => {
+            if (directorReceipts === undefined) {
+              throw new Error('Director receipt file closed before the request settled')
+            }
+            await directorReceipts.appendFile(`${JSON.stringify(receipt)}\n`)
+          },
   })
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 } catch (error) {
@@ -176,5 +193,7 @@ try {
   process.stderr.write(`[driver] resume with: --job-id ${jobId} --workspace ${workspaceRoot}\n`)
   process.exitCode = 1
 } finally {
+  await directorReceipts?.close()
+  await transports.close()
   await directorServer?.stop()
 }
