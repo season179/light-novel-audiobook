@@ -85,6 +85,46 @@ describe('reviewer identity (issue #45, round 3)', () => {
     expect(after.items.some((item) => item.decidedBy === 'local-user')).toBe(false)
   }, 30_000)
 
+  it('records the resolved actor — never a manufactured constant — when no reviewer is supplied', async () => {
+    // Issue #87: every other API-level test supplies `reviewer:` explicitly, so the suite passed
+    // 96/96 even when the composition-root consumption site silently forked the resolver. This test
+    // omits the option, so `resolveReviewerIdentity()` actually runs there. The only branch where the
+    // fork described in #87 (`LNA_REVIEWER` then the constant `'local-user'`) differs from the
+    // canonical resolver (`LNA_REVIEWER` then the OS account) is the OS-account fallback, so the
+    // configured value is cleared for this test to force that branch and make the guard bite on any
+    // host. The recorded actor must equal the canonical resolver's output for this same environment
+    // and must never be the manufactured constant.
+    const previousReviewer = process.env[REVIEWER_ENV_VARIABLE]
+    delete process.env[REVIEWER_ENV_VARIABLE]
+    try {
+      const expected = resolveReviewerIdentity()
+      const api = await createAudiobookWebApi({
+        workspaceRoot: await workspaceRoot(),
+      })
+      const upload = await api.uploadEpub({
+        fileName: 'resolved.epub',
+        bytes: createStubEpubBytes('resolved'),
+      })
+      const started = await api.startGeneration({ uploadId: upload.uploadId })
+      // Poll by attempt count rather than wall-clock: Date.now() is not monotonic on this host.
+      for (let attempt = 0; attempt < 500; attempt++) {
+        const job = await api.getJobState({ jobId: started.jobId })
+        if (job !== null && !job.active && job.state === 'awaiting_review') break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+
+      const after = await api.approveAllFallbacks({ jobId: started.jobId })
+      expect(after.grantedBy).toBe(expected)
+      expect(after.grantedBy).not.toBe('local-user')
+      expect(after.items.length).toBeGreaterThan(0)
+      expect(after.items.every((item) => item.decidedBy === expected)).toBe(true)
+      expect(after.items.some((item) => item.decidedBy === 'local-user')).toBe(false)
+    } finally {
+      if (previousReviewer === undefined) delete process.env[REVIEWER_ENV_VARIABLE]
+      else process.env[REVIEWER_ENV_VARIABLE] = previousReviewer
+    }
+  }, 30_000)
+
   it('does not let the caller supply the actor at all', async () => {
     // Structural: the review operations take a single argument with no actor field, so a browser
     // cannot attest to who decided and the server cannot be talked into recording someone else.
