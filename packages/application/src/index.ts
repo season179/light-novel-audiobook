@@ -13,6 +13,7 @@ export {
   type DirectAudiobookDependencies,
   type DirectAudiobookResult,
 } from './direct-audiobook.js'
+export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   approvalStillDescribes,
   type BookFallbackGrant,

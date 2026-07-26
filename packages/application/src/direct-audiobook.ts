@@ -9,6 +9,7 @@ import { createGenerationCommandIdentity } from './generation-command-identity.j
 import type {
   AudioAssembler,
   DirectChapterOptions,
+  DirectorModel,
   DirectorModelFactory,
   EpubExtractor,
   JobRepository,
@@ -77,7 +78,6 @@ export class DirectAudiobook {
 
   commandIdentity(command: DirectAudiobookCommand): string {
     return createGenerationCommandIdentity({
-      epubPath: command.epubPath,
       epubSha256: command.epubSha256,
       voices: command.voices,
       epubExtractorIdentity: this.epubExtractor.identity,
@@ -141,9 +141,26 @@ export class DirectAudiobook {
     await this.jobs.saveJob(job)
 
     try {
-      const book = await this.epubExtractor.extract({ epubPath: command.epubPath })
-      if (book.source.sha256 !== command.epubSha256.toLowerCase()) {
-        throw new DomainError('Extracted EPUB identity does not match the generation command')
+      // Resume from the persisted approved script when one exists (issue #54). Direction is an
+      // LLM whose delivery and speaker output is hashed into every segment's content address, and
+      // it is not bit-deterministic run to run: re-directing a chapter whose script survived
+      // re-renders correct audio under new identities and orphans the old WAVs. `findBook` reads
+      // back exactly the chapters direction approved — approved chapters are skipped in
+      // `directBook`, and only never-directed (draft) chapters cost director calls.
+      const persisted = job.bookId === null ? undefined : await this.jobs.findBook(job.bookId)
+      let book: Book
+      if (persisted !== undefined) {
+        if (persisted.source.sha256 !== command.epubSha256.toLowerCase()) {
+          throw new DomainError(
+            'Persisted book EPUB identity does not match the generation command',
+          )
+        }
+        book = persisted
+      } else {
+        book = await this.epubExtractor.extract({ epubPath: command.epubPath })
+        if (book.source.sha256 !== command.epubSha256.toLowerCase()) {
+          throw new DomainError('Extracted EPUB identity does not match the generation command')
+        }
       }
       job.attachBook(book.id)
       await this.jobs.saveBook(book)
@@ -176,21 +193,54 @@ export class DirectAudiobook {
     job: AudiobookJob,
     directorOptions?: DirectChapterOptions,
   ): Promise<void> {
-    // Constructed here and not in the constructor: this is the only place a director is used, and a
-    // render-only resume never reaches it.
-    const directorModel = await this.directorModelFactory.create()
-    if (directorModel.identity !== this.directorModelFactory.identity) {
-      // The command identity was already bound to the factory's value. A director that disagrees
-      // would direct under inputs the job does not describe.
-      await directorModel.release()
-      throw new DomainError('Director identity does not match the identity its factory advertised')
+    // Built lazily and only if a chapter actually needs directing: a resume whose script was
+    // fully persisted reaches here but must not construct a terminal, GPU-owning adapter at all.
+    let directorModel: DirectorModel | undefined
+    const director = async (): Promise<DirectorModel> => {
+      if (directorModel !== undefined) return directorModel
+      const created = await this.directorModelFactory.create()
+      if (created.identity !== this.directorModelFactory.identity) {
+        // The command identity was already bound to the factory's value. A director that
+        // disagrees would direct under inputs the job does not describe.
+        await created.release()
+        throw new DomainError(
+          'Director identity does not match the identity its factory advertised',
+        )
+      }
+      directorModel = created
+      return created
     }
+
     let failure: unknown
     try {
       for (const chapter of book.chapters) {
+        // `findBook` approves exactly the chapters whose script was persisted, so an approved
+        // chapter is resumed where it stands, never re-directed. Its fallback warnings are
+        // re-recorded from the persisted assignments, because recovery reset the job's warning
+        // list and review reads it. Anything else must be freshly extracted (draft); refuse to
+        // guess at any other state.
+        if (chapter.state === 'approved') {
+          for (const segment of chapter.segments) {
+            const assignment = segment.voiceAssignment
+            if (assignment?.usesFallback === true && assignment.fallbackReason !== null) {
+              job.addFallbackWarning({
+                segmentId: segment.id,
+                speakerId: segment.speakerId,
+                voiceProfileId: assignment.voiceProfileId,
+                reason: assignment.fallbackReason,
+              })
+            }
+          }
+          continue
+        }
+        if (chapter.state !== 'draft') {
+          throw new DomainError(
+            `Chapter ${chapter.id} is ${chapter.state}; only draft chapters can be directed`,
+          )
+        }
         job.report(chapter.id, `Directing ${chapter.title}`)
         await this.jobs.saveJob(job)
-        const directed = await directorModel.directChapter(
+        const directed = await (await director()).directChapter(
           book,
           chapter,
           directorOptions === undefined ? undefined : { ...directorOptions },
@@ -226,11 +276,14 @@ export class DirectAudiobook {
     } catch (error: unknown) {
       failure = error
     }
-    // The director is always released, but a failing release must not mask why direction failed.
-    try {
-      await directorModel.release()
-    } catch (error: unknown) {
-      failure ??= error
+    // The director is always released once built, but a failing release must not mask why
+    // direction failed. A resume that directed nothing never built one.
+    if (directorModel !== undefined) {
+      try {
+        await directorModel.release()
+      } catch (error: unknown) {
+        failure ??= error
+      }
     }
     if (failure !== undefined) throw failure
   }

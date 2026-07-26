@@ -86,3 +86,17 @@ export function gemmaDirectorIdentityMaterial(settings: GemmaDirectorIdentitySet
 export function createGemmaDirectorIdentity(settings: GemmaDirectorIdentitySettings): string {
   return canonicalSha256(gemmaDirectorIdentityMaterial(settings))
 }
+
+/**
+ * Stable command identity for what Gemma can produce, independent of where its server and GPU lock
+ * happen to live. The adapter keeps its full operational identity; resumable jobs bind this one.
+ */
+export function createGemmaDirectorContentIdentity(
+  settings: GemmaDirectorIdentitySettings,
+): string {
+  return createGemmaDirectorIdentity({
+    ...settings,
+    baseUrl: 'http://director-content-identity.invalid/',
+    gpuLeaseLockFilePath: '/director-content-identity/gpu-lease.lock',
+  })
+}

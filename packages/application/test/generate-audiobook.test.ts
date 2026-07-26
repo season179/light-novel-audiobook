@@ -36,6 +36,7 @@ import {
   type SpeechEngineContext,
   type SpeechEngineFactory,
   type SpeechRenderRequest,
+  withDirectorContentIdentity,
 } from '../src/index.js'
 import { splitterIdentity } from '../src/split-directed-segments.js'
 import { InMemoryFallbackApprovalRepository } from './support/in-memory-fallback-approvals.js'
@@ -177,6 +178,7 @@ class FakeDirector implements DirectorModel {
   readonly corrupt: boolean
   releaseCalls = 0
   failRelease = false
+  failOnceOnChapterId: string | null = null
   receivedOptions: (DirectChapterOptions | undefined)[] = []
 
   constructor(
@@ -196,6 +198,10 @@ class FakeDirector implements DirectorModel {
   ): Promise<DirectedChapter> {
     this.receivedOptions.push(options)
     this.events.push(`direct:${chapter.id}`)
+    if (this.failOnceOnChapterId === chapter.id) {
+      this.failOnceOnChapterId = null
+      throw new Error('synthetic direction failure')
+    }
     const segments = directionFor(chapter)
     if (this.corrupt && chapter.position === 1) {
       const first = segments[0]
@@ -735,7 +741,7 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.assembler.calls).toHaveLength(assembliesBeforeRevocation)
   })
 
-  it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
+  it('resumes a completed job when only the upload path changes, and still rejects changed inputs', async () => {
     await generate(app, {
       jobId: 'job-bound-inputs',
       epubPath: '/uploads/story.epub',
@@ -744,14 +750,21 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     })
     const extractionCount = app.extractor.calls.length
 
-    await expect(
-      generate(app, {
-        jobId: 'job-bound-inputs',
-        epubPath: '/uploads/renamed-story.epub',
-        epubSha256: sourceHash,
-        voices: makeCast(),
-      }),
-    ).rejects.toThrow('stale for the requested generation inputs')
+    // Issue #54 item 3: the upload path is where the EPUB sat, not what it is. A web upload that
+    // lands in a fresh temp path per attempt must resume, not wedge. Pre-fix this rejected with
+    // 'stale for the requested generation inputs'.
+    const renamed = await generate(app, {
+      jobId: 'job-bound-inputs',
+      epubPath: '/tmp/upload-9f2k1-renamed.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    })
+    expect(renamed.job.state).toBe('completed')
+    expect(renamed.output.m4bPath).toBe('/workspace/A-Small-Story-v001.m4b')
+    expect(renamed.reusedSegments).toBe(4)
+    expect(app.extractor.calls).toHaveLength(extractionCount)
+
+    // The content hash still binds: a different EPUB under the same job stays stale.
     await expect(
       generate(app, {
         jobId: 'job-bound-inputs',
@@ -817,7 +830,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       audioAssemblerIdentity: string,
     ) =>
       createGenerationCommandIdentity({
-        epubPath: '/uploads/story.epub',
         epubSha256: sourceHash,
         voices: makeCast(),
         epubExtractorIdentity,
@@ -838,10 +850,30 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     ).not.toBe(original)
   })
 
+  it('excludes the upload path from the command identity while still binding the content hash', () => {
+    const base = {
+      epubSha256: sourceHash,
+      voices: makeCast(),
+      epubExtractorIdentity: app.extractor.identity,
+      directorIdentity: app.director.identity,
+      speechEngineIdentity: app.speech.identity,
+      audioAssemblerIdentity: app.assembler.identity,
+      splitterIdentity: splitterIdentity(),
+    }
+    const identity = createGenerationCommandIdentity(base)
+    // No path input exists to vary; the same content inputs must hash identically across calls.
+    expect(createGenerationCommandIdentity({ ...base })).toBe(identity)
+    expect(createGenerationCommandIdentity({ ...base, epubSha256: 'e'.repeat(64) })).not.toBe(
+      identity,
+    )
+    expect(
+      createGenerationCommandIdentity({ ...base, directorIdentity: 'other-director' }),
+    ).not.toBe(identity)
+  })
+
   it('rejects an active duplicate request and only recovers with explicit abandonment', async () => {
     const voices = makeCast()
     const identity = createGenerationCommandIdentity({
-      epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices,
       epubExtractorIdentity: app.extractor.identity,
@@ -923,6 +955,150 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(resumed.reusedSegments).toBe(2)
     expect(resumed.generatedSegments).toBe(2)
     expect(app.speech.endCalls).toBe(2)
+  })
+
+  it('resumes when the director moved hosts, and still stales when its content identity moved', async () => {
+    // Issue #54 item 2: a real director hashes its baseUrl and GPU lease lock path into its
+    // self-reported identity. The composition root wraps it with a content-only identity, so a
+    // brain-port move or lock-file move between crash and resume must not wedge the job.
+    const voices = makeCast()
+    const contentIdentity = 'gemma-content:model-1:prompt-1:schema-1:settings-1'
+    const wrapped = (adapterIdentity: string): DirectorModel & { inner: FakeDirector } => {
+      const inner = new FakeDirector(app.events, false, adapterIdentity)
+      return Object.assign(withDirectorContentIdentity(inner, contentIdentity), { inner })
+    }
+    const makeUseCase = (directorModel: DirectorModel): GenerateAudiobook =>
+      new GenerateAudiobook({
+        epubExtractor: app.extractor,
+        directorModelFactory: new FakeDirectorFactory(directorModel),
+        speechEngineFactory: app.speechFactory,
+        audioAssembler: app.assembler,
+        jobs: app.repository,
+        approvals: app.approvals,
+      })
+
+    app.speech.failOnceAtRenderCall = 3
+    const command = {
+      jobId: 'job-moved-director',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices,
+      directorOptions: { timeoutMs: 42_000 },
+    }
+    const firstDirector = wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock')
+    const firstUseCase = makeUseCase(firstDirector)
+    // The review gate stops the first attempt; the human decision lets the run reach rendering.
+    await expect(firstUseCase.execute(command)).rejects.toThrow(PendingFallbackReviewError)
+    expect(firstDirector.inner.receivedOptions).toHaveLength(2)
+    expect(firstDirector.inner.receivedOptions.every((item) => item?.timeoutMs === 42_000)).toBe(
+      true,
+    )
+    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
+    await expect(firstUseCase.execute(command)).rejects.toThrow('synthetic speech failure')
+
+    // Same content, different self-reported adapter identity (host/port/lock path moved): resumes.
+    const resumed = await makeUseCase(
+      wrapped('gemma-self-hash:http://localhost:9999:/var/lock/lease-b.lock'),
+    ).execute(command)
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.reusedSegments).toBe(2)
+
+    // A genuinely different direction content identity still stales the job.
+    const redirected = withDirectorContentIdentity(
+      new FakeDirector(app.events),
+      'gemma-content:model-2:prompt-2:schema-1:settings-1',
+    )
+    await expect(makeUseCase(redirected).execute(command)).rejects.toThrow(
+      'stale for the requested generation inputs',
+    )
+  })
+
+  // Issue #54 item 1. Pre-fix (#45 without this patch), the resume below re-extracted and
+  // re-directed BOTH chapters before rendering reused anything: this test then fails with 2 new
+  // direct events, 1 new extractor call and 1 new director construction.
+  it('resumes a render-stage crash without re-extracting or re-directing any chapter', async () => {
+    const command = {
+      jobId: 'job-resume-render',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    app.speech.failOnceAtRenderCall = 3
+    await expect(generate(app, command)).rejects.toThrow('synthetic speech failure')
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('failed')
+    const directCalls = app.events.filter((event) => event.startsWith('direct:')).length
+    const extractCalls = app.extractor.calls.length
+    const directorBuilds = app.directorFactory.created.length
+    expect({ directCalls, extractCalls, directorBuilds }).toEqual({
+      directCalls: 2,
+      extractCalls: 1,
+      directorBuilds: 1,
+    })
+
+    const resumed = await generate(app, command)
+
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.reusedSegments).toBe(2)
+    expect(resumed.generatedSegments).toBe(2)
+    // The whole point, measured by director calls rather than log lines: zero new directions, zero
+    // extractions — and the terminal, GPU-owning adapter is not even constructed, because
+    // direction's output is hashed into every segment's content address and re-running it would
+    // restale audio the ledger already holds (llama.cpp is not bit-deterministic run to run).
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(2)
+    expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(1)
+  })
+
+  // Issue #54 item 1, mid-direction axis: a crash while directing chapter 2 of 2 must resume by
+  // directing ONLY chapter 2 — chapter 1's approved script is persisted and skipped.
+  it('resumes a direction-stage crash directing only the chapters never directed', async () => {
+    const command = {
+      jobId: 'job-resume-direction',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    const chapterTwoId = StableIds.chapter(bookId, 2)
+    app.director.failOnceOnChapterId = chapterTwoId
+    await expect(generate(app, command)).rejects.toThrow('synthetic direction failure')
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('failed')
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(2)
+    expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(1)
+
+    const resumed = await generate(app, command)
+
+    expect(resumed.job.state).toBe('completed')
+    // One new director call (chapter 2), never a second crack at chapter 1, no re-extraction.
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(3)
+    expect(
+      app.events.filter((event) => event === `direct:${StableIds.chapter(bookId, 1)}`),
+    ).toHaveLength(1)
+    expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(2)
+  })
+
+  // Issue #54 item 1 meets the review gate: the resumed direction must still STOP at
+  // awaiting_review when decisions are missing — skipping direction is not skipping review.
+  it('stops a resumed direction at the review gate when decisions are still missing', async () => {
+    const chapterTwoId = StableIds.chapter(bookId, 2)
+    app.director.failOnceOnChapterId = chapterTwoId
+    const command = {
+      jobId: 'job-resume-into-gate',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await expect(app.useCase.execute(command)).rejects.toThrow('synthetic direction failure')
+
+    await expect(app.useCase.execute(command)).rejects.toThrow(
+      /awaiting a fallback decision for 1 unresolved speaker segment/,
+    )
+    expect(app.repository.jobs.get(command.jobId)?.state).toBe('awaiting_review')
+    // Chapter 1 was directed once, before the crash; the resume directed only chapter 2.
+    expect(
+      app.events.filter((event) => event === `direct:${StableIds.chapter(bookId, 1)}`),
+    ).toHaveLength(1)
   })
 
   it('rejects an extractor result whose content hash differs from the bound EPUB', async () => {

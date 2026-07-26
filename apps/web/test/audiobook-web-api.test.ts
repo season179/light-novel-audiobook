@@ -311,7 +311,9 @@ describe('AudiobookWebApi', () => {
     expect(completed.completedSegments).toBe(EXPECTED_SEGMENTS)
     // Five clips survived the crash, so only the remaining eleven are rendered again.
     expect(harness.speechEngine.rendered).toBe(EXPECTED_SEGMENTS)
-    // The retry needed a second director because the first was already released.
-    expect(harness.directors).toHaveLength(2)
+    // Issue #54: the retry resumes from the persisted approved script — direction is an LLM whose
+    // output is hashed into every segment's content address, so no second director is constructed
+    // and no chapter is re-directed. (Pre-fix this asserted 2: the retry re-directed everything.)
+    expect(harness.directors).toHaveLength(1)
   })
 })

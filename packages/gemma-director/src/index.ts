@@ -40,6 +40,7 @@ export {
   type GemmaDirectorModelOptions,
 } from './gemma-director-model.js'
 export {
+  createGemmaDirectorContentIdentity,
   createGemmaDirectorIdentity,
   GEMMA_DIRECTOR_IDENTITY_SCHEMA,
   type GemmaDirectorIdentitySettings,

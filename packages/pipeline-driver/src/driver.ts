@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { GenerateAudiobook } from '@light-novel-audiobook/application'
+import { GenerateAudiobook, withDirectorContentIdentity } from '@light-novel-audiobook/application'
 import { FfmpegAudioAssembler } from '@light-novel-audiobook/audio-assembly'
 import { DomainEpubExtractor } from '@light-novel-audiobook/epub-ingestion'
-import type { DirectorProgressEvent } from '@light-novel-audiobook/gemma-director'
-import { GemmaDirectorModel } from '@light-novel-audiobook/gemma-director'
+import {
+  createGemmaDirectorContentIdentity,
+  type DirectorProgressEvent,
+  GemmaDirectorModel,
+} from '@light-novel-audiobook/gemma-director'
 import {
   layoutFor,
   migrateSchema,
@@ -74,9 +77,8 @@ export interface RunPipelineReport {
  *
  * Two constraints from the pre-flight audit are honoured here and must stay honoured.
  *
- * 1. **The director is constructed inside this function, per run.** `directBook` always calls
- *    `release()`, which is terminal, so a `GemmaDirectorModel` held as a singleton directs exactly one
- *    book per process — and an in-process retry of the *first* book fails at its first `directChapter`.
+ * 1. **The director factory constructs lazily, per direction stage.** `directBook` always calls
+ *    `release()`, which is terminal, while a render-stage resume must not construct or call Gemma.
  *    Every other adapter is safely reused: Qwen re-arms per batch, the assembler and repository are
  *    stateless per call.
  * 2. **The cast is derived from the pinned Qwen config**, never restated. See `voice-cast.ts`.
@@ -113,31 +115,43 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
     options.characterSpeakerIds ?? [],
   )
 
-  // --- director: fresh per run, because release() is terminal
-  const director = new GemmaDirectorModel({
+  // --- director: constructed only if a draft chapter actually needs direction. Its command
+  // identity binds content settings, not the movable loopback port or GPU lock path.
+  const directorIdentity = createGemmaDirectorContentIdentity({
     baseUrl: transports.director.baseUrl,
-    apiKey: transports.director.apiKey,
     confidenceThreshold: options.confidenceThreshold ?? 0.5,
-    contextProvider: {
-      // The story bible does not exist yet, so the cast itself is the context: the director may only
-      // attribute dialogue to a speaker this run can actually render.
-      // The roster is character speakers only: the director rejects a request whose roster contains
-      // the narrator or fallback ID, since those are roles rather than characters.
-      forChapter: async () => ({
-        speakers: castSpeakerIds.map((id) => ({ id, aliases: [] })),
-        narratorSpeakerId: narratorProfileId,
-        fallbackSpeakerId: fallbackProfileId,
-      }),
-    },
-    progressStore: {
-      append: async (event) => {
-        options.onDirectorProgress?.(event)
-      },
-    },
-    lifecycle: transports.director.lifecycle,
-    gpuLeaseCoordinator: transports.gpu.coordinator,
     gpuLeaseLockFilePath: transports.gpu.lockFilePath,
   })
+  const directorModelFactory = {
+    identity: directorIdentity,
+    create: () =>
+      withDirectorContentIdentity(
+        new GemmaDirectorModel({
+          baseUrl: transports.director.baseUrl,
+          apiKey: transports.director.apiKey,
+          confidenceThreshold: options.confidenceThreshold ?? 0.5,
+          contextProvider: {
+            // The story bible does not exist yet, so the cast itself is the context: the director may
+            // only attribute dialogue to a speaker this run can actually render. The roster excludes
+            // narrator/fallback role IDs because Gemma rejects them as character speakers.
+            forChapter: async () => ({
+              speakers: castSpeakerIds.map((id) => ({ id, aliases: [] })),
+              narratorSpeakerId: narratorProfileId,
+              fallbackSpeakerId: fallbackProfileId,
+            }),
+          },
+          progressStore: {
+            append: async (event) => {
+              options.onDirectorProgress?.(event)
+            },
+          },
+          lifecycle: transports.director.lifecycle,
+          gpuLeaseCoordinator: transports.gpu.coordinator,
+          gpuLeaseLockFilePath: transports.gpu.lockFilePath,
+        }),
+        directorIdentity,
+      ),
+  }
 
   // --- speech: real engine over the selected transport.
   // The snapshot path comes from the transport, never from the workspace: it is where the pinned model
@@ -168,7 +182,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
 
   const useCase = new GenerateAudiobook({
     epubExtractor: extractor,
-    directorModelFactory: { identity: director.identity, create: () => director },
+    directorModelFactory,
     speechEngineFactory,
     audioAssembler,
     jobs,
@@ -210,7 +224,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
       lifecycleEvents: [...transports.lifecycleEvents],
       identities: {
         extractor: extractor.identity,
-        director: director.identity,
+        director: directorIdentity,
         speechEngine: speechEngineFactory.identity,
         assembler: audioAssembler.identity,
       },
