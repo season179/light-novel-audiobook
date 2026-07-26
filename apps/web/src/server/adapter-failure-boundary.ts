@@ -1,15 +1,24 @@
 import type {
   AssembleAudiobookRequest,
   AudioAssembler,
+  BookFallbackGrant,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
+  DirectorModelFactory,
   EpubExtractionRequest,
   EpubExtractor,
+  FallbackApprovalCatalog,
+  FallbackApprovalRepository,
+  FallbackRevocation,
   JobRepository,
   OutputReservation,
+  PersistedFallbackApproval,
   ReusableSegmentQuery,
   SpeechEngine,
+  SpeechEngineContext,
+  SpeechEngineFactory,
   SpeechRenderRequest,
 } from '@light-novel-audiobook/application'
 import type { AudiobookJob, AudiobookOutput, Book, Chapter } from '@light-novel-audiobook/domain'
@@ -57,8 +66,14 @@ class SanitizedDirectorModel implements DirectorModel {
     this.identity = inner.identity
   }
 
-  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter> {
-    return sanitize('directorModel.directChapter', () => this.inner.directChapter(book, chapter))
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter> {
+    return sanitize('directorModel.directChapter', () =>
+      this.inner.directChapter(book, chapter, options),
+    )
   }
 
   release(): Promise<void> {
@@ -117,8 +132,20 @@ class SanitizedJobRepository implements JobRepository {
     return sanitize('jobs.saveJob', () => this.inner.saveJob(job))
   }
 
+  saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    return sanitize('jobs.saveCompletedJob', () => this.inner.saveCompletedJob(job, output))
+  }
+
+  findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    return sanitize('jobs.findCompletedOutput', () => this.inner.findCompletedOutput(jobId))
+  }
+
   saveBook(book: Book): Promise<void> {
     return sanitize('jobs.saveBook', () => this.inner.saveBook(book))
+  }
+
+  findBook(bookId: string): Promise<Book | undefined> {
+    return sanitize('jobs.findBook', () => this.inner.findBook(bookId))
   }
 
   findReusableSegment(query: ReusableSegmentQuery): Promise<CompletedSegmentAudio | undefined> {
@@ -134,10 +161,89 @@ class SanitizedJobRepository implements JobRepository {
   }
 }
 
+/**
+ * The review ledger is reached from server functions the browser calls directly, so a raw adapter
+ * message must not survive here either.
+ */
+class SanitizedFallbackApprovalRepository implements FallbackApprovalRepository {
+  private readonly inner: FallbackApprovalRepository
+
+  constructor(inner: FallbackApprovalRepository) {
+    this.inner = inner
+  }
+
+  readCatalog(bookId: string): Promise<FallbackApprovalCatalog> {
+    return sanitize('approvals.readCatalog', () => this.inner.readCatalog(bookId))
+  }
+
+  save(record: PersistedFallbackApproval): Promise<void> {
+    return sanitize('approvals.save', () => this.inner.save(record))
+  }
+
+  revoke(bookId: string, segmentId: string, revocation: FallbackRevocation): Promise<boolean> {
+    return sanitize('approvals.revoke', () => this.inner.revoke(bookId, segmentId, revocation))
+  }
+
+  saveBookGrant(grant: BookFallbackGrant): Promise<void> {
+    return sanitize('approvals.saveBookGrant', () => this.inner.saveBookGrant(grant))
+  }
+
+  revokeBookGrant(bookId: string): Promise<boolean> {
+    return sanitize('approvals.revokeBookGrant', () => this.inner.revokeBookGrant(bookId))
+  }
+}
+
+/**
+ * Wraps a *factory*, not only the adapter it returns.
+ *
+ * Construction is now deferred until the stage that needs it, so a factory that throws — a missing
+ * model file, a refused GPU lease — throws inside the run rather than at composition time. Without
+ * this the raw message would reach job state, which the browser reads back directly.
+ */
+class SanitizedDirectorModelFactory implements DirectorModelFactory {
+  readonly identity: string
+  private readonly inner: DirectorModelFactory
+
+  constructor(inner: DirectorModelFactory) {
+    this.inner = inner
+    this.identity = inner.identity
+  }
+
+  create(): Promise<DirectorModel> {
+    return sanitize(
+      'directorModelFactory.create',
+      async () => new SanitizedDirectorModel(await this.inner.create()),
+    )
+  }
+}
+
+class SanitizedSpeechEngineFactory implements SpeechEngineFactory {
+  readonly identity: string
+  private readonly inner: SpeechEngineFactory
+
+  constructor(inner: SpeechEngineFactory) {
+    this.inner = inner
+    this.identity = inner.identity
+  }
+
+  create(context: SpeechEngineContext): Promise<SpeechEngine> {
+    return sanitize(
+      'speechEngineFactory.create',
+      async () => new SanitizedSpeechEngine(await this.inner.create(context)),
+    )
+  }
+}
+
 export const withSanitizedFailures = {
   epubExtractor: (inner: EpubExtractor): EpubExtractor => new SanitizedEpubExtractor(inner),
   directorModel: (inner: DirectorModel): DirectorModel => new SanitizedDirectorModel(inner),
   speechEngine: (inner: SpeechEngine): SpeechEngine => new SanitizedSpeechEngine(inner),
   audioAssembler: (inner: AudioAssembler): AudioAssembler => new SanitizedAudioAssembler(inner),
+  directorModelFactory: (inner: DirectorModelFactory): DirectorModelFactory =>
+    new SanitizedDirectorModelFactory(inner),
+  speechEngineFactory: (inner: SpeechEngineFactory): SpeechEngineFactory =>
+    new SanitizedSpeechEngineFactory(inner),
   jobs: (inner: JobRepository): JobRepository => new SanitizedJobRepository(inner),
+  approvals: (inner: FallbackApprovalRepository): FallbackApprovalRepository =>
+    new SanitizedFallbackApprovalRepository(inner),
 }

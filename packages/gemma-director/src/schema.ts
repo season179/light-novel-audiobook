@@ -39,10 +39,8 @@ const deliverySchema = z.strictObject({
   pause_after_ms: z.int().min(0).max(10_000),
 })
 
-export const directedWireSegmentSchema = z.strictObject({
+const directedWireContentShape = {
   source_passage_id: opaqueIdSchema,
-  source_start: z.int().min(0),
-  source_end: z.int().min(1),
   source_text: z.string().min(1),
   kind: z.enum(DIRECTOR_SEGMENT_KINDS),
   speaker_id: opaqueIdSchema,
@@ -50,14 +48,47 @@ export const directedWireSegmentSchema = z.strictObject({
   delivery: deliverySchema,
   unresolved_speaker: z.boolean(),
   speaker_reason: z.string().min(1).max(240).nullable(),
-})
+} as const
+
+/**
+ * The model classifies exact fragments; it does not calculate source coordinates. Range arithmetic is
+ * derived deterministically after validation, because JSON schema can constrain an integer's shape but
+ * cannot make an LLM count UTF-16 code units correctly.
+ */
+export const directedWireSegmentSchema = z.strictObject(directedWireContentShape)
 
 export const directionWireOutputSchema = z.strictObject({
   segments: z.array(directedWireSegmentSchema).min(1),
 })
 
+/**
+ * Read compatibility for captured `gemma-direction-output@2` responses. The two coordinates are
+ * accepted only by `validateDirectionOutput`; they are stripped and never become source authority.
+ * New provider requests use `directionWireOutputSchema`, whose JSON schema contains neither field.
+ */
+const legacyDirectedWireSegmentSchema = z.strictObject({
+  ...directedWireContentShape,
+  source_start: z.int().min(0),
+  source_end: z.int().min(1),
+})
+const legacyDirectionWireOutputSchema = z.strictObject({
+  segments: z.array(legacyDirectedWireSegmentSchema).min(1),
+})
+
 export type DirectionWireOutput = z.infer<typeof directionWireOutputSchema>
 export type DirectedWireSegment = z.infer<typeof directedWireSegmentSchema>
+
+export function parseDirectionOutputForValidation(input: unknown): DirectionWireOutput {
+  const current = directionWireOutputSchema.safeParse(input)
+  if (current.success) return current.data
+  const legacy = legacyDirectionWireOutputSchema.safeParse(input)
+  if (!legacy.success) throw current.error
+  return {
+    segments: legacy.data.segments.map(
+      ({ source_start: _start, source_end: _end, ...item }) => item,
+    ),
+  }
+}
 
 /** Rejects duplicate input identities before any private text reaches the model endpoint. */
 export function parseDirectionRequest(input: unknown): DirectionRequest {

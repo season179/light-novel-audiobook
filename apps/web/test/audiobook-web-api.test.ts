@@ -59,6 +59,18 @@ describe('AudiobookWebApi', () => {
     expect(second.jobId).toBe(first.jobId)
   })
 
+  it('forwards composition-root director options through the whole generation path', async () => {
+    await harness.dispose()
+    harness = await createTestHarness({ directorOptions: { timeoutMs: 42_000 } })
+
+    const stored = await upload()
+    const finished = await startAndFinish(stored.uploadId)
+
+    expect(finished?.state).toBe('completed')
+    expect(harness.directors).toHaveLength(1)
+    expect(harness.directors[0]?.lastOptions?.timeoutMs).toBe(42_000)
+  })
+
   it('reports malformed uploads with an actionable message', async () => {
     await expect(
       harness.api.uploadEpub({ fileName: 'notes.txt', bytes: createStubEpubBytes() }),

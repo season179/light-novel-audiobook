@@ -31,11 +31,14 @@ Malformed or unsupported input is fully extracted and validated before staging s
 content-addressed records are hash-checked instead of overwritten. ZIP/XML complexity limits,
 entry CRCs, duplicate/case-colliding names, and encrypted/obfuscated resources fail closed.
 
-A cover is decorative rather than story content, so it does not fail closed: a cover that is
-damaged, structurally invalid, or of an unsupported media type is dropped, the book is still
-ingested, and `audit.findings` gains an `unusable-cover` entry naming the archive path. Losing an
-entire light novel over one bad trailing byte in a JPEG is the worse outcome. The finding is
-persisted but not yet surfaced through the domain mapper or a review queue.
+A cover is decorative rather than story content, so it does not fail closed. Ingestion accepts only
+byte-validated PNG, JPEG, GIF, or WebP covers that the pinned M4B toolchain can consume. A damaged,
+structurally invalid, unsupported, or vector cover (including SVG) is dropped before direction or
+TTS begins; the book is still ingested, and `audit.findings` gains an `unusable-cover` entry naming
+the archive path. SVG conversion is deliberately not attempted because it would require another
+pinned rasterizer dependency. Losing an entire light novel—or all completed renders—over a cover is
+the worse outcome. The finding is persisted but not yet surfaced through the domain mapper or a
+review queue.
 
 Every extracted source passage is retained. A spine document with no source passages is not made
 into an invalid empty domain `Chapter`; it remains in `audit.nonStoryDocuments` with its one-based

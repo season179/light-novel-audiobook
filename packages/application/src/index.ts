@@ -1,9 +1,41 @@
+export {
+  ApprovalCatalogAccess,
+  ApprovalCatalogReentryError,
+  approvalCatalogAccessFor,
+  CompletedOutputAuthority,
+  type CompletedOutputAuthorization,
+  type CompletedOutputDenial,
+} from './completed-output.js'
 export { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
+export {
+  DirectAudiobook,
+  type DirectAudiobookCommand,
+  type DirectAudiobookDependencies,
+  type DirectAudiobookResult,
+} from './direct-audiobook.js'
+export {
+  approvalStillDescribes,
+  type BookFallbackGrant,
+  collectFallbackSubjects,
+  createBookFallbackGrant,
+  createFallbackApprovalRecord,
+  FALLBACK_EXCERPT_MAX_LENGTH,
+  type FallbackApprovalCatalog,
+  type FallbackApprovalDecision,
+  type FallbackApprovalExclusion,
+  type FallbackApprovalSubject,
+  type FallbackRevocation,
+  fallbackApprovalExcerpt,
+  hashSourceText,
+  type PendingFallbackApproval,
+  type PersistedFallbackApproval,
+} from './fallback-approval.js'
 export {
   GenerateAudiobook,
   type GenerateAudiobookCommand,
   type GenerateAudiobookDependencies,
   type GenerateAudiobookResult,
+  PendingFallbackReviewError,
 } from './generate-audiobook.js'
 export {
   createGenerationCommandIdentity,
@@ -15,14 +47,38 @@ export type {
   AssemblySegment,
   AudioAssembler,
   CompletedSegmentAudio,
+  DirectChapterOptions,
   DirectedChapter,
   DirectorModel,
+  DirectorModelFactory,
   EpubExtractionRequest,
   EpubExtractor,
+  FallbackApprovalRepository,
   JobRepository,
   OutputReservation,
   ReusableSegmentQuery,
   SpeechEngine,
+  SpeechEngineContext,
+  SpeechEngineFactory,
   SpeechRenderRequest,
 } from './ports.js'
-export { createRenderInputIdentity } from './render-input-identity.js'
+export {
+  RenderAudiobook,
+  type RenderAudiobookCommand,
+  type RenderAudiobookDependencies,
+  type RenderAudiobookResult,
+  RenderContractMismatchError,
+  StaleFallbackCatalogError,
+  UnapprovedFallbackSegmentsError,
+} from './render-audiobook.js'
+export { createRenderContract, type RenderContractInput } from './render-contract.js'
+export { createRenderInputIdentity, type RenderInputApproval } from './render-input-identity.js'
+export {
+  type BookFallbackGrantRequest,
+  type FallbackApprovalDecisionRequest,
+  type FallbackApprovalReconciliation,
+  type ReconcileFallbackApprovalsRequest,
+  RenderInProgressError,
+  ReviewFallbackApprovals,
+  type ReviewFallbackApprovalsDependencies,
+} from './review-fallback-approvals.js'

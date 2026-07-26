@@ -163,6 +163,11 @@ export interface DirectorProgressStore {
 
 export interface DirectionOptions {
   readonly signal?: AbortSignal
+  /**
+   * Whole-chapter deadline in milliseconds, spanning all window requests and retries. Defaults
+   * to 60 minutes, the representative-chapter budget PLAN locks. The per-request timeout is the
+   * adapter-owned `requestTimeoutMs` constructor setting.
+   */
   readonly timeoutMs?: number
 }
 
@@ -177,8 +182,18 @@ export interface DirectorRuntimeLifecycle {
   /**
    * Loads the runtime and its weights onto the GPU. The adapter calls this only while it already
    * holds the exclusive GPU lease, so VRAM residency can never precede the lease. Implementations
-   * must be idempotent and must resolve only once the runtime is ready to serve requests.
+   * must be idempotent, must resolve only once the runtime is ready to serve requests, and must
+   * either settle within its normal startup bound or be made to settle by `release()`. An unsettled
+   * start must not be able to outlive the adapter. The lifecycle implementation owns these bounds
+   * because it knows how long a cold weight load and its own pre-spawn operations may take.
    */
   start(): Promise<void>
+  /**
+   * Unloads the runtime and frees the GPU, and must not resolve until that is true — process
+   * exited, port free. It must synchronously prohibit future spawns, bound its wait for an in-flight
+   * `start()` to settle, and reject rather than report success if runtime state remains unknown.
+   * Observing "no child yet" in a pre-spawn window and returning is exactly the co-residency hole
+   * the lease exists to prevent.
+   */
   release(): Promise<void>
 }

@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withTransaction } from './transaction.js'
 
-export const SCHEMA_VERSION = 1 satisfies number
+export const SCHEMA_VERSION = 3 satisfies number
 
 const migrations = new Map<number, string>()
 
@@ -78,6 +78,131 @@ migrations.set(
   CREATE TABLE jobs (
     id TEXT PRIMARY KEY NOT NULL,
     snapshot_json TEXT NOT NULL
+  );
+`,
+)
+
+migrations.set(
+  2,
+  `
+  -- Issue #45. Rendering moved into its own stage that runs after human review, so it can no
+  -- longer be handed an in-memory Book: it has to read the approved script back. Version 1 stored
+  -- only source_text_sha256 and no voice assignment, from which no Segment can be reconstructed
+  -- and no render input identity can be reproduced.
+  --
+  -- Storing source_text puts story text in the workspace database. That is a deliberate decision
+  -- (recorded in the #45 report): audiobook.db matches the gitignored '*.db' rule, and source text
+  -- must never be logged or committed. It is the same text the WAVs beside it already encode.
+  --
+  -- Segments and passages are dropped and recreated rather than altered. They are derived data
+  -- re-created by direction, a version 1 row cannot supply a NOT NULL source_text, and the
+  -- artifacts and output_reservations ledgers are keyed independently of them so nothing durable
+  -- is lost. A book directed under version 1 is re-directed once.
+  DROP TABLE segments;
+
+  CREATE TABLE source_passages (
+    id TEXT PRIMARY KEY NOT NULL,
+    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    source_text TEXT NOT NULL,
+    UNIQUE(chapter_id, position)
+  );
+
+  CREATE TABLE segments (
+    id TEXT PRIMARY KEY NOT NULL,
+    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    source_passage_id TEXT NOT NULL,
+    source_text TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    speaker_id TEXT,
+    confidence REAL NOT NULL,
+    delivery TEXT NOT NULL,
+    voice_profile_id TEXT,
+    uses_fallback INTEGER NOT NULL DEFAULT 0,
+    fallback_reason TEXT,
+    UNIQUE(chapter_id, position)
+  );
+
+  -- The review context's ledger, one live row per approved unresolved-speaker segment.
+  --
+  -- Deliberately without a foreign key to segments, for the same reason artifacts has none: a
+  -- re-direction replaces a chapter's segment rows wholesale, and a cascade would silently delete
+  -- human decisions as a side effect of saving a book. Reconciliation removes decisions that no
+  -- longer describe their segment, explicitly and countably.
+  --
+  -- Revocation DELETEs. A revoked approval must be indistinguishable from one that never existed,
+  -- because that is what makes the segment unrenderable and its cached audio unreachable; a
+  -- 'revoked' flag would leave a row that a future query could mistake for a live decision.
+  CREATE TABLE fallback_approvals (
+    book_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL,
+    speaker_id TEXT,
+    fallback_reason TEXT NOT NULL,
+    voice_profile_id TEXT NOT NULL,
+    source_text_sha256 TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    -- Required. A record with a time but no actor is not evidence of a human decision, which is
+    -- how issue #45's first round shipped a renamed auto-approval.
+    decided_by TEXT NOT NULL,
+    -- The book-wide grant this record was derived from, or NULL when the human decided this one
+    -- segment individually.
+    grant_id TEXT,
+    approval_id TEXT NOT NULL,
+    approval_sha256 TEXT NOT NULL,
+    PRIMARY KEY(book_id, segment_id)
+  );
+
+  -- Segments the human explicitly refused to authorize.
+  --
+  -- Recorded rather than merely deleted, because a book-wide grant would otherwise re-create the
+  -- approval on the next reconciliation and silently undo the revocation. An exclusion outranks any
+  -- grant and is cleared only by approving that segment again. A *system* invalidation -- a decision
+  -- that no longer describes its segment -- deliberately writes no exclusion, or a re-directed line
+  -- would be blocked forever instead of simply re-decided.
+  CREATE TABLE fallback_approval_exclusions (
+    book_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY(book_id, segment_id)
+  );
+
+  -- One human decision authorizing the fallback voice for every unresolved speaker in one book.
+  -- The M1 answer to a 2,328-passage book that must not stop for a click per line; it still
+  -- produces one per-segment approval row each, so revoking one speaker touches only that speaker.
+  CREATE TABLE fallback_book_grants (
+    book_id TEXT PRIMARY KEY NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    grant_sha256 TEXT NOT NULL
+  );
+
+  -- Monotonic per-book counter, incremented in the SAME transaction as every approval, exclusion and
+  -- grant mutation. A render reads it together with the records it renders under and re-checks it
+  -- before publishing anything, so a decision that lands mid-render cannot let that render complete
+  -- under a withdrawn approval.
+  CREATE TABLE fallback_catalog_revisions (
+    book_id TEXT PRIMARY KEY NOT NULL,
+    revision INTEGER NOT NULL
+  );
+`,
+)
+
+migrations.set(
+  3,
+  `
+  -- Issue #45 round 7. Completed output paths are authority-protected persistence data, not public
+  -- AudiobookJob state. Pre-release workspaces are disposable, so old embedded-output job snapshots
+  -- are invalidated rather than translated or accepted through a compatibility shim.
+  DELETE FROM jobs;
+
+  CREATE TABLE completed_outputs (
+    job_id TEXT PRIMARY KEY NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    m4b_path TEXT NOT NULL,
+    chapters_json TEXT NOT NULL
   );
 `,
 )

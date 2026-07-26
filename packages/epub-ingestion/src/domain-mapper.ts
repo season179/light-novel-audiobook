@@ -23,7 +23,7 @@ export const DOMAIN_EPUB_EXTRACTOR_SETTINGS = Object.freeze({
   policies: Object.freeze({
     archive_paths: 'case-sensitive-safe-paths@1',
     encryption: 'reject-zip-and-encryption-xml@1',
-    cover: 'declared-media-container-validation@1',
+    cover: EXTRACTION_IDENTITY.cover_rules,
     spine_order: 'opf-spine-retain-source@1',
     empty_spine_documents: 'audit-as-non-story@1',
     metadata: 'preserve-opf-refinements@1',

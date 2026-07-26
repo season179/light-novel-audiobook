@@ -30,14 +30,28 @@ import { createAudiobookWebApi } from './server/composition-root.js'
 
 const api = await createAudiobookWebApi({
   createEpubExtractor: () => sharedExtractor,          // may be shared
-  createDirectorModel: () => new GemmaDirectorModel(config),  // MUST be fresh per run
-  createSpeechEngine: () => sharedQwenEngine,          // may be shared
+  createDirectorModel: () => new GemmaDirectorModel(config),  // MUST be fresh per run, and lazy
+  directorIdentity: createGemmaDirectorIdentity(config),      // from config, never from a live model
+  speechEngineFactory: createQwenSpeechEngineFactory(sharedQwenEngine), // built per book, post-review
+  approvals: new SqliteFallbackApprovalRepository(db),  // shared: the review ledger
   createAudioAssembler: () => sharedFfmpegAssembler,   // may be shared
   jobs: sqliteJobRepository,                           // shared: this is persistence
   voices: approvedCast,                                // optional; defaults to the PLAN §7 M1 cast
   workspaceRoot: '/path/outside/the/repo',             // optional
 })
 ```
+
+Why the speech engine is a **factory taking a context** rather than an instance: it refuses any
+fallback segment absent from its approval catalog, and that catalog is per book and only exists once
+direction has found every unresolved speaker. `RenderAudiobook` calls it after review, so an engine
+constructed alongside the extractor would always carry an empty catalog.
+
+Why `directorIdentity` is supplied separately: the generation command identity must bind the
+director before direction runs, but building the model at composition time would defeat the factory.
+`GenerateAudiobook` skips direction entirely for a job already awaiting review, so a director built
+eagerly there is never used and never released — with Gemma that leaks a GPU-resident model, because
+`release()` is terminal. Director identity is a pure function of configuration, so it is passed as a
+value.
 
 Why `createDirectorModel` has to construct per run: `GenerateAudiobook` always calls
 `DirectorModel.release()` when direction finishes, and `GemmaDirectorModel.release()` memoises its
@@ -92,11 +106,42 @@ only surface once real models load:
 
 Two consequences worth knowing:
 
-- `FakeSpeechEngine` defaults to `unreviewedFallbackPolicy: 'reject'`, exactly like
-  `QwenApplicationSpeechEngine`. The composition root passes `'auto-approve'` as an explicit M1
-  stand-in, because this app has no approval action yet; it mints an identity-bound record per
-  segment and lists them on `autoApprovedFallbacks`. **The real Qwen adapter accepts no such policy**
-  — #21 must supply persisted `fallbackApprovals` or any book with an unresolved speaker will fail.
+- `FakeSpeechEngine` refuses a fallback segment with no matching per-segment human approval,
+  unconditionally, exactly like `QwenApplicationSpeechEngine`. There is **no policy option**: the
+  `'auto-approve'` M1 stand-in that used to live here is gone, and issue #45's round-2 review removed
+  its renamed successor one layer up. A book with unresolved speakers therefore stops at
+  `awaiting_review` until a human decides.
+
+  The decision is made through the review API, and one action covers the whole book — a
+  2,328-passage novel must not stop for a click per line:
+
+  | Operation | What it does |
+  | --- | --- |
+  | `listFallbackReview({ jobId })` | the queue, each entry with a short excerpt of the approved line |
+  | `approveAllFallbacks({ jobId })` | one book-wide decision, written out as one durable per-segment record each |
+  | `revokeFallback({ jobId, segmentId })` | withdraws one speaker; a completed job returns to review and its audio for that speaker becomes unreachable |
+  | `renderApprovedScript({ jobId })` | continues from the persisted script, with no re-extraction and no re-direction |
+
+  Withdrawing one speaker invalidates only that speaker's audio, because the approval identity is
+  hashed into that segment's render input identity and nothing else moves. A withdrawal is recorded
+  as a durable exclusion, so the book-wide grant cannot silently re-create it.
+
+  **None of these take an actor.** Every recorded decision names the human who made it, and that name
+  is resolved once at composition — from `LNA_REVIEWER`, or failing that the operating-system account —
+  never from a request body and never from a literal. `resolveReviewerIdentity` throws rather than
+  invent one, so a server that cannot say who is deciding does not start. Set `LNA_REVIEWER` to record
+  something more useful than the local account name:
+
+  ```sh
+  LNA_REVIEWER='Ada Lovelace' pnpm dev
+  ```
+
+  This is attribution on a single-user local app, not authentication. When real users arrive,
+  `createAudiobookWebApi({ reviewer })` is the seam that carries the authenticated identity and nothing
+  below it changes.
+
+  The review excerpt is **story text**. It is returned to the browser so the human can read the line
+  they are approving; it must never be written to a log or into job state.
 - `FakeAudioAssembler` produces WAV, so it refuses a `.flac` reservation rather than writing WAV bytes
   under the wrong name. #43 has since aligned the real pair — SQLite persistence reserves
   `<stem>-vNNN.flac` chapter masters and `<base>-vNNN.m4b`, which the FFmpeg planner requires — and

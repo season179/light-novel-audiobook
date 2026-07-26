@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import gc
 import hashlib
 import importlib.metadata
@@ -111,6 +112,33 @@ def bind_to_parent_lifetime() -> None:
 
 def emit(event_type: str, **values: Any) -> None:
     print(json.dumps({"protocolVersion": PROTOCOL_VERSION, "type": event_type, **values}, separators=(",", ":")), flush=True)
+
+
+@contextlib.contextmanager
+def _library_stdout_to_stderr():
+    # stdout is the JSON protocol channel to the TS host; stderr is its log channel. The pinned
+    # qwen_tts library prints an import-time "flash-attn is not installed" banner to stdout via
+    # print() (#62), which the host's strict line parser treats as a malformed protocol event and
+    # aborts on. Redirect fd 1 to stderr at the file-descriptor level for the heavy imports so that
+    # neither Python print() nor any C-level/raw fd-1 write from a dependency can reach the protocol
+    # stream (fd-level, not a sys.stdout swap, so it also catches non-Python writes).
+    #
+    # The flush() calls are load-bearing: stdout is block-buffered under a pipe, so a print() during
+    # the import would otherwise sit in the buffer and flush back onto the protocol channel AFTER fd
+    # 1 is restored. Flush first to drain pending protocol bytes, and flush again before the restore
+    # so any buffered library output reaches stderr first. The outer finally restores fd 1 even if
+    # the import throws, so a failure stays visible rather than leaving stdout pointed at stderr.
+    sys.stdout.flush()
+    saved_fd = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+    finally:
+        os.dup2(saved_fd, 1)
+        os.close(saved_fd)
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -522,9 +550,10 @@ def run() -> int:
             raise ValueError("output directory must be a real directory")
         emit("runtime-validated")
 
-        import numpy as np
-        import torch as loaded_torch
-        from qwen_tts import Qwen3TTSModel
+        with _library_stdout_to_stderr():
+            import numpy as np
+            import torch as loaded_torch
+            from qwen_tts import Qwen3TTSModel
 
         torch = loaded_torch
         if not torch.cuda.is_available():

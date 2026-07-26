@@ -280,6 +280,7 @@ describe('EPUB source-text semantics spike', () => {
     if (!passage) return
 
     const reorderedIdentity = {
+      cover_rules: EXTRACTION_IDENTITY.cover_rules,
       extraction_rules: EXTRACTION_IDENTITY.extraction_rules,
       archive_parser: EXTRACTION_IDENTITY.archive_parser,
       xml_parser: EXTRACTION_IDENTITY.xml_parser,
@@ -290,6 +291,14 @@ describe('EPUB source-text semantics spike', () => {
         passage.locator,
         passage.source_text_sha256,
         reorderedIdentity,
+      ),
+    ).toBe(passage.id)
+    expect(
+      deriveSourcePassageId(
+        result.publication_content_sha256,
+        passage.locator,
+        passage.source_text_sha256,
+        { ...EXTRACTION_IDENTITY, cover_rules: 'm4b-raster-cover@2' },
       ),
     ).toBe(passage.id)
     expect(

@@ -8,6 +8,7 @@ export const EXTRACTION_IDENTITY = Object.freeze({
   archive_parser: 'fflate@0.8.3',
   xml_parser: 'saxes@6.0.0',
   extraction_rules: 'epub-source-text@2',
+  cover_rules: 'm4b-raster-cover@1',
 })
 
 export const OFFSET_UNIT = 'unicode-scalar-value' as const
@@ -16,6 +17,8 @@ export interface ExtractionIdentity {
   readonly archive_parser: string
   readonly xml_parser: string
   readonly extraction_rules: string
+  /** Excluded from source-passage IDs: a decorative-cover policy must not move story identity. */
+  readonly cover_rules?: string
 }
 
 export interface PublicationTitle {
@@ -62,6 +65,8 @@ export function deriveSourcePassageId(
   sourceTextHash: string,
   identity: ExtractionIdentity = EXTRACTION_IDENTITY,
 ): string {
+  // Cover rules are deliberately absent: changing a decorative asset policy must not move story
+  // identity when parser/source rules, locator, and exact source text are unchanged.
   const versionKey = [
     `archive_parser=${identity.archive_parser}`,
     `xml_parser=${identity.xml_parser}`,
@@ -528,10 +533,16 @@ function publicationHash(entries: Readonly<Record<string, Uint8Array>>): string 
 }
 
 /**
- * Returns `undefined` when the cover is usable, or the reason it is not. A cover is decorative
- * metadata: a publication whose story text extracted perfectly must not become un-ingestable
- * because of one trailing byte after `IEND`, a stale CRC in an ancillary chunk, or an animated
- * WebP. The caller records the rejection as a review finding and continues without a cover.
+ * Returns `undefined` when the cover is usable by the downstream M4B assembler, or the reason it
+ * is not. A cover is decorative metadata: a publication whose story text extracted perfectly must
+ * not become un-ingestable because of one trailing byte after `IEND`, a stale CRC in an ancillary
+ * chunk, an animated WebP, or a vector format the pinned FFmpeg build cannot rasterize.
+ *
+ * This is intentionally the extractor's contract. It already owns byte-level cover validation and
+ * runs before direction or rendering; passing an XML-valid SVG onward only to discover after every
+ * TTS render that FFmpeg sees but cannot decode it is both too late and too weak. Rasterization would
+ * require a new pinned tool, so unsupported vector covers degrade to the existing unusable-cover
+ * finding instead. The caller records that finding and continues without a cover.
  */
 function coverRejection(
   bytes: Uint8Array,
@@ -539,16 +550,11 @@ function coverRejection(
   archivePath: string,
 ): string | undefined {
   try {
-    if (mediaType === 'image/svg+xml') {
-      const root = parseXml(bytes, archivePath)
-      if (root.name !== 'svg') throw new Error('SVG cover root element is not svg')
-      return undefined
-    }
     validateRasterCover(bytes, mediaType)
     return undefined
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    return `EPUB cover bytes do not match declared media type ${mediaType}: ${archivePath}: ${detail}`
+    return `EPUB cover is not a supported M4B raster cover (${mediaType}): ${archivePath}: ${detail}`
   }
 }
 
@@ -1228,7 +1234,7 @@ export function extractEpubDeterministically(archive: Uint8Array): Deterministic
     findings.push({
       kind: 'unusable-cover',
       locators: parsedPackage.rejectedCoverPath ? [parsedPackage.rejectedCoverPath] : [],
-      detail: `${parsedPackage.coverRejection} The publication was ingested without a cover; M4B assembly needs one supplied or repaired.`,
+      detail: `${parsedPackage.coverRejection} The publication was ingested without a cover; M4B assembly will continue without it unless a supported cover is supplied.`,
     })
   }
   if (nav.epub3.status === 'missing') {

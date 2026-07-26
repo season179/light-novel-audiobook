@@ -68,7 +68,15 @@ export async function loadWorkerRuntimeIdentity(
     }
     return item as RuntimePackage
   })
-  const sorted = [...packages].sort((left, right) => left.name.localeCompare(right.name))
+  // Compare by Unicode code point, NOT localeCompare (#59). The generator
+  // (scripts/qwen3-tts-extension.sh) builds this list with Python's sorted(key=name), which is a
+  // code-point order; localeCompare is locale- and ICU-dependent, so on some machines it orders the
+  // same manifest differently (e.g. it puts 'typing_extensions' before 'typing-inspection' because
+  // '_' sorts before '-' under the default collator, opposite to code point). A canonical-form
+  // integrity check must be deterministic across environments, so it must not depend on the locale.
+  const sorted = [...packages].sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )
   if (canonicalJson(packages) !== canonicalJson(sorted))
     failure('runtime package inventory is not canonical')
   const byName = new Map(packages.map((item) => [item.name, item.version]))

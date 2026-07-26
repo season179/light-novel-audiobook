@@ -22,6 +22,7 @@
       "conflict_sources": ["epub3-nav", "ncx"]
     },
     "finding_kinds": [
+      "unusable-cover",
       "navigation-spine-conflict",
       "duplicate-heading",
       "image-outside-passage-root",
