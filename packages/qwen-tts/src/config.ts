@@ -39,6 +39,8 @@ export interface WavRequirements {
   readonly maximumClippedSampleFraction: number
   readonly minimumActiveFrameFraction: number
   readonly minimumSecondsPerWord: number
+  /** Calibrated absolute floor below the shortest observed complete utterance (#91). */
+  readonly minimumUtteranceDurationSeconds: number
   readonly maximumSecondsPerWord: number
   /** Calibrated upper-envelope allowance for fixed per-utterance duration variance (#91). */
   readonly fixedUtteranceOverheadSeconds: number
@@ -219,6 +221,7 @@ function validateConfig(value: unknown): QwenProductionConfig {
       'maximumClippedSampleFraction',
       'minimumActiveFrameFraction',
       'minimumSecondsPerWord',
+      'minimumUtteranceDurationSeconds',
       'maximumSecondsPerWord',
       'fixedUtteranceOverheadSeconds',
       'maximumDurationSeconds',
@@ -234,6 +237,9 @@ function validateConfig(value: unknown): QwenProductionConfig {
     maximumClippedSampleFraction: 0.001,
     minimumActiveFrameFraction: 0.15,
     minimumSecondsPerWord: 0.08,
+    // The shortest measured complete shipped-voice utterance was 0.40 s. One 0.08 s model
+    // duration quantum of lower margin rejects truncation while retaining that observation.
+    minimumUtteranceDurationSeconds: 0.32,
     maximumSecondsPerWord: 2,
     // 38 measured short renders: 2.64 s shipped-voice maximum; 3.00 s ceiling leaves
     // 0.36 s safety margin while retaining a full second of separation from the 4 s runaway probe.

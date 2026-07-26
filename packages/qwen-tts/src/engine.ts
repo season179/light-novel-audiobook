@@ -5,7 +5,7 @@ import { loadProductionConfig } from './config.js'
 import type { SegmentPlan } from './manifest.js'
 import { canonicalJson, createSegmentPlan, sha256, tryReuse } from './manifest.js'
 import type { QwenWorkerRuntimeIdentity } from './runtime-identity.js'
-import { loadWorkerRuntimeIdentity } from './runtime-identity.js'
+import { loadWorkerRuntimeIdentity, waveformProducingRuntimeIdentity } from './runtime-identity.js'
 import type {
   ExclusiveGpuGate,
   GpuLease,
@@ -309,7 +309,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
         adapter: production.value.adapter,
         model: production.value.model,
         runtime: production.value.runtime,
-        workerRuntime: runtimeIdentity,
+        workerRuntime: waveformProducingRuntimeIdentity(runtimeIdentity),
         generation: production.value.generation,
         seedStrategy: production.value.seedStrategy,
       }),

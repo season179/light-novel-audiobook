@@ -64,6 +64,7 @@ EXPECTED_WAV = {
     "maximumClippedSampleFraction": 0.001,
     "minimumActiveFrameFraction": 0.15,
     "minimumSecondsPerWord": 0.08,
+    "minimumUtteranceDurationSeconds": 0.32,
     "maximumSecondsPerWord": 2.0,
     "fixedUtteranceOverheadSeconds": 1.0,
     "maximumDurationSeconds": 30.0,
@@ -442,9 +443,8 @@ def validate_wav(data: bytes, wav_config: dict[str, Any], text: str) -> dict[str
     duration = frames / sample_rate
     words = len(text.split())
     minimum_text_duration = max(
-        0.0,
-        wav_config["minimumSecondsPerWord"] * words
-        - wav_config["fixedUtteranceOverheadSeconds"],
+        wav_config["minimumUtteranceDurationSeconds"],
+        wav_config["minimumSecondsPerWord"] * words,
     )
     maximum_text_duration = (
         wav_config["maximumSecondsPerWord"] * words

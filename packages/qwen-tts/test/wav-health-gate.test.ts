@@ -69,8 +69,19 @@ afterAll(async () => {
 })
 
 describe('calibrated affine WAV duration gate', () => {
-  it('pins the measured one-second upper-envelope allowance', () => {
+  it('pins the measured short-utterance floor and upper-envelope allowance', () => {
+    expect(requirements.minimumUtteranceDurationSeconds).toBe(0.32)
     expect(requirements.fixedUtteranceOverheadSeconds).toBe(1)
+  })
+
+  it('accepts the measured healthy 0.40-second lower-envelope one-word render', () => {
+    expect(() => validate(0.4, ONE_WORD, 'healthy-minimum-short')).not.toThrow()
+  })
+
+  it('rejects a canonical, active, unclipped truncated one-word render', () => {
+    expect(() => validate(0.16, ONE_WORD, 'truncated-short')).toThrow(
+      'duration is outside configured text-relative bounds',
+    )
   })
 
   it('accepts the measured healthy 2.64-second one-word render', () => {
@@ -86,9 +97,9 @@ describe('calibrated affine WAV duration gate', () => {
     },
   )
 
-  it('applies the calibrated allowance consistently to the lower affine bound', () => {
-    expect(() => validate(3, words(50), 'lower-affine-edge')).not.toThrow()
-    expect(() => validate(2.96, words(50), 'lower-affine-rejection')).toThrow(
+  it('retains the per-word lower bound for longer segments', () => {
+    expect(() => validate(4, words(50), 'lower-rate-edge')).not.toThrow()
+    expect(() => validate(3.96, words(50), 'lower-rate-rejection')).toThrow(
       'duration is outside configured text-relative bounds',
     )
   })
@@ -115,6 +126,8 @@ describe('calibrated affine WAV duration gate', () => {
 
   it('keeps the Python production worker in step for healthy and runaway short renders', async () => {
     const cases = [
+      { id: 'healthy-minimum-short', duration: 0.4, accepted: true },
+      { id: 'truncated-short', duration: 0.16, accepted: false },
       { id: 'healthy-short', duration: 2.64, accepted: true },
       { id: 'runaway-4', duration: 4, accepted: false },
       { id: 'runaway-6', duration: 6, accepted: false },

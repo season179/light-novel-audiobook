@@ -5,7 +5,12 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { loadProductionConfig } from '../src/config.js'
-import { loadWorkerRuntimeIdentity } from '../src/runtime-identity.js'
+import {
+  AFFINE_WAV_GATE_REUSE_MIGRATION,
+  loadWorkerRuntimeIdentity,
+  type QwenWorkerRuntimeIdentity,
+  waveformProducingRuntimeIdentity,
+} from '../src/runtime-identity.js'
 import { SpeechEngineError } from '../src/types.js'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -73,6 +78,26 @@ async function withLoadedIdentity(
     production,
   )
 }
+
+describe('gate-only worker identity migration (#91)', () => {
+  const runtime = (workerSha256: string): QwenWorkerRuntimeIdentity => ({
+    workerSha256,
+    pythonExecutableSha256: '1'.repeat(64),
+    runtimeManifestSha256: '2'.repeat(64),
+    uvLockSha256: '3'.repeat(64),
+    installedPackagesSha256: '4'.repeat(64),
+    imports: { qwenTts: '0.1.1', torch: '2.9.1', torchaudio: '2.9.1' },
+  })
+
+  it('normalizes only the exact affine-gate successor to the predecessor waveform identity', () => {
+    const migration = AFFINE_WAV_GATE_REUSE_MIGRATION
+    expect(
+      waveformProducingRuntimeIdentity(runtime(migration.successorWorkerSha256)).workerSha256,
+    ).toBe(migration.predecessorWorkerSha256)
+    const future = runtime('f'.repeat(64))
+    expect(waveformProducingRuntimeIdentity(future)).toBe(future)
+  })
+})
 
 describe('loadWorkerRuntimeIdentity package ordering (#59)', () => {
   it('accepts a code-point-canonical manifest that localeCompare would reject', async () => {

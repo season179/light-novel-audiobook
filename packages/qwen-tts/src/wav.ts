@@ -91,10 +91,11 @@ export function validateCanonicalWavBytes(
   const wordCount = text.trim().split(/\s+/u).filter(Boolean).length
   if (wordCount === 0) invalid('render text has no words', segmentId)
   // A ratio has no intercept and mistakes fixed short-utterance variance for speaking rate (#91).
-  // Keep both sides affine: the calibrated allowance is bounded and becomes negligible over prose.
+  // The upper allowance becomes negligible over prose. The lower side instead keeps an absolute,
+  // measured truncation floor: onset/release overhead can only lengthen an utterance, not shorten it.
   const minimumTextDurationSeconds = Math.max(
-    0,
-    requirements.minimumSecondsPerWord * wordCount - requirements.fixedUtteranceOverheadSeconds,
+    requirements.minimumUtteranceDurationSeconds,
+    requirements.minimumSecondsPerWord * wordCount,
   )
   const maximumTextDurationSeconds =
     requirements.maximumSecondsPerWord * wordCount + requirements.fixedUtteranceOverheadSeconds
