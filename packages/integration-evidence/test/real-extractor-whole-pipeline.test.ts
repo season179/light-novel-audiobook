@@ -1,17 +1,26 @@
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { GenerateAudiobook } from '../../application/src/index.js'
+import {
+  GenerateAudiobook,
+  PendingFallbackReviewError,
+  ReviewFallbackApprovals,
+} from '../../application/src/index.js'
 import { FfmpegAudioAssembler } from '../../audio-assembly/src/index.js'
 import { VoiceCast, VoiceProfile } from '../../domain/src/index.js'
 import { DomainEpubExtractor, type StoredEpubIngestion } from '../../epub-ingestion/src/index.js'
 import { type DirectorProgressStore, GemmaDirectorModel } from '../../gemma-director/src/index.js'
-import { layoutFor, openWorkspace, SqliteJobRepository } from '../../persistence/src/index.js'
-import { QwenApplicationSpeechEngine, QwenTtsSpeechEngine } from '../../qwen-tts/src/index.js'
+import {
+  layoutFor,
+  openWorkspace,
+  SqliteFallbackApprovalRepository,
+  SqliteJobRepository,
+} from '../../persistence/src/index.js'
+import { createQwenSpeechEngineFactory, QwenTtsSpeechEngine } from '../../qwen-tts/src/index.js'
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(TEST_DIRECTORY, '../../..')
@@ -108,23 +117,32 @@ class RequestResponsiveLlamaServer {
         readonly source_text: string
       }[]
       readonly narrator_speaker_id: string
+      readonly fallback_speaker_id: string
     }
+    // The first passage of every chapter is an unattributed dialogue line. That is the director's own
+    // declared channel for "this speaker cannot be resolved from the supplied context", and it maps to
+    // `speakerId: null`, which the cast then resolves to the fallback voice. Without at least one such
+    // segment this test never reaches issue #45's approval gate at all: every-segment-narration always
+    // resolves to the narrator, so nothing ever needs a human decision.
     const value = JSON.stringify({
-      segments: user.passages.map((passage) => ({
-        source_passage_id: passage.source_passage_id,
-        source_text: passage.source_text,
-        kind: 'narration',
-        speaker_id: user.narrator_speaker_id,
-        confidence: 0.95,
-        delivery: {
-          emotion: 'neutral',
-          pace: 'normal',
-          volume: 'normal',
-          pause_after_ms: 250,
-        },
-        unresolved_speaker: false,
-        speaker_reason: null,
-      })),
+      segments: user.passages.map((passage, index) => {
+        const unresolved = index === 0
+        return {
+          source_passage_id: passage.source_passage_id,
+          source_text: passage.source_text,
+          kind: unresolved ? 'dialogue' : 'narration',
+          speaker_id: unresolved ? user.fallback_speaker_id : user.narrator_speaker_id,
+          confidence: 0.95,
+          delivery: {
+            emotion: 'neutral',
+            pace: 'normal',
+            volume: 'normal',
+            pause_after_ms: 250,
+          },
+          unresolved_speaker: unresolved,
+          speaker_reason: unresolved ? 'The fixture line names no speaker.' : null,
+        }
+      }),
     })
     this.requests += 1
     response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -239,6 +257,7 @@ describe('whole pipeline with the real extractor cover contract', () => {
       const layout = layoutFor(join(root, 'application'))
       const db = openWorkspace(layout)
       const jobs = new SqliteJobRepository(layout, db)
+      const approvals = new SqliteFallbackApprovalRepository(db)
       const brain = new RequestResponsiveLlamaServer()
       await brain.start()
       const gpuLockPath = join(root, 'fake-gpu.lock')
@@ -263,26 +282,87 @@ describe('whole pipeline with the real extractor cover contract', () => {
           gpuLeaseLockFilePath: gpuLockPath,
         })
         const qwen = await createQwenEngine(join(root, 'qwen'), gpuLockPath)
+        const realExtractor = new DomainEpubExtractor({
+          workspaceRoot: ingestionWorkspace,
+          repositoryRoot: REPOSITORY_ROOT,
+        })
+        const extractions = { count: 0 }
         const useCase = new GenerateAudiobook({
-          epubExtractor: new DomainEpubExtractor({
-            workspaceRoot: ingestionWorkspace,
-            repositoryRoot: REPOSITORY_ROOT,
-          }),
-          directorModel: director,
-          speechEngine: new QwenApplicationSpeechEngine(qwen),
+          epubExtractor: {
+            identity: realExtractor.identity,
+            extract: async (request) => {
+              extractions.count += 1
+              return realExtractor.extract(request)
+            },
+          },
+          // Issue #45: the director is built only when direction runs, and the speech engine only
+          // after this book's persisted fallback approvals are read back.
+          directorModelFactory: { identity: director.identity, create: () => director },
+          speechEngineFactory: createQwenSpeechEngineFactory(qwen),
           audioAssembler: await FfmpegAudioAssembler.create(),
           jobs,
+          approvals,
         })
+        const review = new ReviewFallbackApprovals({ jobs, approvals })
         const epubSha256 = createHash('sha256')
           .update(await readFile(FIXTURE_EPUB))
           .digest('hex')
 
-        const result = await useCase.execute({
+        const command = {
           jobId: 'real-extractor-cover-contract',
           epubPath: FIXTURE_EPUB,
           epubSha256,
           voices: voices(),
+        }
+        // Issue #45's gate, asserted in phases rather than with a conditional catch. Round 3 wrapped
+        // this in `.catch(PendingFallbackReviewError)` without asserting the stop ever happened — and
+        // it never did, because the fake director produced no fallback segments. A conditional with no
+        // assertion that the condition occurred proves nothing.
+
+        // Phase 1: the run stops for a human decision.
+        const stopped = await useCase
+          .execute(command)
+          .then(() => undefined)
+          .catch((error: unknown) => error)
+        expect(stopped).toBeInstanceOf(PendingFallbackReviewError)
+        const pending = (stopped as PendingFallbackReviewError).pending
+        expect(pending.length).toBeGreaterThan(0)
+        expect(pending.every((item) => item.decision === 'pending')).toBe(true)
+
+        // Phase 2: nothing was spoken. The real Qwen engine writes one WAV per rendered segment into
+        // its output directory, so an empty directory is proof that no render happened before the
+        // decision — not merely that a counter stayed at zero.
+        const qwenAudio = join(root, 'qwen', 'audio')
+        expect((await readdir(qwenAudio)).filter((name) => name.endsWith('.wav'))).toEqual([])
+        const directionsBefore = brain.requests
+        const extractionsBefore = extractions.count
+        expect(extractionsBefore).toBe(1)
+
+        // Phase 3: the decision is recorded, attributed to the actor this test supplies.
+        const reconciliation = await review.grantBookFallback({
+          jobId: command.jobId,
+          decidedBy: 'integration-evidence',
         })
+        expect(reconciliation.created.length).toBe(pending.length)
+        expect(reconciliation.grant?.decidedBy).toBe('integration-evidence')
+        expect(reconciliation.created.every((r) => r.decidedBy === 'integration-evidence')).toBe(
+          true,
+        )
+        expect(
+          reconciliation.created.every((r) => r.grantId === reconciliation.grant?.grantId),
+        ).toBe(true)
+
+        // Phase 4: rendering resumes from the persisted direction and completes.
+        const result = await useCase.execute(command)
+
+        // Phase 5: the resume re-used the persisted script — no second extraction, no re-direction.
+        expect(extractions.count).toBe(extractionsBefore)
+        expect(brain.requests).toBe(directionsBefore)
+        expect((await readdir(qwenAudio)).filter((name) => name.endsWith('.wav')).length).toBe(
+          result.generatedSegments,
+        )
+        // The completed output is bound to the catalog it was approved under (round 4's gate).
+        expect(result.job.catalogRevision).toBeGreaterThan(0)
 
         expect(result.job.state).toBe('completed')
         expect(result.job.stage).toBe('completed')

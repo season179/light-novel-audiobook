@@ -312,11 +312,29 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
           break
         }
         case 2: {
-          // swap two fragments inside one window
-          if (target.segments.length < 2) continue
-          const a = Math.floor(rand() * target.segments.length)
-          let b = Math.floor(rand() * target.segments.length)
-          if (a === b) b = (b + 1) % target.segments.length
+          // Swap only a pair whose order is observable under the @3 contract. Identical/repeating
+          // fragment text can commute, in which case swapping it is not a source-order corruption.
+          const candidates: [number, number][] = []
+          for (let leftIndex = 0; leftIndex < target.segments.length; leftIndex += 1) {
+            for (
+              let rightIndex = leftIndex + 1;
+              rightIndex < target.segments.length;
+              rightIndex += 1
+            ) {
+              const left = target.segments[leftIndex]
+              const right = target.segments[rightIndex]
+              if (left === undefined || right === undefined) continue
+              if (
+                left.source_passage_id !== right.source_passage_id ||
+                left.source_text + right.source_text !== right.source_text + left.source_text
+              ) {
+                candidates.push([leftIndex, rightIndex])
+              }
+            }
+          }
+          const pair = candidates[Math.floor(rand() * candidates.length)]
+          if (pair === undefined) continue
+          const [a, b] = pair
           const left = target.segments[a]
           const right = target.segments[b]
           if (left === undefined || right === undefined) continue
@@ -339,10 +357,14 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
           break
         }
         case 4: {
-          // #71 removed source offsets from the wire contract (@3): the validator derives ranges
-          // from text concatenation, so an offset nudge that leaves source_text unchanged is
-          // structurally invisible. This case existed for the pre-#71 offset-checking validator.
-          continue
+          // #71 removed offsets from @3, so corrupt actual model-owned text instead of arithmetic.
+          if (target.segments.length === 0) continue
+          const segment = target.segments[Math.floor(rand() * target.segments.length)]
+          if (segment === undefined) continue
+          const at = Math.floor(rand() * (segment.source_text.length + 1))
+          segment.source_text = `${segment.source_text.slice(0, at)}X${segment.source_text.slice(at)}`
+          applied = 'text-insert'
+          break
         }
         case 5: {
           // move a fragment into a different window's output
@@ -386,7 +408,7 @@ describe('issue #53 chunked fidelity fuzz (seeded, independent oracle)', () => {
       }
     }
     // Guard the fuzz itself: every corruption family must have run a meaningful number of times.
-    for (const family of ['drop', 'duplicate', 'swap-within', 'rewrite']) {
+    for (const family of ['drop', 'duplicate', 'swap-within', 'rewrite', 'text-insert']) {
       expect(corruptionCounts.get(family) ?? 0).toBeGreaterThan(500)
     }
     expect(corruptionCounts.get('move-across-windows') ?? 0).toBeGreaterThan(200)

@@ -175,7 +175,9 @@ describe('real extractor IDs against the real downstream gates', () => {
     }
 
     // `complete()` runs validateOutputContext, which requires book-<24hex> and ${bookId}-chNNNN.
-    job.complete(output)
+    // 0 is the catalog revision of a book with no recorded fallback decisions, which is this
+    // fixture: the gate under test is the ID dialect, not approvals.
+    job.complete(output, 0)
 
     expect(job.state).toBe('completed')
   })

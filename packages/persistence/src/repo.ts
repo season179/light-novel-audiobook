@@ -10,14 +10,19 @@ import type {
 import {
   AudiobookJob,
   type AudiobookJobSnapshot,
-  type Book,
-  type Chapter,
+  type AudiobookOutput,
+  Book,
+  Chapter,
+  type DeliveryDirection,
   DomainError,
   OutputVersion,
+  SEGMENT_KINDS,
+  Segment,
+  SourcePassage,
 } from '@light-novel-audiobook/domain'
-import { classifySqliteFailure, withTransaction } from './transaction.js'
+import { classifySqliteFailure, withBusyRetryingTransaction } from './transaction.js'
 import type { WorkspaceLayout } from './workspace.js'
-import { hashText, outputBaseName, sha256OfFile, toSafeAbsolute } from './workspace.js'
+import { outputBaseName, sha256OfFile, toSafeAbsolute } from './workspace.js'
 
 /** JobRepository implementation backed by SQLite + filesystem. */
 export class SqliteJobRepository implements JobRepository {
@@ -51,18 +56,56 @@ export class SqliteJobRepository implements JobRepository {
 
   async saveJob(job: AudiobookJob): Promise<void> {
     if (!job.id) throw new DomainError('Job ID is required')
+    if (job.state === 'completed') {
+      throw new DomainError('Completed jobs must be persisted with their separate output')
+    }
+    const json = JSON.stringify(job.snapshot())
 
-    const snapshot = job.snapshot()
-    const json = JSON.stringify(snapshot)
+    await withBusyRetryingTransaction(
+      this.db,
+      () => this.replaceJob(job.id, json),
+      `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
+    )
+  }
+
+  async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
+    if (job.state !== 'completed') {
+      throw new DomainError('Only a completed job can persist an audiobook output')
+    }
+    const json = JSON.stringify(job.snapshot())
+    const chaptersJson = JSON.stringify(output.chapters)
+    // Validate the persistence value before replacing the old terminal record.
+    const canonical = completedOutputFromRow({
+      version: output.version.value,
+      m4b_path: output.m4bPath,
+      chapters_json: chaptersJson,
+    })
 
     await withBusyRetryingTransaction(
       this.db,
       () => {
-        this.db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id)
-        this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(job.id, json)
+        this.replaceJob(job.id, json)
+        this.db
+          .prepare(
+            'INSERT INTO completed_outputs (job_id, version, m4b_path, chapters_json) VALUES (?, ?, ?, ?)',
+          )
+          .run(job.id, canonical.version.value, canonical.m4bPath, chaptersJson)
       },
-      `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
+      `Could not save completed audiobook job ${job.id}; the workspace database stayed locked`,
     )
+  }
+
+  async findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined> {
+    if (!jobId) throw new DomainError('Job ID is required')
+    const row = this.db
+      .prepare('SELECT version, m4b_path, chapters_json FROM completed_outputs WHERE job_id = ?')
+      .get(jobId) as CompletedOutputRow | undefined
+    return row === undefined ? undefined : completedOutputFromRow(row)
+  }
+
+  private replaceJob(jobId: string, snapshotJson: string): void {
+    this.db.prepare('DELETE FROM jobs WHERE id = ?').run(jobId)
+    this.db.prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)').run(jobId, snapshotJson)
   }
 
   async saveBook(book: Book): Promise<void> {
@@ -106,6 +149,7 @@ export class SqliteJobRepository implements JobRepository {
             )
             .run(chapter.id, book.id, chapter.position, chapter.title)
 
+          this.saveChapterPassages(chapter)
           this.saveChapterSegments(chapter)
         }
 
@@ -126,26 +170,75 @@ export class SqliteJobRepository implements JobRepository {
   }
 
   /**
+   * Persist one chapter's immutable source passages. Required to read a `Chapter` back at all: it
+   * refuses to construct without at least one passage, and `submitForReview` re-proves that every
+   * segment belongs to the chapter in exact order against them.
+   */
+  private saveChapterPassages(chapter: Chapter): void {
+    const desired = chapter.sourcePassages.map((passage, index) => ({
+      id: passage.id,
+      position: index + 1,
+      sourceText: passage.sourceText,
+    }))
+
+    const existing = this.db
+      .prepare(
+        'SELECT id, position, source_text FROM source_passages WHERE chapter_id = ? ORDER BY position',
+      )
+      .all(chapter.id) as unknown as SourcePassageRow[]
+
+    if (
+      existing.length === desired.length &&
+      desired.every((want, index) => {
+        const row = existing[index]
+        return (
+          row !== undefined &&
+          row.id === want.id &&
+          row.position === want.position &&
+          row.source_text === want.sourceText
+        )
+      })
+    ) {
+      return
+    }
+
+    this.db.prepare('DELETE FROM source_passages WHERE chapter_id = ?').run(chapter.id)
+    const insert = this.db.prepare(
+      'INSERT INTO source_passages (id, chapter_id, position, source_text) VALUES (?, ?, ?, ?)',
+    )
+    for (const want of desired) {
+      insert.run(want.id, chapter.id, want.position, want.sourceText)
+    }
+  }
+
+  /**
    * Persist one chapter's segment rows, writing nothing when they already match. saveBook runs
-   * once per chapter during direction plus twice per chapter during rendering, so on a
-   * 400-chapter book an unconditional rewrite costs millions of row writes per run for data
-   * nothing in this package reads.
+   * once per chapter during direction, so on a 400-chapter book an unconditional rewrite costs
+   * millions of row writes per run.
+   *
+   * Stores `source_text` and the voice assignment verbatim, not a digest: `findBook` must
+   * reconstruct segments that reproduce the same `createRenderInputIdentity` values, and a digest
+   * cannot do that.
    */
   private saveChapterSegments(chapter: Chapter): void {
     const desired = chapter.segments.map((segment, index) => ({
       id: segment.id,
       position: index + 1,
       sourcePassageId: segment.sourcePassageId,
-      sourceTextSha256: hashText(segment.sourceText),
+      sourceText: segment.sourceText,
       kind: segment.kind,
       speakerId: segment.speakerId ?? null,
       confidence: segment.confidence,
       delivery: JSON.stringify(segment.delivery),
+      voiceProfileId: segment.voiceAssignment?.voiceProfileId ?? null,
+      usesFallback: segment.voiceAssignment?.usesFallback === true ? 1 : 0,
+      fallbackReason: segment.voiceAssignment?.fallbackReason ?? null,
     }))
 
     const existing = this.db
       .prepare(
-        `SELECT id, position, source_passage_id, source_text_sha256, kind, speaker_id, confidence, delivery
+        `SELECT id, position, source_passage_id, source_text, kind, speaker_id, confidence, delivery,
+                voice_profile_id, uses_fallback, fallback_reason
            FROM segments WHERE chapter_id = ? ORDER BY position`,
       )
       .all(chapter.id) as unknown as SegmentRow[]
@@ -167,8 +260,9 @@ export class SqliteJobRepository implements JobRepository {
 
     const insert = this.db.prepare(
       `INSERT INTO segments
-        (id, chapter_id, position, source_passage_id, source_text_sha256, kind, speaker_id, confidence, delivery)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, chapter_id, position, source_passage_id, source_text, kind, speaker_id, confidence,
+         delivery, voice_profile_id, uses_fallback, fallback_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     for (const want of desired) {
       insert.run(
@@ -176,13 +270,100 @@ export class SqliteJobRepository implements JobRepository {
         chapter.id,
         want.position,
         want.sourcePassageId,
-        want.sourceTextSha256,
+        want.sourceText,
         want.kind,
         want.speakerId,
         want.confidence,
         want.delivery,
+        want.voiceProfileId,
+        want.usesFallback,
+        want.fallbackReason,
       )
     }
+  }
+
+  /**
+   * Reads the approved script back for a render stage that did not direct it.
+   *
+   * Rebuilt through the domain constructors rather than by rehydrating private state, so the round
+   * trip re-proves what direction proved: passages belong to their chapter, segments belong to
+   * their chapter in exact contiguous order with unique IDs, and every segment carries a voice
+   * before the chapter is approved. A partial or reshuffled write therefore fails here instead of
+   * producing a book that renders to the wrong audio.
+   *
+   * Chapter *render* state is deliberately not persisted or restored. What is stored is the
+   * approved script; render progress belongs to the job and the artifact ledger, so a chapter
+   * always reads back `approved` and is ready to render again.
+   */
+  async findBook(bookId: string): Promise<Book | undefined> {
+    if (!bookId || bookId.length === 0) throw new DomainError('Book ID is required')
+
+    const bookRow = this.db
+      .prepare(
+        'SELECT id, title, author, cover_path, epub_path, epub_sha256 FROM books WHERE id = ?',
+      )
+      .get(bookId) as
+      | {
+          id: string
+          title: string
+          author: string | null
+          cover_path: string | null
+          epub_path: string
+          epub_sha256: string
+        }
+      | undefined
+    if (!bookRow) return undefined
+
+    const chapterRows = this.db
+      .prepare('SELECT id, position, title FROM chapters WHERE book_id = ? ORDER BY position')
+      .all(bookId) as unknown as { id: string; position: number; title: string }[]
+
+    const chapters = chapterRows.map((chapterRow) => {
+      const passageRows = this.db
+        .prepare(
+          'SELECT id, position, source_text FROM source_passages WHERE chapter_id = ? ORDER BY position',
+        )
+        .all(chapterRow.id) as unknown as SourcePassageRow[]
+      const chapter = new Chapter({
+        id: chapterRow.id,
+        bookId,
+        position: chapterRow.position,
+        title: chapterRow.title,
+        sourcePassages: passageRows.map(
+          (row) =>
+            new SourcePassage({
+              id: row.id,
+              chapterId: chapterRow.id,
+              sourceText: row.source_text,
+            }),
+        ),
+      })
+
+      const segmentRows = this.db
+        .prepare(
+          `SELECT id, position, source_passage_id, source_text, kind, speaker_id, confidence, delivery,
+                  voice_profile_id, uses_fallback, fallback_reason
+             FROM segments WHERE chapter_id = ? ORDER BY position`,
+        )
+        .all(chapterRow.id) as unknown as SegmentRow[]
+      if (segmentRows.length === 0) return chapter
+
+      const segments = segmentRows.map((row) => reconstructSegment(chapterRow.id, row))
+      chapter.submitForReview(segments)
+      // Refuses unless every segment carries a voice, which is the whole point of the read path:
+      // a script missing an assignment is not renderable and must not look approved.
+      chapter.approve()
+      return chapter
+    })
+
+    return new Book({
+      id: bookRow.id,
+      title: bookRow.title,
+      author: bookRow.author,
+      coverPath: bookRow.cover_path,
+      source: { epubPath: bookRow.epub_path, sha256: bookRow.epub_sha256 },
+      chapters,
+    })
   }
 
   async findReusableSegment(
@@ -350,35 +531,51 @@ export class SqliteJobRepository implements JobRepository {
 // Private helpers
 // ============================================================
 
-/** Total time a repository transaction may spend losing lock races before the run gives up. */
-const TRANSACTION_BUSY_DEADLINE_MS = 30_000
+interface CompletedOutputRow {
+  readonly version: number
+  readonly m4b_path: string
+  readonly chapters_json: string
+}
 
-/**
- * Retry the whole transaction after a busy failure, so a failed BEGIN IMMEDIATE or COMMIT is
- * included and every attempt starts with a fresh transaction. SQLite's busy_timeout performs the
- * primary wait; this deadline bounds repeated losses, while backoff prevents a retry spin.
- */
-async function withBusyRetryingTransaction<T>(
-  db: DatabaseSync,
-  work: () => T,
-  lockedMessage: string,
-): Promise<T> {
-  const deadline = performance.now() + TRANSACTION_BUSY_DEADLINE_MS
-  let busyAttempts = 0
-
-  while (true) {
-    try {
-      return withTransaction(db, work)
-    } catch (error) {
-      if (classifySqliteFailure(error) !== 'busy') throw error
-
-      const remainingMs = deadline - performance.now()
-      if (remainingMs <= 0) throw new DomainError(lockedMessage)
-
-      await delay(Math.min(backoffMs(busyAttempts), remainingMs))
-      busyAttempts += 1
-    }
+function completedOutputFromRow(row: CompletedOutputRow): AudiobookOutput {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(row.chapters_json)
+  } catch {
+    throw new DomainError('Stored completed output has unreadable chapter metadata')
   }
+  if (
+    typeof row.m4b_path !== 'string' ||
+    row.m4b_path.trim().length === 0 ||
+    !Array.isArray(parsed) ||
+    parsed.length === 0
+  ) {
+    throw new DomainError('Stored completed output is invalid')
+  }
+  const chapters = parsed.map((value): { chapterId: string; path: string } => {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('chapterId' in value) ||
+      !('path' in value) ||
+      typeof value.chapterId !== 'string' ||
+      typeof value.path !== 'string' ||
+      value.chapterId.trim().length === 0 ||
+      value.path.trim().length === 0
+    ) {
+      throw new DomainError('Stored completed output chapter metadata is invalid')
+    }
+    return Object.freeze({ chapterId: value.chapterId, path: value.path })
+  })
+  const paths = [row.m4b_path, ...chapters.map((chapter) => chapter.path)]
+  if (new Set(paths).size !== paths.length) {
+    throw new DomainError('Stored completed output paths are not distinct')
+  }
+  return Object.freeze({
+    version: new OutputVersion(row.version),
+    m4bPath: row.m4b_path,
+    chapters: Object.freeze(chapters),
+  })
 }
 
 /** NUL and the C0 controls, DEL and the C1 controls, and both path separators. */
@@ -386,16 +583,6 @@ function isUnsafePathCharacter(character: string): boolean {
   if (character === '/' || character === '\\') return true
   const code = character.codePointAt(0) ?? 0
   return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
-}
-
-const delay = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-
-/** Escalating waits between lock retries. A tight retry loop with no delay is not a retry. */
-function backoffMs(attempt: number): number {
-  return Math.min(25 * 2 ** attempt, 500)
 }
 
 /**
@@ -491,26 +678,38 @@ function pathOccupied(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined
 }
 
+interface SourcePassageRow {
+  readonly id: string
+  readonly position: number
+  readonly source_text: string
+}
+
 interface SegmentRow {
   readonly id: string
   readonly position: number
   readonly source_passage_id: string
-  readonly source_text_sha256: string
+  readonly source_text: string
   readonly kind: string
   readonly speaker_id: string | null
   readonly confidence: number
   readonly delivery: string
+  readonly voice_profile_id: string | null
+  readonly uses_fallback: number
+  readonly fallback_reason: string | null
 }
 
 interface DesiredSegmentRow {
   readonly id: string
   readonly position: number
   readonly sourcePassageId: string
-  readonly sourceTextSha256: string
+  readonly sourceText: string
   readonly kind: string
   readonly speakerId: string | null
   readonly confidence: number
   readonly delivery: string
+  readonly voiceProfileId: string | null
+  readonly usesFallback: number
+  readonly fallbackReason: string | null
 }
 
 function segmentRowMatches(want: DesiredSegmentRow, row: SegmentRow | undefined): boolean {
@@ -519,12 +718,58 @@ function segmentRowMatches(want: DesiredSegmentRow, row: SegmentRow | undefined)
     row.id === want.id &&
     row.position === want.position &&
     row.source_passage_id === want.sourcePassageId &&
-    row.source_text_sha256 === want.sourceTextSha256 &&
+    row.source_text === want.sourceText &&
     row.kind === want.kind &&
     row.speaker_id === want.speakerId &&
     row.confidence === want.confidence &&
-    row.delivery === want.delivery
+    row.delivery === want.delivery &&
+    row.voice_profile_id === want.voiceProfileId &&
+    row.uses_fallback === want.usesFallback &&
+    row.fallback_reason === want.fallbackReason
   )
+}
+
+/**
+ * Rebuilds one directed segment and its voice assignment from a row. Every value is validated by
+ * the domain constructor, so a row corrupted or written by an older schema fails loudly rather than
+ * producing a segment that renders different audio than the one that was approved.
+ */
+function reconstructSegment(chapterId: string, row: SegmentRow): Segment {
+  const kind = SEGMENT_KINDS.find((candidate) => candidate === row.kind)
+  if (kind === undefined) throw new DomainError(`Segment ${row.id} has an unsupported kind`)
+  let delivery: DeliveryDirection
+  try {
+    delivery = JSON.parse(row.delivery) as DeliveryDirection
+  } catch {
+    throw new DomainError(`Segment ${row.id} has unreadable delivery direction`)
+  }
+  const segment = new Segment({
+    id: row.id,
+    chapterId,
+    sourcePassageId: row.source_passage_id,
+    order: row.position,
+    sourceText: row.source_text,
+    kind,
+    speakerId: row.speaker_id,
+    confidence: row.confidence,
+    delivery,
+  })
+  if (row.voice_profile_id === null) return segment
+  const usesFallback = row.uses_fallback !== 0
+  const fallbackReason = row.fallback_reason
+  if (
+    fallbackReason !== null &&
+    fallbackReason !== 'unresolved_speaker' &&
+    fallbackReason !== 'missing_speaker_voice'
+  ) {
+    throw new DomainError(`Segment ${row.id} has an unsupported fallback reason`)
+  }
+  segment.assignVoice({
+    voiceProfileId: row.voice_profile_id,
+    usesFallback,
+    fallbackReason: usesFallback ? fallbackReason : null,
+  })
+  return segment
 }
 
 function versionLabel(v: number): string {

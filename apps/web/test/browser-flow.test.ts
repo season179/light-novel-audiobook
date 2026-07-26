@@ -95,8 +95,24 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     const jobId = startedJobId ?? ''
     uploadView.unmount()
 
-    // Watching a live job.
+    // The review stop. The fixture book has unresolved speakers, and nothing renders until the user
+    // decides — there is no policy or default that approves them. One click covers the whole book.
     const firstVisit = renderJobPanel(jobId)
+    await waitFor(
+      () => expect(screen.getByText('Directing chapters · awaiting_review')).toBeTruthy(),
+      WAIT,
+    )
+    const approveAll = await screen.findByRole(
+      'button',
+      { name: /Use the fallback voice for all \d+ unresolved speakers/ },
+      WAIT,
+    )
+    // Nothing has been rendered at this point: no progress bar and no audio.
+    expect(screen.queryByRole('progressbar', { name: 'Segments rendered' })).toBeNull()
+    await user.click(approveAll)
+    await user.click(await screen.findByRole('button', { name: 'Render approved script' }, WAIT))
+
+    // Watching a live job.
     await waitFor(() => expect(screen.getByText('Rendering speech · running')).toBeTruthy(), WAIT)
     await waitFor(() => expect(screen.getByText('2 of 16')).toBeTruthy(), WAIT)
     expect(screen.getByRole('progressbar', { name: 'Segments rendered' })).toBeTruthy()

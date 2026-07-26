@@ -226,16 +226,11 @@ describe('SlicingEpubExtractor identity', () => {
     const run = async (extractor: EpubExtractor): Promise<unknown> =>
       await new GenerateAudiobook({
         epubExtractor: extractor,
-        directorModel: {
-          identity: 'gemma@1',
-          directChapter: async () => {
-            throw new Error('not reached')
-          },
-          release: async () => undefined,
-        } as never,
-        speechEngine: { identity: 'qwen@1' } as never,
+        directorModelFactory: { identity: 'gemma@1' } as never,
+        speechEngineFactory: { identity: 'qwen@1' } as never,
         audioAssembler: { identity: 'ffmpeg@1' } as never,
         jobs: jobs as never,
+        approvals: {} as never,
       }).execute({
         jobId: 'slice-selection-job',
         epubPath: '/nonexistent/slice.epub',
@@ -283,16 +278,11 @@ describe('SlicingEpubExtractor identity', () => {
     const useCaseFor = (extractor: EpubExtractor): GenerateAudiobook =>
       new GenerateAudiobook({
         epubExtractor: extractor,
-        directorModel: {
-          identity: 'gemma@1',
-          directChapter: async () => {
-            throw new Error('not reached')
-          },
-          release: async () => undefined,
-        } as never,
-        speechEngine: { identity: 'qwen@1' } as never,
+        directorModelFactory: { identity: 'gemma@1' } as never,
+        speechEngineFactory: { identity: 'qwen@1' } as never,
         audioAssembler: { identity: 'ffmpeg@1' } as never,
         jobs: jobs as never,
+        approvals: {} as never,
       })
 
     // The first run binds the command identity, then fails inside direction — enough to persist it.

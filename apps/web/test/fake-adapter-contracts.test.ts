@@ -192,18 +192,35 @@ describe('FakeSpeechEngine mirrors the merged Qwen adapter', () => {
     await expect(approved.render(renderRequest(fallback))).resolves.toMatchObject({
       segmentId: fallback.id,
     })
-    expect(approved.autoApprovedFallbacks).toHaveLength(0)
 
-    const standIn = engine({ unreviewedFallbackPolicy: 'auto-approve' })
-    await standIn.beginBatch()
-    await standIn.render(renderRequest(fallback))
-    expect(standIn.autoApprovedFallbacks).toHaveLength(1)
-    // Segment-specific and identity-bound, so it can never authorize another speaker's line.
-    expect(standIn.autoApprovedFallbacks[0]).toMatchObject({
+    // There is no option, policy or default that renders an unapproved fallback segment. The
+    // `'auto-approve'` stand-in that used to live here is gone, and its renamed successor in the
+    // application layer was removed in issue #45's round 2.
+    const unapproved = engine()
+    await unapproved.beginBatch()
+    await expect(unapproved.render(renderRequest(fallback))).rejects.toThrow(
+      'no explicit human approval identity',
+    )
+
+    // A catalog replaced per book, as the factory does after review, authorizes only what it names.
+    const swapped = engine()
+    swapped.replaceApprovals([
+      {
+        segmentId: fallback.id,
+        speakerId: fallback.speakerId,
+        fallbackReason: fallback.voiceAssignment?.fallbackReason ?? 'missing_speaker_voice',
+        approvalId: 'approval-2',
+        approvalSha256: 'e'.repeat(64),
+      },
+    ])
+    await swapped.beginBatch()
+    await expect(swapped.render(renderRequest(fallback))).resolves.toMatchObject({
       segmentId: fallback.id,
-      speakerId: fallback.speakerId,
     })
-    expect(standIn.autoApprovedFallbacks[0]?.approvalSha256).toMatch(/^[0-9a-f]{64}$/)
+    swapped.replaceApprovals([])
+    await expect(swapped.render(renderRequest(fallback))).rejects.toThrow(
+      'no explicit human approval identity',
+    )
   })
 
   it('rejects a voice that is not the segment’s assignment', async () => {
@@ -311,11 +328,23 @@ describe('FakeAudioAssembler mirrors the merged FFmpeg planner', () => {
     const speech = new FakeSpeechEngine(workspace, {
       fallbackVoiceProfileId: voices.fallback.id,
       pinnedVoiceProfiles: pinned,
-      unreviewedFallbackPolicy: 'auto-approve',
     })
-    await speech.beginBatch()
     const chapterEntry = first.chapters[0]
     if (chapterEntry === undefined) return
+    // Every fallback segment needs a decision, exactly as it does in the real flow. This test is
+    // about output reservation, so the decisions are supplied directly rather than reviewed.
+    speech.replaceApprovals(
+      chapterEntry.segments
+        .filter((item) => item.segment.voiceAssignment?.usesFallback === true)
+        .map((item, index) => ({
+          segmentId: item.segment.id,
+          speakerId: item.segment.speakerId,
+          fallbackReason: item.segment.voiceAssignment?.fallbackReason ?? 'missing_speaker_voice',
+          approvalId: `approval-reservation-${index + 1}`,
+          approvalSha256: 'f'.repeat(64),
+        })),
+    )
+    await speech.beginBatch()
     const rendered = []
     for (const item of chapterEntry.segments) {
       rendered.push({

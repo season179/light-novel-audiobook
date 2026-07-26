@@ -1,6 +1,18 @@
 import { extname } from 'node:path'
-import type { DirectChapterOptions, JobRepository } from '@light-novel-audiobook/application'
-import type { VoiceCast } from '@light-novel-audiobook/domain'
+import type {
+  CompletedOutputAuthority,
+  DirectChapterOptions,
+  JobRepository,
+  PendingFallbackApproval,
+  ReviewFallbackApprovals,
+} from '@light-novel-audiobook/application'
+import { RenderInProgressError } from '@light-novel-audiobook/application'
+import type {
+  AudiobookJob,
+  AudiobookJobSnapshot,
+  AudiobookOutput,
+  VoiceCast,
+} from '@light-novel-audiobook/domain'
 import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
@@ -53,6 +65,11 @@ export interface OpenAudioFile {
   close(): Promise<void>
 }
 
+interface AuthorizedJobProjection {
+  readonly snapshot: AudiobookJobSnapshot
+  readonly output?: AudiobookOutput | undefined
+}
+
 export interface AudiobookWebApiDependencies {
   readonly workspace: LocalWorkspace
   readonly uploads: EpubUploadStore
@@ -60,8 +77,25 @@ export interface AudiobookWebApiDependencies {
   readonly books: BookReadModelStore
   readonly runner: GenerationRunner
   readonly voices: VoiceCast
-  /** Operational direction options forwarded to every generation command (never persisted). */
+  readonly review: ReviewFallbackApprovals
+  /**
+   * Who this server records as the human behind a fallback decision. Required, and never taken from a
+   * request: see `resolveReviewerIdentity`.
+   */
+  readonly reviewer: string
+  /** The only route to a stored output; shared with review so authorization and open are atomic. */
+  readonly completedOutputs: CompletedOutputAuthority
+  /** Operational direction controls forwarded to each generation command; never persisted. */
   readonly directorOptions?: DirectChapterOptions | undefined
+}
+
+/** The review queue for one job, plus whether a book-wide decision has already been made. */
+export interface FallbackReviewView {
+  readonly jobId: string
+  readonly awaitingReview: boolean
+  readonly grantedBy: string | null
+  readonly pendingCount: number
+  readonly items: readonly PendingFallbackApproval[]
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
@@ -103,6 +137,9 @@ export class AudiobookWebApi {
   private readonly books: BookReadModelStore
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
+  private readonly review: ReviewFallbackApprovals
+  private readonly reviewer: string
+  private readonly completedOutputs: CompletedOutputAuthority
   private readonly directorOptions: DirectChapterOptions | undefined
 
   constructor(dependencies: AudiobookWebApiDependencies) {
@@ -112,7 +149,135 @@ export class AudiobookWebApi {
     this.books = dependencies.books
     this.runner = dependencies.runner
     this.voices = dependencies.voices
+    this.review = dependencies.review
+    this.reviewer = dependencies.reviewer
+    this.completedOutputs = dependencies.completedOutputs
     this.directorOptions = dependencies.directorOptions
+  }
+
+  /**
+   * The unresolved speakers in a job's approved script and what has been decided about each.
+   *
+   * `sourceTextExcerpt` on each item is story text — nobody can approve a voice for a line they
+   * cannot read. It must never be written to a log or into job state.
+   */
+  async listFallbackReview(input: { readonly jobId: string }): Promise<FallbackReviewView> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.bookId === null) {
+      return {
+        jobId: input.jobId,
+        awaitingReview: false,
+        grantedBy: null,
+        pendingCount: 0,
+        items: [],
+      }
+    }
+    const items = await this.review.list(input.jobId)
+    const grant = await this.review.findGrant(input.jobId)
+    return {
+      jobId: input.jobId,
+      awaitingReview: job.state === 'awaiting_review',
+      grantedBy: grant?.decidedBy ?? null,
+      pendingCount: items.filter((item) => item.decision !== 'approved').length,
+      items,
+    }
+  }
+
+  /**
+   * The M1 book-wide human decision: use the fallback voice for every unresolved speaker in this
+   * book. One explicit act — a 2,328-passage book must not stop for a click per line — recorded as
+   * one durable per-segment record each, so withdrawing one speaker later touches only that speaker.
+   */
+  async approveAllFallbacks(input: { readonly jobId: string }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.grantBookFallback({ jobId: input.jobId, decidedBy: this.reviewer }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  async approveFallback(input: {
+    readonly jobId: string
+    readonly segmentId: string
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.approve({
+        jobId: input.jobId,
+        segmentId: input.segmentId,
+        decidedBy: this.reviewer,
+      }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  async revokeFallback(input: {
+    readonly jobId: string
+    readonly segmentId: string
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.revoke({
+        jobId: input.jobId,
+        segmentId: input.segmentId,
+        decidedBy: this.reviewer,
+      }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  /**
+   * Resumes a job that stopped for review. Reuses the same runner and the same command, so rendering
+   * continues from the persisted script without re-extracting or re-directing.
+   */
+  async renderApprovedScript(input: { readonly jobId: string }): Promise<StartedGeneration> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.state !== 'awaiting_review') {
+      throw new WebApiError(
+        'generation_rejected',
+        'This audiobook is not waiting for a fallback-voice decision.',
+      )
+    }
+    // The job ID is a prefix of the upload digest, so the upload is found by re-deriving it rather
+    // than by storing a reverse mapping that could drift.
+    const upload = (await this.uploads.list()).find(
+      (candidate) => deriveJobId(candidate.sha256) === input.jobId,
+    )
+    if (upload === undefined) {
+      throw new WebApiError('unknown_upload', 'The uploaded EPUB for this job is no longer here.')
+    }
+    if (!this.runner.isActive(input.jobId)) {
+      this.runner.start({
+        jobId: input.jobId,
+        epubPath: upload.epubPath,
+        epubSha256: upload.sha256,
+        voices: this.voices,
+        ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
+      })
+    }
+    return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
+  }
+
+  /** A review decision is refused outright while a render owns the job, never queued behind it. */
+  private async runReviewDecision<T>(jobId: string, decide: () => Promise<T>): Promise<T> {
+    if (this.runner.isActive(jobId)) {
+      throw new WebApiError(
+        'generation_rejected',
+        'This audiobook is rendering. Wait for it to finish before changing a fallback-voice decision.',
+      )
+    }
+    try {
+      return await decide()
+    } catch (error) {
+      if (error instanceof RenderInProgressError) {
+        throw new WebApiError(
+          'generation_rejected',
+          'This audiobook is rendering. Wait for it to finish before changing a fallback-voice decision.',
+        )
+      }
+      throw error
+    }
   }
 
   /** Throws `invalid_upload` with an actionable message when the bytes are not an EPUB. */
@@ -181,8 +346,51 @@ export class AudiobookWebApi {
       const failure = this.runner.startupFailure(input.jobId)
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
     }
-    const view = buildJobStateView(job.snapshot(), this.books.find(job.bookId))
+    const projection = await this.authorizedSnapshot(job)
+    const view = buildJobStateView(
+      projection.snapshot,
+      this.books.find(job.bookId),
+      projection.output,
+    )
     return this.withRunnerStatus(view)
+  }
+
+  /**
+   * Public job snapshots never contain output. The authority may add the separately persisted output
+   * to this one projection while its live approval catalog still stands, so the page, chapter list,
+   * and download link agree. On denial the best-effort reopen improves the displayed state, but
+   * withholding output does not depend on that write succeeding.
+   */
+  private async authorizedSnapshot(job: AudiobookJob): Promise<AuthorizedJobProjection> {
+    if (job.state !== 'completed') return { snapshot: job.snapshot() }
+    const authorization = await this.completedOutputs.authorize(job, (output) => ({
+      snapshot: job.snapshot(),
+      output,
+    }))
+    if (authorization.exposable) return authorization.value
+    const deniedSnapshot = job.snapshot()
+    // When the reopen lands, report the reopened job: saying `completed` with nothing to download
+    // would tell the page the run finished successfully and then offer it no audio. When it does not
+    // land, the output is still stripped, so the file is withheld either way.
+    return { snapshot: (await this.reopenStaleOutput(job)) ?? deniedSnapshot }
+  }
+
+  /**
+   * Best-effort, and deliberately so. A failure here must not turn a read into an error and must not
+   * re-expose the file: the caller has already decided to withhold it, and every later read recomputes
+   * the gate and withholds it again.
+   *
+   * Returns the reopened snapshot when it was persisted, so a reader can project the truth.
+   */
+  private async reopenStaleOutput(job: AudiobookJob): Promise<AudiobookJobSnapshot | undefined> {
+    if (this.runner.isActive(job.id)) return undefined
+    try {
+      job.reopenForReview()
+      await this.jobs.saveJob(job)
+      return job.snapshot()
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -242,27 +450,36 @@ export class AudiobookWebApi {
     chapterId: string | null,
     attachment: boolean,
   ): Promise<OpenAudioFile> {
-    const path = await this.persistedOutputPath(jobId, chapterId)
-    const file = await this.workspace.openContainedFile(path)
-    return this.toOpenAudioFile(file, attachment)
-  }
-
-  /** Paths only ever come from the persisted job output, never from the request. */
-  private async persistedOutputPath(jobId: string, chapterId: string | null): Promise<string> {
     const job = await this.jobs.findJob(jobId)
     if (job === undefined) {
       throw new WebApiError('unknown_job', 'That job is not in the local workspace.')
     }
-    const output = job.output
-    if (output === null) {
-      throw new WebApiError('output_unavailable', 'This audiobook has not been assembled yet.')
+    // The authority holds the book's short catalog section through descriptor acquisition. It then
+    // releases immediately: a stream whose descriptor existed before a revocation committed may
+    // finish, while every later open observes the new revision and fails.
+    const authorization = await this.completedOutputs.authorize(job, async (output) => {
+      let path: string
+      if (chapterId === null) {
+        path = output.m4bPath
+      } else {
+        const chapter = output.chapters.find((entry) => entry.chapterId === chapterId)
+        if (chapter === undefined) {
+          throw new WebApiError('output_unavailable', 'That chapter has no generated audio yet.')
+        }
+        path = chapter.path
+      }
+      const file = await this.workspace.openContainedFile(path)
+      return this.toOpenAudioFile(file, attachment)
+    })
+    if (authorization.exposable) return authorization.value
+    if (authorization.denial === 'approval-catalog-moved') {
+      await this.reopenStaleOutput(job)
+      throw new WebApiError(
+        'output_unavailable',
+        'A fallback-voice decision for this audiobook changed after it was assembled, so this file is no longer approved. Review the unresolved speakers and render again.',
+      )
     }
-    if (chapterId === null) return output.m4bPath
-    const chapter = output.chapters.find((entry) => entry.chapterId === chapterId)
-    if (chapter === undefined) {
-      throw new WebApiError('output_unavailable', 'That chapter has no generated audio yet.')
-    }
-    return chapter.path
+    throw new WebApiError('output_unavailable', 'This audiobook has not been assembled yet.')
   }
 
   private toOpenAudioFile(file: ContainedFile, attachment: boolean): OpenAudioFile {

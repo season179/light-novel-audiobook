@@ -10,11 +10,12 @@ import {
   layoutFor,
   migrateSchema,
   openWorkspace,
+  SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
 import {
+  createQwenSpeechEngineFactory,
   loadProductionConfig,
-  QwenApplicationSpeechEngine,
   QwenTtsSpeechEngine,
 } from '@light-novel-audiobook/qwen-tts'
 import { type SliceLimits, type SliceReport, SlicingEpubExtractor } from './slice.js'
@@ -92,6 +93,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   const database = openWorkspace(layout)
   migrateSchema(database)
   const jobs = new SqliteJobRepository(layout, database)
+  const approvals = new SqliteFallbackApprovalRepository(database)
 
   // --- extraction: the real extractor, bounded by a decorator at this boundary only
   const extractor = new SlicingEpubExtractor(
@@ -157,7 +159,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
     gpuGate: transports.gpu.coordinator,
     processEnvironment: transports.speech.processEnvironment,
   })
-  const speechEngine = new QwenApplicationSpeechEngine(engine)
+  const speechEngineFactory = createQwenSpeechEngineFactory(engine)
 
   // --- assembly: the pinned ffmpeg toolchain, version-checked
   const audioAssembler = await FfmpegAudioAssembler.create(
@@ -166,10 +168,11 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
 
   const useCase = new GenerateAudiobook({
     epubExtractor: extractor,
-    directorModel: director,
-    speechEngine,
+    directorModelFactory: { identity: director.identity, create: () => director },
+    speechEngineFactory,
     audioAssembler,
     jobs,
+    approvals,
   })
 
   try {
@@ -208,7 +211,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
       identities: {
         extractor: extractor.identity,
         director: director.identity,
-        speechEngine: speechEngine.identity,
+        speechEngine: speechEngineFactory.identity,
         assembler: audioAssembler.identity,
       },
       durationsMs: { total: Date.now() - startedAt },

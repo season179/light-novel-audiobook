@@ -247,6 +247,9 @@ importers:
         specifier: workspace:*
         version: link:../gpu-lease
     devDependencies:
+      '@light-novel-audiobook/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       tsx:
         specifier: 4.21.0
         version: 4.21.0

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import type {
   CompletedSegmentAudio,
   SpeechEngine,
+  SpeechEngineContext,
+  SpeechEngineFactory,
   SpeechRenderRequest,
 } from '@light-novel-audiobook/application'
 import type { FallbackReason } from '@light-novel-audiobook/domain'
@@ -31,13 +33,6 @@ export interface FakeSpeechEngineOptions {
   readonly fallbackVoiceProfileId?: string | undefined
   /** Persisted human decisions authorizing fallback use, one per approved segment. */
   readonly fallbackApprovals?: readonly FakeFallbackApproval[] | undefined
-  /**
-   * What to do about a fallback segment with no approval record. `'reject'` is the default and
-   * matches the merged Qwen adapter. `'auto-approve'` is an explicit M1 stand-in for the approval
-   * workflow the UI does not have yet; it still mints a segment-specific, identity-bound record and
-   * records it on `autoApprovedFallbacks` so nothing about it is silent.
-   */
-  readonly unreviewedFallbackPolicy?: 'reject' | 'auto-approve' | undefined
   /**
    * The approved profiles the real engine would match on. When supplied, a voice whose
    * `syntheticSpeaker`/`instruction`/`seed` does not resolve is refused exactly as
@@ -67,10 +62,8 @@ export class FakeSpeechEngine implements SpeechEngine {
   private readonly workspace: LocalWorkspace
   private readonly beforeRender: ((segmentId: string) => Promise<void>) | undefined
   private readonly fallbackVoiceProfileId: string | undefined
-  private readonly approvals: Map<string, FakeFallbackApproval>
-  private readonly unreviewedFallbackPolicy: 'reject' | 'auto-approve'
+  private approvals: Map<string, FakeFallbackApproval>
   private readonly pinnedVoiceProfiles: readonly PinnedVoiceMaterial[] | undefined
-  private readonly autoApproved: FakeFallbackApproval[] = []
   private batchOpen = false
   private rendering = false
   private renderedCount = 0
@@ -79,7 +72,6 @@ export class FakeSpeechEngine implements SpeechEngine {
     this.workspace = workspace
     this.beforeRender = options.beforeRender
     this.fallbackVoiceProfileId = options.fallbackVoiceProfileId
-    this.unreviewedFallbackPolicy = options.unreviewedFallbackPolicy ?? 'reject'
     this.pinnedVoiceProfiles = options.pinnedVoiceProfiles
     this.approvals = new Map()
     // Validated on construction, like the real adapter: a duplicate or malformed approval is a
@@ -101,9 +93,24 @@ export class FakeSpeechEngine implements SpeechEngine {
     return this.renderedCount
   }
 
-  /** Every fallback this engine approved on the user's behalf, for tests and for review evidence. */
-  get autoApprovedFallbacks(): readonly FakeFallbackApproval[] {
-    return this.autoApproved
+  /**
+   * Replaces the catalog for the book about to render. Called by the factory once per render stage,
+   * after review — the real adapter takes its catalog in the constructor for the same reason.
+   */
+  replaceApprovals(records: readonly FakeFallbackApproval[]): void {
+    const next = new Map<string, FakeFallbackApproval>()
+    for (const approval of records) {
+      if (next.has(approval.segmentId)) {
+        throw new Error(`Duplicate fallback approval for ${approval.segmentId}`)
+      }
+      if (!APPROVAL_ID.test(approval.approvalId) || !SHA256.test(approval.approvalSha256)) {
+        throw new Error(
+          `Fallback approval for ${approval.segmentId} needs a policy-safe ID and a lowercase SHA-256`,
+        )
+      }
+      next.set(approval.segmentId, approval)
+    }
+    this.approvals = next
   }
 
   async beginBatch(): Promise<void> {
@@ -194,11 +201,10 @@ export class FakeSpeechEngine implements SpeechEngine {
 
     const approval = this.approvals.get(segmentId)
     if (approval === undefined) {
-      if (this.unreviewedFallbackPolicy === 'reject') {
-        throw new Error(`Fallback segment ${segmentId} has no explicit human approval identity`)
-      }
-      this.approvals.set(segmentId, this.mintUnreviewedApproval(request, fallbackReason))
-      return
+      // Unconditional, exactly as `QwenApplicationSpeechEngine` is. There is deliberately no policy
+      // that softens this: the `'auto-approve'` stand-in that used to live here is what hid issue
+      // #45, and issue #45's round-2 review found its renamed successor one layer up.
+      throw new Error(`Fallback segment ${segmentId} has no explicit human approval identity`)
     }
     if (
       approval.speakerId !== request.segment.speakerId ||
@@ -209,30 +215,25 @@ export class FakeSpeechEngine implements SpeechEngine {
       )
     }
   }
+}
 
-  /** Segment-specific and content-addressed, so it can never authorize another speaker's line. */
-  private mintUnreviewedApproval(
-    request: SpeechRenderRequest,
-    fallbackReason: FallbackReason,
-  ): FakeFallbackApproval {
-    const approval: FakeFallbackApproval = {
-      segmentId: request.segment.id,
-      speakerId: request.segment.speakerId,
-      fallbackReason,
-      approvalId: `unreviewed:${request.segment.id}`,
-      approvalSha256: createHash('sha256')
-        .update(
-          JSON.stringify([
-            'unreviewed-fallback',
-            request.segment.id,
-            request.segment.speakerId,
-            fallbackReason,
-            request.voice.id,
-          ]),
-        )
-        .digest('hex'),
-    }
-    this.autoApproved.push(approval)
-    return approval
+/**
+ * The composition-root seam, mirroring `createQwenSpeechEngineFactory`: the approval catalog reaches
+ * the engine here and only here, once `RenderAudiobook` has read it back for this book.
+ *
+ * One shared engine across render stages, because `endBatch()` is not terminal for the real adapter
+ * either and PLAN.md wants the TTS model to stay loaded between requests.
+ */
+export const createFakeSpeechEngineFactory = (
+  workspace: LocalWorkspace,
+  options: Omit<FakeSpeechEngineOptions, 'fallbackApprovals'> = {},
+): SpeechEngineFactory => {
+  const engine = new FakeSpeechEngine(workspace, options)
+  return {
+    identity: engine.identity,
+    create: (context: SpeechEngineContext): SpeechEngine => {
+      engine.replaceApprovals(context.fallbackApprovals)
+      return engine
+    },
   }
 }

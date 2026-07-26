@@ -11,6 +11,14 @@ import type {
   SegmentKind,
 } from '@light-novel-audiobook/domain'
 
+/**
+ * Readable without constructing a director, which the composition root needs: the generation command
+ * identity must bind the director before direction runs, while the model itself must not be built for
+ * a render-only review resume. Real Gemma is the same shape — its identity is a pure function of
+ * configuration (`gemmaDirectorIdentityMaterial`).
+ */
+export const FAKE_DIRECTOR_IDENTITY = 'fake-director/1'
+
 const QUOTED_SPAN = /“[^”]*”/g
 /** Speakers the fixture can name. Only some of them are cast, which exercises fallback warnings. */
 const KNOWN_SPEAKERS = ['Alice', 'Bruno', 'Mira'] as const
@@ -77,7 +85,7 @@ const findSpeaker = (fragments: readonly Fragment[], dialogueIndex: number): str
  * fake at all — this one would have caught a retained-director composition root.
  */
 export class FakeDirectorModel implements DirectorModel {
-  readonly identity = 'fake-director/1'
+  readonly identity = FAKE_DIRECTOR_IDENTITY
   private released = false
   /** Options forwarded by the use case on the most recent call, for composition tests. */
   lastOptions: DirectChapterOptions | undefined

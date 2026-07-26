@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId } from 'react'
 import type { AudiobookClient } from '../client/audiobook-client.js'
 import type { JobStateView } from '../server/job-state-view.js'
 import { ChapterAudioList } from './chapter-audio-list.js'
+import { FallbackReviewPanel } from './fallback-review-panel.js'
 import { FallbackWarningList } from './fallback-warning-list.js'
 
 export interface JobProgressPanelProps {
@@ -34,6 +35,7 @@ const segmentsText = (job: JobStateView): string => {
 export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressPanelProps) {
   const progressId = useId()
   const interval = pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
+  const queryClient = useQueryClient()
   const jobQuery = useQuery({
     queryKey: ['job-state', jobId],
     queryFn: () => client.getJobState({ jobId }),
@@ -43,6 +45,43 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     },
     refetchOnMount: 'always',
   })
+  // Only fetched while the job is actually resting for review, so a running or finished job pays
+  // nothing for it.
+  const awaitingReview =
+    jobQuery.data?.ok === true && jobQuery.data.value?.state === 'awaiting_review'
+  const reviewQuery = useQuery({
+    queryKey: ['fallback-review', jobId],
+    queryFn: () => client.listFallbackReview({ jobId }),
+    enabled: awaitingReview,
+    refetchOnMount: 'always',
+  })
+  const refresh = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['fallback-review', jobId] }),
+      queryClient.invalidateQueries({ queryKey: ['job-state', jobId] }),
+    ])
+  }
+  const approveAll = useMutation({
+    mutationFn: () => client.approveAllFallbacks({ jobId }),
+    onSuccess: refresh,
+  })
+  const approveOne = useMutation({
+    mutationFn: (segmentId: string) => client.approveFallback({ jobId, segmentId }),
+    onSuccess: refresh,
+  })
+  const revoke = useMutation({
+    mutationFn: (segmentId: string) => client.revokeFallback({ jobId, segmentId }),
+    onSuccess: refresh,
+  })
+  const render = useMutation({
+    mutationFn: () => client.renderApprovedScript({ jobId }),
+    onSuccess: refresh,
+  })
+  const reviewBusy =
+    approveAll.isPending || approveOne.isPending || revoke.isPending || render.isPending
+  const reviewError = [approveAll.data, approveOne.data, revoke.data, render.data].find(
+    (result) => result !== undefined && !result.ok,
+  )
 
   if (jobQuery.isPending) {
     return (
@@ -121,6 +160,23 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
         <p className="error" role="alert">
           Generation failed: {job.error}
         </p>
+      )}
+
+      {reviewError !== undefined && !reviewError.ok && (
+        <p className="error" role="alert">
+          {reviewError.error.message}
+        </p>
+      )}
+
+      {reviewQuery.data?.ok === true && (
+        <FallbackReviewPanel
+          review={reviewQuery.data.value}
+          busy={reviewBusy}
+          onApproveAll={() => approveAll.mutate()}
+          onApprove={(segmentId) => approveOne.mutate(segmentId)}
+          onRevoke={(segmentId) => revoke.mutate(segmentId)}
+          onRender={() => render.mutate()}
+        />
       )}
 
       <FallbackWarningList warnings={job.warnings} />

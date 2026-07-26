@@ -1,15 +1,23 @@
 import { DomainError, InvalidStateTransitionError } from './errors.js'
-import { type AudiobookOutput, OutputVersion } from './output-version.js'
+import type { AudiobookOutput } from './output-version.js'
 import type { FallbackReason } from './segment.js'
 
 export const AUDIOBOOK_JOB_STATES = [
   'pending',
   'running',
+  'awaiting_review',
   'abandoned',
   'failed',
   'completed',
 ] as const
 export type AudiobookJobState = (typeof AUDIOBOOK_JOB_STATES)[number]
+
+/**
+ * The one message an awaiting-review job may carry. Pinned so the state is unambiguous in a
+ * snapshot: `awaiting_review` is a resting state that no worker owns, and it must not be
+ * reachable by writing arbitrary progress onto a directing job.
+ */
+const AWAITING_REVIEW_MESSAGE = 'Awaiting fallback approval review'
 
 export const AUDIOBOOK_JOB_STAGES = [
   'extracting',
@@ -29,10 +37,14 @@ const nextStage: Readonly<Partial<Record<AudiobookJobStage, AudiobookJobStage>>>
 
 const allowedStateTransitions: Readonly<Record<AudiobookJobState, readonly AudiobookJobState[]>> = {
   pending: ['running'],
-  running: ['abandoned', 'failed', 'completed'],
+  running: ['awaiting_review', 'abandoned', 'failed', 'completed'],
+  awaiting_review: ['running'],
   abandoned: ['running'],
   failed: ['running'],
-  completed: [],
+  // PLAN.md:132 — "Any later upstream change invalidates approval and marks dependent audio as
+  // stale." Revoking or changing a fallback approval on a finished book is exactly that change, so
+  // a completed job must be able to return to review without discarding its directed script.
+  completed: ['awaiting_review'],
 }
 
 const stableBookIdPattern = /^book-[a-f\d]{24}$/i
@@ -53,26 +65,35 @@ export interface AudiobookJobProgress {
   readonly latestMessage: string
 }
 
-export interface AudiobookOutputSnapshot {
-  readonly version: number
-  readonly m4bPath: string
-  readonly chapters: readonly {
-    readonly chapterId: string
-    readonly path: string
-  }[]
-}
-
 /** JSON-safe persistence shape for issue #27's repository adapter. */
 export interface AudiobookJobSnapshot {
-  readonly schemaVersion: 2
+  readonly schemaVersion: 4
   readonly id: string
   readonly state: AudiobookJobState
   readonly stage: AudiobookJobStage
   readonly commandIdentity: string | null
+  /**
+   * Digest of the render-stage inputs direction bound: the approved cast, the speech engine and the
+   * assembler. A standalone `RenderAudiobook` continuation cannot recompute `commandIdentity` — it
+   * holds no extractor and no director — so without this it could complete a job under a different
+   * cast or assembler while `commandIdentity` still described the old inputs, and the stored
+   * identity would no longer identify what produced the output.
+   */
+  readonly renderContract: string | null
+  /**
+   * The fallback-approval catalog revision this job's completed output was produced under, or `null`
+   * before it completes.
+   *
+   * A render claims a catalog, renders, and re-checks the revision before publishing — but a
+   * revocation can still land in the instant between that check and the commit. Recording the
+   * revision makes such an output **detectably** stale forever after, rather than depending on a
+   * reopen that raced. `RenderAudiobook` refuses to serve a completed output whose revision has moved
+   * and re-derives it instead.
+   */
+  readonly catalogRevision: number | null
   readonly bookId: string | null
   readonly progress: AudiobookJobProgress
   readonly warnings: readonly FallbackVoiceWarning[]
-  readonly output: AudiobookOutputSnapshot | null
   readonly error: string | null
 }
 
@@ -81,6 +102,8 @@ export class AudiobookJob {
   private currentState: AudiobookJobState = 'pending'
   private currentStage: AudiobookJobStage = 'extracting'
   private boundCommandIdentity: string | null = null
+  private boundRenderContract: string | null = null
+  private completedCatalogRevision: number | null = null
   private attachedBookId: string | null = null
   private currentProgress: AudiobookJobProgress = Object.freeze({
     currentChapterId: null,
@@ -89,7 +112,6 @@ export class AudiobookJob {
     latestMessage: 'Waiting to start',
   })
   private fallbackWarnings: readonly FallbackVoiceWarning[] = Object.freeze([])
-  private completedOutput: AudiobookOutput | null = null
   private failureMessage: string | null = null
 
   constructor(id: string) {
@@ -109,6 +131,14 @@ export class AudiobookJob {
     return this.boundCommandIdentity
   }
 
+  get renderContract(): string | null {
+    return this.boundRenderContract
+  }
+
+  get catalogRevision(): number | null {
+    return this.completedCatalogRevision
+  }
+
   get bookId(): string | null {
     return this.attachedBookId
   }
@@ -119,10 +149,6 @@ export class AudiobookJob {
 
   get warnings(): readonly FallbackVoiceWarning[] {
     return this.fallbackWarnings
-  }
-
-  get output(): AudiobookOutput | null {
-    return this.completedOutput
   }
 
   get error(): string | null {
@@ -141,6 +167,22 @@ export class AudiobookJob {
       throw new DomainError('A started job cannot be bound retroactively')
     }
     this.boundCommandIdentity = normalized
+  }
+
+  /**
+   * Binds the render-stage inputs direction used. A later standalone render must present the same
+   * contract, so a continuation cannot quietly complete the job under a different cast, speech
+   * engine or assembler than the one the stored command identity describes.
+   */
+  bindRenderContract(renderContract: string): void {
+    if (!/^[a-f\d]{64}$/i.test(renderContract)) {
+      throw new DomainError('Render contract must be a SHA-256 value')
+    }
+    const normalized = renderContract.toLowerCase()
+    if (this.boundRenderContract !== null && this.boundRenderContract !== normalized) {
+      throw new DomainError('Audiobook job is bound to different render inputs')
+    }
+    this.boundRenderContract = normalized
   }
 
   start(): void {
@@ -198,6 +240,58 @@ export class AudiobookJob {
       throw new DomainError('A book must be attached before direction')
     }
     this.advance('directing', 'Directing chapters')
+  }
+
+  /**
+   * Direction is finished and every unresolved speaker is known. The job now rests until each one
+   * has a persisted human decision: PLAN.md:129 and :166 make the fallback voice usable only on an
+   * explicit approval, and warnings can only be added while directing, so the complete set needing
+   * a decision exists at exactly this point and never grows later.
+   */
+  awaitReview(): void {
+    if (this.currentState !== 'running' || this.currentStage !== 'directing') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'awaiting_review')
+    }
+    if (this.attachedBookId === null) {
+      throw new DomainError('A reviewed job must have an attached book')
+    }
+    this.currentState = 'awaiting_review'
+    this.currentProgress = Object.freeze({
+      ...this.currentProgress,
+      currentChapterId: null,
+      latestMessage: AWAITING_REVIEW_MESSAGE,
+    })
+  }
+
+  /** Approvals are persisted; rendering may begin from the already-directed script. */
+  resumeApprovedRender(): void {
+    if (this.currentState !== 'awaiting_review') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
+    }
+    this.currentState = 'running'
+    this.report(null, 'Rendering approved script')
+  }
+
+  /**
+   * Returns a completed job to review **without discarding its directed script**, which is what a
+   * revoked or changed fallback approval does. Deliberately does not touch the reuse ledger: audio
+   * whose approval did not change keeps its content address and is reused, so only the segments
+   * whose decision actually moved are re-rendered.
+   */
+  reopenForReview(): void {
+    if (this.currentState !== 'completed') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'awaiting_review')
+    }
+    this.currentState = 'awaiting_review'
+    this.currentStage = 'directing'
+    this.completedCatalogRevision = null
+    this.failureMessage = null
+    this.currentProgress = Object.freeze({
+      currentChapterId: null,
+      completedSegments: 0,
+      totalSegments: 0,
+      latestMessage: AWAITING_REVIEW_MESSAGE,
+    })
   }
 
   beginRendering(totalSegments: number): void {
@@ -260,7 +354,14 @@ export class AudiobookJob {
     this.fallbackWarnings = Object.freeze([...this.fallbackWarnings, Object.freeze({ ...warning })])
   }
 
-  complete(output: AudiobookOutput): void {
+  /**
+   * `catalogRevision` is the fallback-approval catalog revision the render claimed. It is recorded
+   * with the output so a decision that raced the commit leaves the output provably stale.
+   */
+  complete(output: AudiobookOutput, catalogRevision: number): void {
+    if (!Number.isSafeInteger(catalogRevision) || catalogRevision < 0) {
+      throw new DomainError('Completed output requires the approval catalog revision it used')
+    }
     if (this.currentState !== 'running' || this.currentStage !== 'assembling') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'completed')
     }
@@ -271,10 +372,7 @@ export class AudiobookJob {
     this.validateOutputContext(output, this.attachedBookId, this.currentProgress.totalSegments)
     this.currentStage = 'completed'
     this.currentState = 'completed'
-    this.completedOutput = Object.freeze({
-      ...output,
-      chapters: Object.freeze(output.chapters.map((chapter) => Object.freeze({ ...chapter }))),
-    })
+    this.completedCatalogRevision = catalogRevision
     this.reportCompleted('Audiobook completed')
   }
 
@@ -288,28 +386,21 @@ export class AudiobookJob {
     this.currentProgress = Object.freeze({ ...this.currentProgress, latestMessage: error })
   }
 
+  /** Public job state contains no completed-output paths; those live behind `JobRepository`. */
   snapshot(): AudiobookJobSnapshot {
     return Object.freeze({
-      schemaVersion: 2,
+      schemaVersion: 4,
       id: this.id,
       state: this.currentState,
       stage: this.currentStage,
       commandIdentity: this.boundCommandIdentity,
+      renderContract: this.boundRenderContract,
+      catalogRevision: this.completedCatalogRevision,
       bookId: this.attachedBookId,
       progress: Object.freeze({ ...this.currentProgress }),
       warnings: Object.freeze(
         this.fallbackWarnings.map((warning) => Object.freeze({ ...warning })),
       ),
-      output:
-        this.completedOutput === null
-          ? null
-          : Object.freeze({
-              version: this.completedOutput.version.value,
-              m4bPath: this.completedOutput.m4bPath,
-              chapters: Object.freeze(
-                this.completedOutput.chapters.map((chapter) => Object.freeze({ ...chapter })),
-              ),
-            }),
       error: this.failureMessage,
     })
   }
@@ -320,21 +411,13 @@ export class AudiobookJob {
     job.currentState = snapshot.state
     job.currentStage = snapshot.stage
     job.boundCommandIdentity = snapshot.commandIdentity?.toLowerCase() ?? null
+    job.boundRenderContract = snapshot.renderContract?.toLowerCase() ?? null
+    job.completedCatalogRevision = snapshot.catalogRevision
     job.attachedBookId = snapshot.bookId
     job.currentProgress = Object.freeze({ ...snapshot.progress })
     job.fallbackWarnings = Object.freeze(
       snapshot.warnings.map((warning) => Object.freeze({ ...warning })),
     )
-    job.completedOutput =
-      snapshot.output === null
-        ? null
-        : Object.freeze({
-            version: new OutputVersion(snapshot.output.version),
-            m4bPath: snapshot.output.m4bPath,
-            chapters: Object.freeze(
-              snapshot.output.chapters.map((chapter) => Object.freeze({ ...chapter })),
-            ),
-          })
     job.failureMessage = snapshot.error
     return job
   }
@@ -348,7 +431,7 @@ export class AudiobookJob {
   }
 
   private static validateSnapshot(snapshot: AudiobookJobSnapshot): void {
-    if (snapshot.schemaVersion !== 2 || snapshot.id.trim().length === 0) {
+    if (snapshot.schemaVersion !== 4 || snapshot.id.trim().length === 0) {
       throw new DomainError('Unsupported or invalid audiobook job snapshot')
     }
     if (
@@ -359,6 +442,9 @@ export class AudiobookJob {
     }
     if (snapshot.commandIdentity !== null && !/^[a-f\d]{64}$/i.test(snapshot.commandIdentity)) {
       throw new DomainError('Audiobook job snapshot has an invalid command identity')
+    }
+    if (snapshot.renderContract !== null && !/^[a-f\d]{64}$/i.test(snapshot.renderContract)) {
+      throw new DomainError('Audiobook job snapshot has an invalid render contract')
     }
     if (snapshot.state !== 'pending' && snapshot.commandIdentity === null) {
       throw new DomainError('Started audiobook job snapshots require a command identity')
@@ -372,8 +458,14 @@ export class AudiobookJob {
     if ((snapshot.stage === 'completed') !== (snapshot.state === 'completed')) {
       throw new DomainError('Only completed jobs can use the completed stage')
     }
-    if ((snapshot.output !== null) !== (snapshot.state === 'completed')) {
-      throw new DomainError('Only completed jobs can contain output')
+    if ((snapshot.catalogRevision !== null) !== (snapshot.state === 'completed')) {
+      throw new DomainError('Only completed jobs can record an approval catalog revision')
+    }
+    if (
+      snapshot.catalogRevision !== null &&
+      (!Number.isSafeInteger(snapshot.catalogRevision) || snapshot.catalogRevision < 0)
+    ) {
+      throw new DomainError('Audiobook job snapshot has an invalid approval catalog revision')
     }
     if ((snapshot.error !== null) !== (snapshot.state === 'failed') || snapshot.error === '') {
       throw new DomainError('Only failed jobs can contain a nonempty error')
@@ -400,15 +492,6 @@ export class AudiobookJob {
       }
       warningSegmentIds.add(warning.segmentId)
     }
-    if (snapshot.output !== null) {
-      const output = {
-        version: new OutputVersion(snapshot.output.version),
-        m4bPath: snapshot.output.m4bPath,
-        chapters: snapshot.output.chapters,
-      }
-      validator.validateOutput(output)
-      validator.validateOutputContext(output, snapshot.bookId, snapshot.progress.totalSegments)
-    }
   }
 
   private static validateSnapshotLifecycle(snapshot: AudiobookJobSnapshot): void {
@@ -427,6 +510,23 @@ export class AudiobookJob {
         snapshot.warnings.length !== 0
       ) {
         throw new DomainError('Pending audiobook job snapshot is unreachable')
+      }
+      return
+    }
+
+    // Validated in full here and returned early, so `awaiting_review` never has to be folded into
+    // `activeOrInterrupted` below — which would also have made it reachable at stages where no
+    // review is possible, such as `extracting` or `assembling`.
+    if (snapshot.state === 'awaiting_review') {
+      if (
+        snapshot.stage !== 'directing' ||
+        snapshot.bookId === null ||
+        progress.completedSegments !== 0 ||
+        progress.totalSegments !== 0 ||
+        progress.currentChapterId !== null ||
+        progress.latestMessage !== AWAITING_REVIEW_MESSAGE
+      ) {
+        throw new DomainError('Awaiting-review audiobook job snapshot is unreachable')
       }
       return
     }
@@ -484,8 +584,7 @@ export class AudiobookJob {
           progress.totalSegments < 1 ||
           progress.completedSegments !== progress.totalSegments ||
           progress.currentChapterId !== null ||
-          progress.latestMessage !== 'Audiobook completed' ||
-          snapshot.output === null
+          progress.latestMessage !== 'Audiobook completed'
         ) {
           throw new DomainError('Completed audiobook job snapshot is unreachable')
         }
@@ -568,7 +667,7 @@ export class AudiobookJob {
       latestMessage: message,
     })
     this.fallbackWarnings = Object.freeze([])
-    this.completedOutput = null
+    this.completedCatalogRevision = null
     this.failureMessage = null
   }
 

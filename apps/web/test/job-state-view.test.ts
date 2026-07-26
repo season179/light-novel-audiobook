@@ -9,11 +9,13 @@ import {
 const bookId = `book-${'a'.repeat(24)}`
 
 const runningSnapshot: AudiobookJobSnapshot = {
-  schemaVersion: 2,
+  schemaVersion: 4,
   id: 'job-aaaaaaaaaaaaaaaaaaaaaaaa',
   state: 'running',
   stage: 'rendering',
   commandIdentity: 'b'.repeat(64),
+  renderContract: null,
+  catalogRevision: null,
   bookId,
   progress: {
     currentChapterId: `${bookId}-ch0002`,
@@ -29,7 +31,6 @@ const runningSnapshot: AudiobookJobSnapshot = {
       reason: 'unresolved_speaker',
     },
   ],
-  output: null,
   error: null,
 }
 

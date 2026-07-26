@@ -2,6 +2,7 @@ import type {
   AudiobookJobSnapshot,
   AudiobookJobStage,
   AudiobookJobState,
+  AudiobookOutput,
   FallbackReason,
 } from '@light-novel-audiobook/domain'
 import type { BookReadModel } from './book-read-model.js'
@@ -99,6 +100,7 @@ export const fileNameOf = (path: string): string => {
 export const buildJobStateView = (
   snapshot: AudiobookJobSnapshot,
   book: BookReadModel | undefined,
+  authorizedOutput?: AudiobookOutput | undefined,
 ): JobStateView => {
   const { progress } = snapshot
   const chapterTitles = new Map(
@@ -106,14 +108,14 @@ export const buildJobStateView = (
   )
 
   const output =
-    snapshot.output === null
+    authorizedOutput === undefined
       ? null
       : {
-          version: snapshot.output.version,
-          versionLabel: `v${String(snapshot.output.version).padStart(3, '0')}`,
-          m4bFileName: fileNameOf(snapshot.output.m4bPath),
+          version: authorizedOutput.version.value,
+          versionLabel: authorizedOutput.version.label,
+          m4bFileName: fileNameOf(authorizedOutput.m4bPath),
           downloadUrl: audiobookDownloadUrl(snapshot.id),
-          chapters: snapshot.output.chapters.map((chapter, index) => ({
+          chapters: authorizedOutput.chapters.map((chapter, index) => ({
             chapterId: chapter.chapterId,
             chapterLabel: deriveChapterLabel(chapter.chapterId),
             title: chapterTitles.get(chapter.chapterId) ?? null,
