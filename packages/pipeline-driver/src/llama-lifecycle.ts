@@ -178,8 +178,10 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     // has to be closed — and a `binaryPath` getter that calls `release()` provably spawned a child after
     // release had begun. The coercions look redundant against the declared types on purpose; the types
     // are a promise from the caller, and this window is exactly where that promise must not be trusted.
+    const binaryPath = String(this.options.binaryPath)
+    const args = Array.from(this.options.args, (arg) => String(arg))
     this.#assertSpawnStillAllowed()
-    const child = spawn(this.options.binaryPath, [...this.options.args], {
+    const child = spawn(binaryPath, args, {
       stdio: ['ignore', 'ignore', 'ignore'],
     })
     this.#child = child

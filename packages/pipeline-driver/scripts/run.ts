@@ -117,7 +117,7 @@ const transports =
       })
 
 process.stderr.write(
-  `[driver] mode=${mode} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
+  `[driver] mode=${mode} job=${jobId} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
 )
 
 try {
@@ -142,6 +142,9 @@ try {
   process.stderr.write(
     `[driver] FAILED ${named.name ?? 'Error'}${named.code ? ` (${named.code})` : ''}: ${named.message ?? String(error)}\n`,
   )
+  // A real run's first stage loads a 13.4 GiB model. Without these, re-running the same command mints a
+  // fresh workspace and job, so an expensive failure cannot be resumed and the old job cannot be found.
+  process.stderr.write(`[driver] resume with: --job-id ${jobId} --workspace ${workspaceRoot}\n`)
   process.exitCode = 1
 } finally {
   await directorServer?.stop()
