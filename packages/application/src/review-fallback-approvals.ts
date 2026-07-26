@@ -404,6 +404,8 @@ function pendingFrom(
 ): PendingFallbackApproval {
   return Object.freeze({
     segmentId: subject.segment.id,
+    sourcePassageId: subject.segment.sourcePassageId,
+    kind: subject.segment.kind,
     chapterId: subject.chapterId,
     chapterTitle: subject.chapterTitle,
     speakerId: subject.speakerId,

@@ -4,6 +4,7 @@ import {
   DomainError,
   type FallbackReason,
   type Segment,
+  type SegmentKind,
 } from '@light-novel-audiobook/domain'
 
 /** Bumped only when the hashed decision fields change; every existing approval then restales. */
@@ -159,6 +160,8 @@ export const createBookFallbackGrant = (input: {
 /** One unresolved speaker awaiting a human decision, as the review UI needs to show it. */
 export interface PendingFallbackApproval {
   readonly segmentId: string
+  readonly sourcePassageId: string
+  readonly kind: SegmentKind
   readonly chapterId: string
   readonly chapterTitle: string
   readonly speakerId: string | null

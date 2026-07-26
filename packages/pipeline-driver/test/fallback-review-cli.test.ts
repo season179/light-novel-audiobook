@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import {
   AudiobookJob,
   Book,
@@ -25,6 +28,11 @@ import {
 } from '../src/fallback-review-cli.js'
 
 const roots: string[] = []
+const run = promisify(execFile)
+const CLI = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../scripts/review-fallbacks.ts',
+)
 const sourceHash = '7'.repeat(64)
 const bookId = StableIds.book(sourceHash)
 const chapterId = StableIds.chapter(bookId, 1)
@@ -185,6 +193,27 @@ describe('fallback review CLI', () => {
     expect(catalog.approvals[0]?.decidedBy).toBe('Ada Lovelace')
   })
 
+  it('exposes separate list and approve CLI invocations without printing story text', async () => {
+    const { root } = await preparedWorkspace('job-process-cli')
+    const common = ['--workspace', root, '--job-id', 'job-process-cli']
+
+    const listed = await run(process.execPath, ['--import', 'tsx', CLI, 'list', ...common])
+    expect(listed.stdout).toContain('"status":"pending-fallback-review"')
+    expect(listed.stdout).toContain(`"sourcePassageId":"${passageId}"`)
+    expect(listed.stdout).toContain(`"speakerReason":"${speakerReason}"`)
+    expect(listed.stdout).not.toContain('Is anyone there')
+
+    const approved = await run(process.execPath, ['--import', 'tsx', CLI, 'approve', ...common], {
+      env: { ...process.env, LNA_REVIEWER: 'Grace Hopper' },
+    })
+    const outputLines = approved.stdout.trim().split('\n')
+    expect(outputLines[0]).toContain('"status":"approving"')
+    expect(outputLines[0]).toContain('"actor":"Grace Hopper"')
+    expect(outputLines.at(-1)).toContain('"status":"approved"')
+    expect(outputLines.at(-1)).toContain('"approvedCount":1')
+    expect(approved.stdout).not.toContain('Is anyone there')
+  })
+
   it('fails closed before approval when no real reviewer identity can be resolved', async () => {
     const { root } = await preparedWorkspace('job-no-reviewer')
 
@@ -204,6 +233,8 @@ describe('fallback review CLI', () => {
       workspaceRoot: root,
       jobId: 'job-no-reviewer',
     })
+    expect(listed.action).toBe('list')
+    if (listed.action !== 'list') throw new Error('list command returned an approval report')
     expect(listed.pendingCount).toBe(1)
   })
 })

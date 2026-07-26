@@ -38,6 +38,12 @@ describe('reviewer identity (issue #45, round 3)', () => {
     expect(resolved).not.toBe('local-user')
   })
 
+  it('fails closed when neither configuration nor an OS account can identify the reviewer', () => {
+    expect(() => resolveReviewerIdentity({}, () => undefined)).toThrow(
+      'Cannot record who approves a fallback voice',
+    )
+  })
+
   it('treats a blank, oversized or control-bearing configured value as absent', () => {
     // None of these may be accepted into a persisted decision or shown in the review UI, so an
     // unusable configured value must be ignored rather than stored.
