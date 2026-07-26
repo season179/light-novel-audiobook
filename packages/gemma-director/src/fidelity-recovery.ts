@@ -33,12 +33,14 @@ export function fidelitySamplingAttempts(
 ): readonly DirectionSamplingParameters[] {
   const candidates: DirectionSamplingParameters[] = [
     initial,
-    ...FIDELITY_RECOVERY_POLICY.retrySampling.map((retry) => ({
-      ...initial,
-      seed: initial.seed + retry.seedOffset,
-      temperature: retry.temperature,
-      topP: retry.topP,
-    })),
+    ...FIDELITY_RECOVERY_POLICY.retrySampling
+      .slice(0, FIDELITY_RECOVERY_POLICY.maxRerequests)
+      .map((retry) => ({
+        ...initial,
+        seed: initial.seed + retry.seedOffset,
+        temperature: retry.temperature,
+        topP: retry.topP,
+      })),
   ]
   const seen = new Set<string>()
   return Object.freeze(
