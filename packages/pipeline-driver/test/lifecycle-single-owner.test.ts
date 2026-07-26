@@ -37,7 +37,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
  * Records every `OwnedLlamaLifecycle` the *package* hands out, so "did production construct this
  * class" is answered by observing a construction rather than by reading an import statement.
  */
-const built = vi.hoisted(() => ({ constructions: [] as unknown[] }))
+const built = vi.hoisted(() => ({
+  constructions: [] as unknown[],
+  recorder: undefined as unknown,
+}))
 
 vi.mock('@light-novel-audiobook/gemma-director', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@light-novel-audiobook/gemma-director')>()
@@ -45,9 +48,11 @@ vi.mock('@light-novel-audiobook/gemma-director', async (importOriginal) => {
   class RecordingLifecycle extends actual.OwnedLlamaLifecycle {
     constructor(options: ConstructorParameters<typeof actual.OwnedLlamaLifecycle>[0]) {
       super(options)
-      built.constructions.push(this)
+      built.constructions.push(new.target)
     }
   }
+  // Captured so the assertion can name the recording class without reaching into this closure.
+  built.recorder = RecordingLifecycle
   return { ...actual, OwnedLlamaLifecycle: RecordingLifecycle }
 })
 
@@ -125,14 +130,16 @@ describe('one OwnedLlamaLifecycle, owned by gemma-director', () => {
     // Proves we went through the real function rather than failing early.
     expect(transports.mode).toBe('real')
     expect(transports.director.lifecycle).toBeDefined()
-    // THE ASSERTION THIS FILE EXISTS FOR. A local copy, or any second definition, is constructed
-    // without passing through the package and records nothing here.
+    // THE ASSERTION THIS FILE EXISTS FOR. The class actually constructed must be the one the
+    // package exports — the recording class itself — so a subclass that delegates construction but
+    // drifts in release() is caught: its new.target is the subclass, not the recording class. A
+    // local copy or any second definition never reaches this constructor, so the array is empty.
     expect(
-      built.constructions.length,
-      'createRealTransports must construct gemma-director’s OwnedLlamaLifecycle: a count of 0 ' +
-        'means it constructed some other class (a reintroduced local copy), and a count above 1 ' +
-        'means real mode owns more than one llama.cpp process.',
-    ).toBe(1)
+      built.constructions,
+      'createRealTransports must construct the class exported by gemma-director through the ' +
+        'package export: the recorded new.target must be the recording class itself, so a subclass ' +
+        'or wrapper that delegates construction but drifts is caught.',
+    ).toEqual([built.recorder])
   })
 
   it('is the only definition in the repository, and it lives in gemma-director', async () => {
