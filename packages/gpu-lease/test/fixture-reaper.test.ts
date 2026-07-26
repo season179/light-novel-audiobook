@@ -113,13 +113,16 @@ describe('owner inspection maps real /proc outcomes to the tri-state (#67)', () 
     expect(await registry.loadRegistry()).toHaveLength(0)
   })
 
-  it('maps any other /proc failure to unknown and retains', async () => {
-    const registry = await makeRegistryWithReadStat(failingReader('EACCES'))
-    await registry.registerHolder(720_002, join(tmpdir(), 'fixture-seam-holder'))
+  it.each(['EACCES', 'EPERM', 'EIO', 'ENAMETOOLONG', 'EFAULT'])(
+    'maps any non-ENOENT /proc failure (%s) to unknown and retains',
+    async (code) => {
+      const registry = await makeRegistryWithReadStat(failingReader(code))
+      await registry.registerHolder(720_002, join(tmpdir(), 'fixture-seam-holder'))
 
-    expect(await registry.reapOrphanedHolders()).toBe(0)
-    expect(await registry.loadRegistry()).toHaveLength(1)
-  })
+      expect(await registry.reapOrphanedHolders()).toBe(0)
+      expect(await registry.loadRegistry()).toHaveLength(1)
+    },
+  )
 
   it('maps stat content without a closing paren to unknown and retains', async () => {
     const registry = await makeRegistryWithReadStat(async () => 'no closing paren here\n')
