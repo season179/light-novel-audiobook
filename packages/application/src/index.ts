@@ -1,4 +1,14 @@
 export {
+  type CastApprovalDecision,
+  type CastAssignment,
+  type CastProposal,
+  createCastApprovalRecord,
+  type PersistedCastApproval,
+  parseCastProposal,
+  type SharedVoiceMaterialGroup,
+  sharedVoiceMaterialGroups,
+} from './cast-approval.js'
+export {
   ApprovalCatalogAccess,
   ApprovalCatalogReentryError,
   approvalCatalogAccessFor,
@@ -47,6 +57,7 @@ export type {
   AssemblyChapter,
   AssemblySegment,
   AudioAssembler,
+  CastApprovalRepository,
   CompletedSegmentAudio,
   DirectChapterOptions,
   DirectedChapter,
@@ -74,6 +85,11 @@ export {
 } from './render-audiobook.js'
 export { createRenderContract, type RenderContractInput } from './render-contract.js'
 export { createRenderInputIdentity, type RenderInputApproval } from './render-input-identity.js'
+export {
+  type ApproveCastRequest,
+  ReviewCastApprovals,
+  type ReviewCastApprovalsDependencies,
+} from './review-cast-approvals.js'
 export {
   type BookFallbackGrantRequest,
   type FallbackApprovalDecisionRequest,
