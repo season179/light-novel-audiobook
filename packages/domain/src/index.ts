@@ -6,7 +6,6 @@ export {
   type AudiobookJobSnapshot,
   type AudiobookJobStage,
   type AudiobookJobState,
-  type AudiobookOutputSnapshot,
   type FallbackVoiceWarning,
 } from './audiobook-job.js'
 export { Book, type BookProps, type BookSource } from './book.js'

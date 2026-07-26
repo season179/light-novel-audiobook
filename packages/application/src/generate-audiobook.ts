@@ -1,9 +1,11 @@
 import type { AudiobookJob, AudiobookOutput, Book, VoiceCast } from '@light-novel-audiobook/domain'
 import { DomainError } from '@light-novel-audiobook/domain'
+import { CompletedOutputAuthority } from './completed-output.js'
 import { DirectAudiobook } from './direct-audiobook.js'
 import type { PendingFallbackApproval } from './fallback-approval.js'
 import type {
   AudioAssembler,
+  DirectChapterOptions,
   DirectorModelFactory,
   EpubExtractor,
   FallbackApprovalRepository,
@@ -18,6 +20,8 @@ export interface GenerateAudiobookCommand {
   readonly epubPath: string
   readonly epubSha256: string
   readonly voices: VoiceCast
+  /** Operational cancellation/deadline controls; deliberately excluded from content identity. */
+  readonly directorOptions?: DirectChapterOptions | undefined
   /** Explicitly takes over a job known to have lost its worker; never use for an active request. */
   readonly recoverAbandoned?: boolean
 }
@@ -55,6 +59,8 @@ export interface GenerateAudiobookDependencies {
   readonly audioAssembler: AudioAssembler
   readonly jobs: JobRepository
   readonly approvals: FallbackApprovalRepository
+  /** Shared with review and file-open consumers so authorization cannot race a catalog mutation. */
+  readonly completedOutputs?: CompletedOutputAuthority | undefined
   /** Injected so a decision time is reproducible in tests; defaults to the wall clock. */
   readonly now?: (() => Date) | undefined
 }
@@ -72,6 +78,7 @@ export class GenerateAudiobook {
   private readonly rendering: RenderAudiobook
   private readonly review: ReviewFallbackApprovals
   private readonly jobs: JobRepository
+  private readonly completedOutputs: CompletedOutputAuthority
 
   constructor(dependencies: GenerateAudiobookDependencies) {
     this.direction = new DirectAudiobook({
@@ -81,11 +88,15 @@ export class GenerateAudiobook {
       audioAssembler: dependencies.audioAssembler,
       jobs: dependencies.jobs,
     })
+    this.completedOutputs =
+      dependencies.completedOutputs ??
+      new CompletedOutputAuthority(dependencies.approvals, dependencies.jobs)
     this.rendering = new RenderAudiobook({
       speechEngineFactory: dependencies.speechEngineFactory,
       audioAssembler: dependencies.audioAssembler,
       jobs: dependencies.jobs,
       approvals: dependencies.approvals,
+      completedOutputs: this.completedOutputs,
     })
     this.review = new ReviewFallbackApprovals({
       jobs: dependencies.jobs,
@@ -105,14 +116,24 @@ export class GenerateAudiobook {
       throw new DomainError('Audiobook job result is stale for the requested generation inputs')
     }
     if (existing?.state === 'completed') {
-      if (existing.output === null) throw new DomainError('Completed job has no audiobook output')
-      return {
-        job: existing,
-        output: existing.output,
-        generatedSegments: 0,
-        reusedSegments: existing.progress.totalSegments,
-        recordedFallbackApprovals: 0,
+      const authorization = await this.completedOutputs.authorize(
+        existing,
+        (output): GenerateAudiobookResult => ({
+          job: existing,
+          output,
+          generatedSegments: 0,
+          reusedSegments: existing.progress.totalSegments,
+          recordedFallbackApprovals: 0,
+        }),
+      )
+      if (authorization.exposable) return authorization.value
+      if (authorization.denial !== 'approval-catalog-moved') {
+        throw new DomainError('Completed job has no authorized audiobook output')
       }
+      // The stored output is stale. Reopen and continue through persisted review reconciliation;
+      // never fall through to direction, which would discard the stable reviewed script.
+      existing.reopenForReview()
+      await this.jobs.saveJob(existing)
     }
 
     // A job already awaiting review is resumed from its persisted script. Re-directing it would

@@ -1,5 +1,5 @@
 import { DomainError, InvalidStateTransitionError } from './errors.js'
-import { type AudiobookOutput, OutputVersion } from './output-version.js'
+import type { AudiobookOutput } from './output-version.js'
 import type { FallbackReason } from './segment.js'
 
 export const AUDIOBOOK_JOB_STATES = [
@@ -65,18 +65,9 @@ export interface AudiobookJobProgress {
   readonly latestMessage: string
 }
 
-export interface AudiobookOutputSnapshot {
-  readonly version: number
-  readonly m4bPath: string
-  readonly chapters: readonly {
-    readonly chapterId: string
-    readonly path: string
-  }[]
-}
-
 /** JSON-safe persistence shape for issue #27's repository adapter. */
 export interface AudiobookJobSnapshot {
-  readonly schemaVersion: 3
+  readonly schemaVersion: 4
   readonly id: string
   readonly state: AudiobookJobState
   readonly stage: AudiobookJobStage
@@ -103,7 +94,6 @@ export interface AudiobookJobSnapshot {
   readonly bookId: string | null
   readonly progress: AudiobookJobProgress
   readonly warnings: readonly FallbackVoiceWarning[]
-  readonly output: AudiobookOutputSnapshot | null
   readonly error: string | null
 }
 
@@ -122,7 +112,6 @@ export class AudiobookJob {
     latestMessage: 'Waiting to start',
   })
   private fallbackWarnings: readonly FallbackVoiceWarning[] = Object.freeze([])
-  private completedOutput: AudiobookOutput | null = null
   private failureMessage: string | null = null
 
   constructor(id: string) {
@@ -160,10 +149,6 @@ export class AudiobookJob {
 
   get warnings(): readonly FallbackVoiceWarning[] {
     return this.fallbackWarnings
-  }
-
-  get output(): AudiobookOutput | null {
-    return this.completedOutput
   }
 
   get error(): string | null {
@@ -299,7 +284,6 @@ export class AudiobookJob {
     }
     this.currentState = 'awaiting_review'
     this.currentStage = 'directing'
-    this.completedOutput = null
     this.completedCatalogRevision = null
     this.failureMessage = null
     this.currentProgress = Object.freeze({
@@ -389,10 +373,6 @@ export class AudiobookJob {
     this.currentStage = 'completed'
     this.currentState = 'completed'
     this.completedCatalogRevision = catalogRevision
-    this.completedOutput = Object.freeze({
-      ...output,
-      chapters: Object.freeze(output.chapters.map((chapter) => Object.freeze({ ...chapter }))),
-    })
     this.reportCompleted('Audiobook completed')
   }
 
@@ -406,9 +386,10 @@ export class AudiobookJob {
     this.currentProgress = Object.freeze({ ...this.currentProgress, latestMessage: error })
   }
 
+  /** Public job state contains no completed-output paths; those live behind `JobRepository`. */
   snapshot(): AudiobookJobSnapshot {
     return Object.freeze({
-      schemaVersion: 3,
+      schemaVersion: 4,
       id: this.id,
       state: this.currentState,
       stage: this.currentStage,
@@ -420,16 +401,6 @@ export class AudiobookJob {
       warnings: Object.freeze(
         this.fallbackWarnings.map((warning) => Object.freeze({ ...warning })),
       ),
-      output:
-        this.completedOutput === null
-          ? null
-          : Object.freeze({
-              version: this.completedOutput.version.value,
-              m4bPath: this.completedOutput.m4bPath,
-              chapters: Object.freeze(
-                this.completedOutput.chapters.map((chapter) => Object.freeze({ ...chapter })),
-              ),
-            }),
       error: this.failureMessage,
     })
   }
@@ -447,16 +418,6 @@ export class AudiobookJob {
     job.fallbackWarnings = Object.freeze(
       snapshot.warnings.map((warning) => Object.freeze({ ...warning })),
     )
-    job.completedOutput =
-      snapshot.output === null
-        ? null
-        : Object.freeze({
-            version: new OutputVersion(snapshot.output.version),
-            m4bPath: snapshot.output.m4bPath,
-            chapters: Object.freeze(
-              snapshot.output.chapters.map((chapter) => Object.freeze({ ...chapter })),
-            ),
-          })
     job.failureMessage = snapshot.error
     return job
   }
@@ -470,7 +431,7 @@ export class AudiobookJob {
   }
 
   private static validateSnapshot(snapshot: AudiobookJobSnapshot): void {
-    if (snapshot.schemaVersion !== 3 || snapshot.id.trim().length === 0) {
+    if (snapshot.schemaVersion !== 4 || snapshot.id.trim().length === 0) {
       throw new DomainError('Unsupported or invalid audiobook job snapshot')
     }
     if (
@@ -496,9 +457,6 @@ export class AudiobookJob {
     }
     if ((snapshot.stage === 'completed') !== (snapshot.state === 'completed')) {
       throw new DomainError('Only completed jobs can use the completed stage')
-    }
-    if ((snapshot.output !== null) !== (snapshot.state === 'completed')) {
-      throw new DomainError('Only completed jobs can contain output')
     }
     if ((snapshot.catalogRevision !== null) !== (snapshot.state === 'completed')) {
       throw new DomainError('Only completed jobs can record an approval catalog revision')
@@ -533,15 +491,6 @@ export class AudiobookJob {
         throw new DomainError('Audiobook job snapshot has duplicate fallback warnings')
       }
       warningSegmentIds.add(warning.segmentId)
-    }
-    if (snapshot.output !== null) {
-      const output = {
-        version: new OutputVersion(snapshot.output.version),
-        m4bPath: snapshot.output.m4bPath,
-        chapters: snapshot.output.chapters,
-      }
-      validator.validateOutput(output)
-      validator.validateOutputContext(output, snapshot.bookId, snapshot.progress.totalSegments)
     }
   }
 
@@ -635,8 +584,7 @@ export class AudiobookJob {
           progress.totalSegments < 1 ||
           progress.completedSegments !== progress.totalSegments ||
           progress.currentChapterId !== null ||
-          progress.latestMessage !== 'Audiobook completed' ||
-          snapshot.output === null
+          progress.latestMessage !== 'Audiobook completed'
         ) {
           throw new DomainError('Completed audiobook job snapshot is unreachable')
         }
@@ -719,7 +667,6 @@ export class AudiobookJob {
       latestMessage: message,
     })
     this.fallbackWarnings = Object.freeze([])
-    this.completedOutput = null
     this.completedCatalogRevision = null
     this.failureMessage = null
   }

@@ -129,8 +129,6 @@ class RequestResponsiveLlamaServer {
         const unresolved = index === 0
         return {
           source_passage_id: passage.source_passage_id,
-          source_start: 0,
-          source_end: passage.source_text.length,
           source_text: passage.source_text,
           kind: unresolved ? 'dialogue' : 'narration',
           speaker_id: unresolved ? user.fallback_speaker_id : user.narrator_speaker_id,
@@ -164,7 +162,12 @@ class RequestResponsiveLlamaServer {
 function fakeGpuGate(lockFilePath: string) {
   return {
     async acquire(owner: string) {
-      return { owner, lockFilePath, release: async () => undefined }
+      return {
+        owner,
+        lockFilePath,
+        quarantine: async () => undefined,
+        release: async () => undefined,
+      }
     },
   }
 }

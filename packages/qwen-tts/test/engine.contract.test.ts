@@ -71,6 +71,7 @@ class RecordingGpuGate implements ExclusiveGpuGate {
     return {
       owner,
       lockFilePath: '/fixture/gpu.lock',
+      quarantine: async () => undefined,
       release: async () => {
         if (!released) {
           await this.onRelease?.()

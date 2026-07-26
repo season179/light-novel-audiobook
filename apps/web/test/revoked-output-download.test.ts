@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { InMemoryFallbackApprovalRepository } from '../src/server/fakes/in-memory-fallback-approvals.js'
+import { LocalWorkspace } from '../src/server/workspace.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 
 const REVIEWER = 'a-real-person'
@@ -52,12 +53,21 @@ interface Fixture {
 }
 
 /** Runs a book all the way to a downloadable audiobook, making the one book-wide human decision. */
-const completedAudiobook = async (marker: string): Promise<Fixture> => {
+const completedAudiobook = async (
+  marker: string,
+  options: {
+    readonly workspace?: (root: string) => LocalWorkspace
+    readonly approvals?: InMemoryFallbackApprovalRepository
+  } = {},
+): Promise<Fixture> => {
   const root = await mkdtemp(join(tmpdir(), 'lna-revoked-'))
   roots.push(root)
-  const approvals = new InMemoryFallbackApprovalRepository()
+  const approvals = options.approvals ?? new InMemoryFallbackApprovalRepository()
+  const workspace = options.workspace?.(root)
+  await workspace?.prepare()
   const api = await createAudiobookWebApi({
     workspaceRoot: root,
+    ...(workspace === undefined ? {} : { workspace }),
     reviewer: REVIEWER,
     approvals,
   })
@@ -82,10 +92,82 @@ const completedAudiobook = async (marker: string): Promise<Fixture> => {
   if (first === undefined) throw new Error('fixture produced no fallback segments')
   await api.approveAllFallbacks({ jobId: started.jobId })
   await api.renderApprovedScript({ jobId: started.jobId })
-  await settle((job) => job !== null && job.finished)
+  await settle((job) => job?.finished === true)
   const bookId = (await api.getJobState({ jobId: started.jobId }))?.bookId
   if (bookId === null || bookId === undefined) throw new Error('job has no book')
   return { api, jobId: started.jobId, bookId, approvals, firstFallbackSegmentId: first.segmentId }
+}
+
+class PausingOpenWorkspace extends LocalWorkspace {
+  private nextPause:
+    | {
+        readonly entered: () => void
+        readonly waitForRelease: Promise<void>
+      }
+    | undefined
+
+  pauseNextOpen(): {
+    readonly entered: Promise<void>
+    readonly release: () => void
+  } {
+    let markEntered: (() => void) | undefined
+    let release: (() => void) | undefined
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve
+    })
+    const waitForRelease = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    if (markEntered === undefined || release === undefined)
+      throw new Error('pause was not initialized')
+    this.nextPause = { entered: markEntered, waitForRelease }
+    return { entered, release }
+  }
+
+  override async openContainedFile(candidate: string) {
+    const pause = this.nextPause
+    this.nextPause = undefined
+    if (pause !== undefined) {
+      pause.entered()
+      await pause.waitForRelease
+    }
+    return super.openContainedFile(candidate)
+  }
+}
+
+class PausingCatalogReadApprovals extends InMemoryFallbackApprovalRepository {
+  private nextPause:
+    | {
+        readonly captured: () => void
+        readonly waitForRelease: Promise<void>
+      }
+    | undefined
+
+  pauseNextRead(): { readonly captured: Promise<void>; readonly release: () => void } {
+    let markCaptured: (() => void) | undefined
+    let release: (() => void) | undefined
+    const captured = new Promise<void>((resolve) => {
+      markCaptured = resolve
+    })
+    const waitForRelease = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    if (markCaptured === undefined || release === undefined)
+      throw new Error('catalog pause was not initialized')
+    this.nextPause = { captured: markCaptured, waitForRelease }
+    return { captured, release }
+  }
+
+  override async readCatalog(bookId: string) {
+    const catalog = await super.readCatalog(bookId)
+    const pause = this.nextPause
+    this.nextPause = undefined
+    if (pause !== undefined) {
+      pause.captured()
+      await pause.waitForRelease
+    }
+    return catalog
+  }
 }
 
 describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
@@ -188,6 +270,79 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
     expect((await api.getJobState({ jobId }))?.state).toBe('awaiting_review')
   }, 60_000)
 
+  it('rejects when revocation commits after a stale catalog read but before descriptor acquisition', async () => {
+    const approvals = new PausingCatalogReadApprovals()
+    const { api, jobId, firstFallbackSegmentId } = await completedAudiobook(
+      'commit-after-stale-read',
+      { approvals },
+    )
+    const pause = approvals.pauseNextRead()
+    const opening = api.openAudiobookFile({ jobId })
+    await pause.captured
+
+    // This is the exact reviewed interleaving: the read has captured revision N, the normal review
+    // API commits N+1, and only then may the stale read return. It is a preliminary candidate read,
+    // not authorization; the authority must repeat it under writer exclusion before opening.
+    await api.revokeFallback({ jobId, segmentId: firstFallbackSegmentId })
+    pause.release()
+
+    await expect(opening).rejects.toMatchObject({ code: 'output_unavailable' })
+  }, 60_000)
+
+  it('does not let a revocation commit between authorization and opening the descriptor', async () => {
+    const workspaceHolder: { value?: PausingOpenWorkspace } = {}
+    const { api, jobId, firstFallbackSegmentId } = await completedAudiobook(
+      'authorize-open-atomic',
+      {
+        workspace: (root) => {
+          const workspace = new PausingOpenWorkspace(root)
+          workspaceHolder.value = workspace
+          return workspace
+        },
+      },
+    )
+    const workspace = workspaceHolder.value
+    if (workspace === undefined) throw new Error('fixture did not retain its workspace')
+    const pause = workspace.pauseNextOpen()
+    const opening = api.openAudiobookFile({ jobId })
+    await pause.entered
+
+    let revocationCommitted = false
+    const revoking = api
+      .revokeFallback({ jobId, segmentId: firstFallbackSegmentId })
+      .then((result) => {
+        revocationCommitted = true
+        return result
+      })
+    // Give an uncoordinated mutation ample opportunity to commit while descriptor acquisition is
+    // deliberately paused. Under the contract, the authorization owns this short window, so the
+    // revocation must wait; it need not wait for the eventual stream body.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const committedWhileOpening = revocationCommitted
+
+    pause.release()
+    const opened = await opening
+    await revoking
+    let streamedAfterCommit = 0
+    try {
+      const reader = opened.body().getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        streamedAfterCommit += value.byteLength
+      }
+    } finally {
+      await opened.close()
+    }
+
+    expect(committedWhileOpening).toBe(false)
+    // The descriptor was authorized before commit, so this already-open stream may finish.
+    expect(streamedAfterCommit).toBeGreaterThan(0)
+    await expect(api.openAudiobookFile({ jobId })).rejects.toMatchObject({
+      code: 'output_unavailable',
+    })
+  }, 60_000)
+
   it('serves it again once the withdrawn speaker is approved and the book re-rendered', async () => {
     // Denial must be recoverable, or the gate is a trap rather than a gate.
     const { api, jobId } = await completedAudiobook('recovered')
@@ -213,7 +368,7 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
     const deadline = Date.now() + 20_000
     while (Date.now() < deadline) {
       const job = await api.getJobState({ jobId })
-      if (job !== null && job.finished) break
+      if (job?.finished === true) break
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
 

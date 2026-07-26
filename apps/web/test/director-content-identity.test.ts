@@ -23,7 +23,7 @@ describe('createDirectorContentIdentity', () => {
     expect(onGpuBox).toMatch(/^[a-f\d]{64}$/)
   })
 
-  it('still binds direction content: threshold, and everything else the adapter binds', () => {
+  it('still binds direction content settings, including threshold and chunking', () => {
     const base = {
       baseUrl: 'http://gpu-box:8080/v1',
       confidenceThreshold: 0.7,
@@ -32,6 +32,9 @@ describe('createDirectorContentIdentity', () => {
     expect(createDirectorContentIdentity({ ...base, confidenceThreshold: 0.8 })).not.toBe(
       createDirectorContentIdentity(base),
     )
+    expect(
+      createDirectorContentIdentity({ ...base, chunking: { windowPassageBudget: 3 } }),
+    ).not.toBe(createDirectorContentIdentity(base))
   })
 
   it('documents the pre-fix wedge it replaces: the raw adapter identity follows the environment', () => {

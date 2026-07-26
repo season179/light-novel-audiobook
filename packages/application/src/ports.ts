@@ -30,10 +30,25 @@ export interface DirectedChapter {
   readonly segments: readonly DirectedSegment[]
 }
 
+export interface DirectChapterOptions {
+  /** Cancellation for the whole chapter direction, including every underlying model request. */
+  readonly signal?: AbortSignal
+  /**
+   * Whole-chapter deadline in milliseconds, covering every underlying request the adapter needs
+   * (for example every passage window) plus retries. Adapters own their per-request timeout as a
+   * constructor setting; this option bounds the chapter operation the port actually exposes.
+   */
+  readonly timeoutMs?: number
+}
+
 /** Implemented by issue #30. identity binds model, prompt/schema, and direction settings. */
 export interface DirectorModel {
   readonly identity: string
-  directChapter(book: Book, chapter: Chapter): Promise<DirectedChapter>
+  directChapter(
+    book: Book,
+    chapter: Chapter,
+    options?: DirectChapterOptions,
+  ): Promise<DirectedChapter>
   release(): Promise<void>
 }
 
@@ -176,13 +191,22 @@ export interface ReusableSegmentQuery {
 
 /**
  * Implemented by issue #27. Persist jobs through AudiobookJob.snapshot()/reconstitute(), not
- * process-local object references. A reusable result may be returned only after the adapter proves
+ * process-local object references. Completed output is deliberately stored separately from the
+ * public aggregate and may be fetched only through the narrow persistence operation below. A
+ * reusable result may be returned only after the adapter proves
  * the absolute path exists and its current bytes match sha256 and byteLength. Reservations must be
  * atomic, pairwise-distinct, and must never name an existing file.
  */
 export interface JobRepository {
   findJob(jobId: string): Promise<AudiobookJob | undefined>
   saveJob(job: AudiobookJob): Promise<void>
+  /** Atomically persists the terminal job state and its separately held output. */
+  saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void>
+  /**
+   * Persistence-only raw output read. Application consumers must use `CompletedOutputAuthority`,
+   * which calls this under the live approval-catalog section. Direct use bypasses authorization.
+   */
+  findCompletedOutput(jobId: string): Promise<AudiobookOutput | undefined>
   /**
    * Persists the approved script **losslessly**, including every segment's exact `sourceText` and
    * its `voiceAssignment`. `findBook` has to reproduce a book that hashes to the same

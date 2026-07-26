@@ -1,5 +1,5 @@
 import type { Book, Chapter } from '@light-novel-audiobook/domain'
-import type { DirectedChapter, DirectorModel } from './ports.js'
+import type { DirectChapterOptions, DirectedChapter, DirectorModel } from './ports.js'
 
 /**
  * Overrides a director's self-reported identity with a content-only one.
@@ -25,8 +25,11 @@ export const withDirectorContentIdentity = (
   }
   return {
     identity: contentIdentity,
-    directChapter: (book: Book, chapter: Chapter): Promise<DirectedChapter> =>
-      director.directChapter(book, chapter),
+    directChapter: (
+      book: Book,
+      chapter: Chapter,
+      options?: DirectChapterOptions,
+    ): Promise<DirectedChapter> => director.directChapter(book, chapter, options),
     release: (): Promise<void> => director.release(),
   }
 }

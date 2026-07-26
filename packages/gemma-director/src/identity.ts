@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { canonicalSha256 } from './canonical-json.js'
+import { type DirectionChunkingSettings, resolveChunkingSettings } from './chunking.js'
 import {
   GEMMA_DIRECTOR_PROMPT_VERSION,
   GEMMA_DIRECTOR_SCHEMA_VERSION,
@@ -16,6 +17,11 @@ export interface GemmaDirectorIdentitySettings {
   readonly baseUrl: string
   readonly confidenceThreshold: number
   readonly gpuLeaseLockFilePath: string
+  /**
+   * Issue #53 passage-window budgets. Window boundaries can change fragmentation and therefore
+   * direction output, so the resolved values are part of the identity. Omitted means defaults.
+   */
+  readonly chunking?: Partial<DirectionChunkingSettings>
 }
 
 /** Application identity material for every stable setting that can affect direction/runtime. */
@@ -73,9 +79,24 @@ export function gemmaDirectorIdentityMaterial(settings: GemmaDirectorIdentitySet
       maxTokens: SELECTED_GEMMA_PROFILE.maxTokens,
       confidenceThreshold: settings.confidenceThreshold,
     },
+    chunking: resolveChunkingSettings(settings.chunking),
   } as const
 }
 
 export function createGemmaDirectorIdentity(settings: GemmaDirectorIdentitySettings): string {
   return canonicalSha256(gemmaDirectorIdentityMaterial(settings))
+}
+
+/**
+ * Stable command identity for what Gemma can produce, independent of where its server and GPU lock
+ * happen to live. The adapter keeps its full operational identity; resumable jobs bind this one.
+ */
+export function createGemmaDirectorContentIdentity(
+  settings: GemmaDirectorIdentitySettings,
+): string {
+  return createGemmaDirectorIdentity({
+    ...settings,
+    baseUrl: 'http://director-content-identity.invalid/',
+    gpuLeaseLockFilePath: '/director-content-identity/gpu-lease.lock',
+  })
 }

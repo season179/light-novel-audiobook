@@ -17,23 +17,42 @@ export {
   type GpuOwner,
 } from '@light-novel-audiobook/gpu-lease'
 export { canonicalJson, canonicalSha256 } from './canonical-json.js'
+export {
+  DEFAULT_DIRECTION_CHUNKING,
+  type DirectionChunkingSettings,
+  estimateWindowOutputChars,
+  estimateWindowPrompt,
+  type PassageWindow,
+  planChapterWindows,
+  planWindow,
+  resolveChunkingSettings,
+  shrinkSettings,
+} from './chunking.js'
 export { DEFAULT_GEMMA_DIRECTOR_BASE_URL, GemmaDirectorEndpoint } from './config.js'
 export {
   classifyDirectorError,
   DirectorError,
   type DirectorErrorCode,
+  directorErrorChainText,
 } from './errors.js'
 export {
   GemmaDirectorModel,
   type GemmaDirectorModelOptions,
 } from './gemma-director-model.js'
 export {
+  createGemmaDirectorContentIdentity,
   createGemmaDirectorIdentity,
   GEMMA_DIRECTOR_IDENTITY_SCHEMA,
   type GemmaDirectorIdentitySettings,
   GPU_LEASE_PROTOCOL,
   gemmaDirectorIdentityMaterial,
 } from './identity.js'
+export {
+  llamaRuntimePaths,
+  llamaServerArgs,
+  OwnedLlamaLifecycle,
+  type OwnedLlamaLifecycleOptions,
+} from './owned-llama-lifecycle.js'
 export {
   DIRECTOR_SEGMENT_KINDS,
   type DirectedAnnotation,

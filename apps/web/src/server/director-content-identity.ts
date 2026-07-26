@@ -1,5 +1,5 @@
 import {
-  createGemmaDirectorIdentity,
+  createGemmaDirectorContentIdentity,
   type GemmaDirectorIdentitySettings,
 } from '@light-novel-audiobook/gemma-director'
 
@@ -19,8 +19,4 @@ import {
  * `withDirectorContentIdentity(new GemmaDirectorModel(options), createDirectorContentIdentity(options))`.
  */
 export const createDirectorContentIdentity = (settings: GemmaDirectorIdentitySettings): string =>
-  createGemmaDirectorIdentity({
-    baseUrl: 'http://director-content-identity.invalid/',
-    confidenceThreshold: settings.confidenceThreshold,
-    gpuLeaseLockFilePath: '/director-content-identity/gpu-lease.lock',
-  })
+  createGemmaDirectorContentIdentity(settings)
