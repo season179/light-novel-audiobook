@@ -1,4 +1,9 @@
-import type { AudiobookJob, AudiobookOutput } from '@light-novel-audiobook/domain'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+  type AudiobookJob,
+  type AudiobookOutput,
+  OutputVersion,
+} from '@light-novel-audiobook/domain'
 import type { FallbackApprovalRepository } from './ports.js'
 
 export type CompletedOutputDenial =
@@ -18,6 +23,24 @@ export type CompletedOutputAuthorization<T> =
     }
   | { readonly exposable: false; readonly denial: CompletedOutputDenial }
 
+export class ApprovalCatalogReentryError extends Error {
+  override readonly name = 'ApprovalCatalogReentryError'
+  readonly bookId: string
+
+  constructor(bookId: string) {
+    super(
+      `Approval catalog callback for ${bookId} must not re-enter output authorization or approval mutation for the same book`,
+    )
+    this.bookId = bookId
+  }
+}
+
+interface CatalogOwnership {
+  readonly bookId: string
+  readonly parent: CatalogOwnership | undefined
+  active: boolean
+}
+
 /**
  * A short, fair, per-book critical section shared by approval writers and completed-output readers.
  *
@@ -28,9 +51,17 @@ export type CompletedOutputAuthorization<T> =
  */
 export class ApprovalCatalogAccess {
   private readonly tails = new Map<string, Promise<void>>()
+  private readonly ownership = new AsyncLocalStorage<CatalogOwnership>()
 
   async runExclusive<T>(bookId: string, operation: () => T | Promise<T>): Promise<T> {
     if (bookId.trim().length === 0) throw new Error('Approval catalog access requires a book ID')
+    let ancestor = this.ownership.getStore()
+    while (ancestor !== undefined) {
+      if (ancestor.active && ancestor.bookId === bookId) {
+        throw new ApprovalCatalogReentryError(bookId)
+      }
+      ancestor = ancestor.parent
+    }
     const previous = this.tails.get(bookId) ?? Promise.resolve()
     let release: (() => void) | undefined
     const turn = new Promise<void>((resolve) => {
@@ -39,9 +70,15 @@ export class ApprovalCatalogAccess {
     const tail = previous.then(() => turn)
     this.tails.set(bookId, tail)
     await previous
+    const ownership: CatalogOwnership = {
+      bookId,
+      parent: this.ownership.getStore(),
+      active: true,
+    }
     try {
-      return await operation()
+      return await this.ownership.run(ownership, operation)
     } finally {
+      ownership.active = false
       release?.()
       if (this.tails.get(bookId) === tail) this.tails.delete(bookId)
     }
@@ -60,6 +97,43 @@ export const approvalCatalogAccessFor = (
   const created = new ApprovalCatalogAccess()
   catalogAccessByRepository.set(key, created)
   return created
+}
+
+/*
+ * Runtime capability minted only in this module after a live catalog read. The class is deliberately
+ * not exported, its constructor is private, and its payload is a JavaScript #private field. A stored
+ * revision number cannot fabricate it, even through an `as unknown` type escape.
+ */
+class LiveCatalogRead {
+  readonly #output: AudiobookOutput
+
+  private constructor(output: AudiobookOutput) {
+    this.#output = output
+  }
+
+  static mint(job: AudiobookJob, liveRevision: number): LiveCatalogRead | undefined {
+    const snapshot = job.snapshot()
+    if (
+      snapshot.state !== 'completed' ||
+      snapshot.catalogRevision !== liveRevision ||
+      snapshot.output === null
+    ) {
+      return undefined
+    }
+    return new LiveCatalogRead(
+      Object.freeze({
+        version: new OutputVersion(snapshot.output.version),
+        m4bPath: snapshot.output.m4bPath,
+        chapters: Object.freeze(
+          snapshot.output.chapters.map((chapter) => Object.freeze({ ...chapter })),
+        ),
+      }),
+    )
+  }
+
+  consume(): AudiobookOutput {
+    return this.#output
+  }
 }
 
 /**
@@ -82,6 +156,11 @@ export class CompletedOutputAuthority {
     this.catalogAccess = catalogAccess
   }
 
+  /**
+   * @param consume Runs while this book's catalog section is held. It must not call this authority
+   * again or mutate approvals for the same book; same-book re-entry throws
+   * `ApprovalCatalogReentryError` rather than waiting behind itself. It may authorize another book.
+   */
   async authorize<T>(
     job: AudiobookJob,
     consume: (output: AudiobookOutput) => T | Promise<T>,
@@ -95,7 +174,7 @@ export class CompletedOutputAuthority {
     // by consumption. If a withdrawal commits after this read returns a stale snapshot but before
     // the critical section is acquired, the final read observes it and no descriptor is opened.
     const preliminary = await this.approvals.readCatalog(bookId)
-    if (job.completedOutputAtCatalogRevision(preliminary.revision) === null) {
+    if (LiveCatalogRead.mint(job, preliminary.revision) === undefined) {
       return Object.freeze({
         exposable: false as const,
         denial: 'approval-catalog-moved' as const,
@@ -103,8 +182,8 @@ export class CompletedOutputAuthority {
     }
     return this.catalogAccess.runExclusive(bookId, async () => {
       const { revision } = await this.approvals.readCatalog(bookId)
-      const output = job.completedOutputAtCatalogRevision(revision)
-      if (output === null) {
+      const proof = LiveCatalogRead.mint(job, revision)
+      if (proof === undefined) {
         return Object.freeze({
           exposable: false as const,
           denial:
@@ -115,7 +194,7 @@ export class CompletedOutputAuthority {
       }
       return Object.freeze({
         exposable: true as const,
-        value: await consume(output),
+        value: await consume(proof.consume()),
         catalogRevision: revision,
       })
     })

@@ -1,5 +1,6 @@
 export {
   ApprovalCatalogAccess,
+  ApprovalCatalogReentryError,
   approvalCatalogAccessFor,
   CompletedOutputAuthority,
   type CompletedOutputAuthorization,

@@ -162,25 +162,6 @@ export class AudiobookJob {
     return this.fallbackWarnings
   }
 
-  /**
-   * A completed output is never exposed without a caller presenting the live approval-catalog
-   * revision it just read. This removes the former raw `job.output` escape hatch: application code
-   * must go through its completed-output authority, which coordinates this check with consumption.
-   */
-  completedOutputAtCatalogRevision(catalogRevision: number): AudiobookOutput | null {
-    if (!Number.isSafeInteger(catalogRevision) || catalogRevision < 0) {
-      throw new DomainError('Approval catalog revision must be a non-negative safe integer')
-    }
-    if (
-      this.currentState !== 'completed' ||
-      this.completedCatalogRevision !== catalogRevision ||
-      this.completedOutput === null
-    ) {
-      return null
-    }
-    return this.completedOutput
-  }
-
   get error(): string | null {
     return this.failureMessage
   }
