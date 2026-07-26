@@ -124,12 +124,19 @@ describe('interrupt fixture reaper round trip (#67)', () => {
     const marker = JSON.parse(
       await waitForFile(join(probeDir, 'registered.json')),
     ) as RegisteredMarker
+    // Track the holder group before any assertion can abort the test, so afterEach always reaps it.
+    cleanupGroups.add(marker.holderPgid)
     // The observer read the registry back after registering: this is proof the entry was durable
     // before acquisition control returned, not merely that a registration was attempted.
     expect(marker.registered).toBe(true)
-    cleanupGroups.add(marker.holderPgid)
 
-    process.kill(marker.workerPid, 'SIGINT')
+    // The worker may already have failed itself through the ordering tripwire below; an ESRCH
+    // here just means the interrupt was unnecessary, not that the round trip passed.
+    try {
+      process.kill(marker.workerPid, 'SIGINT')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
     expect(await waitForExit(first, 10_000)).not.toBe(0)
     // Registration must complete before acquire() returns; the worker publishes a violation and
     // fails itself otherwise (a fire-and-forget observer trips exactly this).
