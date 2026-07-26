@@ -78,6 +78,17 @@ afterEach(async () => {
       // Gone.
     }
   }
+  for (const groupId of cleanupGroups) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try {
+        process.kill(-groupId, 0)
+        await delay(5)
+      } catch {
+        break
+      }
+      if (attempt === 199) throw new Error(`probe holder group ${groupId} survived cleanup`)
+    }
+  }
   cleanupGroups.clear()
   await reapOrphanedHolders().catch(() => undefined)
   await Promise.all([...cleanupRoots].map((root) => rm(root, { recursive: true, force: true })))
