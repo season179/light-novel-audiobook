@@ -76,9 +76,9 @@ export class RenderInProgressError extends DomainError {
  * fallback decisions `QwenApplicationSpeechEngine` requires, and the consequence of changing one: a
  * completed job goes back to awaiting review so its dependent audio is re-derived.
  *
- * **Every approval in the system originates here.** `reconcile` can only materialize records from a
- * grant that a human already issued through `grantBookFallback`; it has no policy parameter and no
- * default, so no generation run and no composition wiring can cause an approval to exist.
+ * **Every approval decision in the system originates here.** Generation calls `reconcile`, so it can
+ * materialize per-segment approval records from a grant a human already issued. It cannot create that
+ * grant or make a decision: `reconcile` has no policy parameter and no approval default.
  */
 export class ReviewFallbackApprovals {
   private readonly jobs: JobRepository

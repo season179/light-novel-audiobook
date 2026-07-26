@@ -17,6 +17,7 @@ import {
   type AssembleAudiobookRequest,
   type AudioAssembler,
   type CompletedSegmentAudio,
+  createBookFallbackGrant,
   createGenerationCommandIdentity,
   type DirectChapterOptions,
   type DirectedChapter,
@@ -633,6 +634,34 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     ).toEqual(
       assembled?.chapters.flatMap((chapter) => chapter.segments.map((item) => item.segment.id)),
     )
+  })
+
+  it('makes no approval decision but materializes records from an existing human grant', async () => {
+    const command: GenerateAudiobookCommand = {
+      jobId: 'job-existing-human-grant',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+
+    await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
+    const undecided = await app.approvals.readCatalog(bookId)
+    expect(undecided.grant).toBeUndefined()
+    expect(undecided.approvals).toEqual([])
+
+    await app.approvals.saveBookGrant(
+      createBookFallbackGrant({
+        bookId,
+        decidedBy: REVIEWER,
+        decidedAt: DECIDED_AT.toISOString(),
+      }),
+    )
+    const result = await app.useCase.execute(command)
+    expect(result.recordedFallbackApprovals).toBe(1)
+    const materialized = await app.approvals.readCatalog(bookId)
+    expect(materialized.grant?.decidedBy).toBe(REVIEWER)
+    expect(materialized.approvals).toHaveLength(1)
+    expect(materialized.approvals[0]?.decidedBy).toBe(REVIEWER)
   })
 
   it('forwards operational director options to every chapter without changing identity', async () => {
