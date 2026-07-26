@@ -666,6 +666,35 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.repository.reservations).toHaveLength(1)
   })
 
+  it('does not expose a completed output after its approval catalog moves', async () => {
+    const command: GenerateAudiobookCommand = {
+      jobId: 'job-revoked-completed-fast-path',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await generate(app, command)
+    const review = await app.review.list(command.jobId)
+    const fallback = review.find((item) => item.decision === 'approved')
+    if (fallback === undefined) throw new Error('fixture produced no approved fallback segment')
+    const assembliesBeforeRevocation = app.assembler.calls.length
+
+    // Construct the durable residue of a catalog commit whose best-effort job reopen did not land.
+    // GenerateAudiobook is itself a public output reader, so it must reject this even when nobody
+    // called RenderAudiobook or a web projection first.
+    await app.approvals.revoke(bookId, fallback.segmentId, {
+      reason: 'human-withdrawal',
+      decidedBy: REVIEWER,
+      decidedAt: DECIDED_AT.toISOString(),
+    })
+
+    await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
+    const reopened = await app.repository.findJob(command.jobId)
+    expect(reopened?.state).toBe('awaiting_review')
+    expect(reopened?.output).toBeNull()
+    expect(app.assembler.calls).toHaveLength(assembliesBeforeRevocation)
+  })
+
   it('rejects stale completed results when EPUB, cast, or rendering identities change', async () => {
     await generate(app, {
       jobId: 'job-bound-inputs',

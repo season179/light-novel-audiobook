@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { InMemoryFallbackApprovalRepository } from '../src/server/fakes/in-memory-fallback-approvals.js'
+import { LocalWorkspace } from '../src/server/workspace.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 
 const REVIEWER = 'a-real-person'
@@ -52,12 +53,18 @@ interface Fixture {
 }
 
 /** Runs a book all the way to a downloadable audiobook, making the one book-wide human decision. */
-const completedAudiobook = async (marker: string): Promise<Fixture> => {
+const completedAudiobook = async (
+  marker: string,
+  options: { readonly workspace?: (root: string) => LocalWorkspace } = {},
+): Promise<Fixture> => {
   const root = await mkdtemp(join(tmpdir(), 'lna-revoked-'))
   roots.push(root)
   const approvals = new InMemoryFallbackApprovalRepository()
+  const workspace = options.workspace?.(root)
+  await workspace?.prepare()
   const api = await createAudiobookWebApi({
     workspaceRoot: root,
+    ...(workspace === undefined ? {} : { workspace }),
     reviewer: REVIEWER,
     approvals,
   })
@@ -86,6 +93,43 @@ const completedAudiobook = async (marker: string): Promise<Fixture> => {
   const bookId = (await api.getJobState({ jobId: started.jobId }))?.bookId
   if (bookId === null || bookId === undefined) throw new Error('job has no book')
   return { api, jobId: started.jobId, bookId, approvals, firstFallbackSegmentId: first.segmentId }
+}
+
+class PausingOpenWorkspace extends LocalWorkspace {
+  private nextPause:
+    | {
+        readonly entered: () => void
+        readonly waitForRelease: Promise<void>
+      }
+    | undefined
+
+  pauseNextOpen(): {
+    readonly entered: Promise<void>
+    readonly release: () => void
+  } {
+    let markEntered: (() => void) | undefined
+    let release: (() => void) | undefined
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve
+    })
+    const waitForRelease = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    if (markEntered === undefined || release === undefined)
+      throw new Error('pause was not initialized')
+    this.nextPause = { entered: markEntered, waitForRelease }
+    return { entered, release }
+  }
+
+  override async openContainedFile(candidate: string) {
+    const pause = this.nextPause
+    this.nextPause = undefined
+    if (pause !== undefined) {
+      pause.entered()
+      await pause.waitForRelease
+    }
+    return super.openContainedFile(candidate)
+  }
 }
 
 describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
@@ -186,6 +230,48 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
     jobs.saveJob = originalSaveJob
     await api.getJobState({ jobId })
     expect((await api.getJobState({ jobId }))?.state).toBe('awaiting_review')
+  }, 60_000)
+
+  it('does not let a revocation commit between authorization and opening the descriptor', async () => {
+    const workspaceHolder: { value?: PausingOpenWorkspace } = {}
+    const { api, jobId, firstFallbackSegmentId } = await completedAudiobook(
+      'authorize-open-atomic',
+      {
+        workspace: (root) => {
+          const workspace = new PausingOpenWorkspace(root)
+          workspaceHolder.value = workspace
+          return workspace
+        },
+      },
+    )
+    const workspace = workspaceHolder.value
+    if (workspace === undefined) throw new Error('fixture did not retain its workspace')
+    const pause = workspace.pauseNextOpen()
+    const opening = api.openAudiobookFile({ jobId })
+    await pause.entered
+
+    let revocationCommitted = false
+    const revoking = api
+      .revokeFallback({ jobId, segmentId: firstFallbackSegmentId })
+      .then((result) => {
+        revocationCommitted = true
+        return result
+      })
+    // Give an uncoordinated mutation ample opportunity to commit while descriptor acquisition is
+    // deliberately paused. Under the contract, the authorization owns this short window, so the
+    // revocation must wait; it need not wait for the eventual stream body.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const committedWhileOpening = revocationCommitted
+
+    pause.release()
+    const opened = await opening
+    await opened.close()
+    await revoking
+
+    expect(committedWhileOpening).toBe(false)
+    await expect(api.openAudiobookFile({ jobId })).rejects.toMatchObject({
+      code: 'output_unavailable',
+    })
   }, 60_000)
 
   it('serves it again once the withdrawn speaker is approved and the book re-rendered', async () => {
