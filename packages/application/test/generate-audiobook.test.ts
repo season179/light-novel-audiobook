@@ -1063,6 +1063,8 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await expect(generate(app, command)).rejects.toThrow('synthetic direction failure')
     expect(app.repository.jobs.get(command.jobId)?.state).toBe('failed')
     expect(app.events.filter((event) => event.startsWith('direct:'))).toHaveLength(2)
+    expect(app.extractor.calls).toHaveLength(1)
+    expect(app.directorFactory.created).toHaveLength(1)
 
     const resumed = await generate(app, command)
 
