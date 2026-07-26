@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Book, Chapter, SourcePassage, StableIds } from '@light-novel-audiobook/domain'
-import { GemmaDirectorModel } from '@light-novel-audiobook/gemma-director'
+import { GemmaDirectorModel, OwnedLlamaLifecycle } from '@light-novel-audiobook/gemma-director'
 import {
   type ExclusiveGpuLeaseCoordinator,
   FileGpuLeaseCoordinator,
@@ -14,7 +14,6 @@ import {
 } from '@light-novel-audiobook/gpu-lease'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
-import { OwnedLlamaLifecycle } from '../src/llama-lifecycle.js'
 
 const STUB = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

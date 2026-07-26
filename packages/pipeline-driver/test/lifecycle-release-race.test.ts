@@ -19,6 +19,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { OwnedLlamaLifecycle } from '@light-novel-audiobook/gemma-director'
 import {
   type ExclusiveGpuLeaseCoordinator,
   FileGpuLeaseCoordinator,
@@ -27,7 +28,6 @@ import {
 } from '@light-novel-audiobook/gpu-lease'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
-import { OwnedLlamaLifecycle } from '../src/llama-lifecycle.js'
 
 /**
  * A barrier at the exact window the reviewer identified. `#startOnce()` writes the API-key file and
