@@ -15,6 +15,22 @@ import { readCanonicalWavHeader, validateCanonicalWav } from './wav.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
+/**
+ * One narrowly pinned reuse migration for #91. The predecessor worker differs only in its WAV
+ * pacing validator and produced byte-identical waveforms under the same render identity inputs.
+ * Its persisted clips passed the stricter zero-intercept gate, so rerendering them would waste the
+ * GPU without improving safety. Both sides are content-addressed so a future worker/config edit
+ * automatically falls back to normal exact-identity invalidation.
+ */
+const AFFINE_WAV_GATE_REUSE_MIGRATION = Object.freeze({
+  predecessorProductionConfigSha256:
+    '82f9a62a94a62bcf68e5d35709e358ffb552e380d1295a8e7b014dc82a219f25',
+  predecessorWorkerSha256: '966d089fc0a65d63bcdd6a3d99f6baebd32e93bf054d0d67aa6f2b4050f02ca7',
+  successorProductionConfigSha256:
+    'e547bfa62f1e63dd801ecb9daa7673c5f3fb751a2ef6cf2e8df45ad80253d1f7',
+  successorWorkerSha256: '652435317efee85e6e5ceb6e4e4d02f30339fbf7ebceffbbd2c56b906dc6fcfb',
+})
+
 export interface RenderIdentity {
   readonly adapter: LoadedProductionConfig['value']['adapter']
   readonly model: LoadedProductionConfig['value']['model']
@@ -217,6 +233,38 @@ function recordedAudioClaim(
   return { sha256: digest, bytes, frames, durationSeconds }
 }
 
+function matchesRenderIdentity(
+  manifest: RenderManifest,
+  plan: SegmentPlan,
+  config: LoadedProductionConfig,
+): boolean {
+  if (
+    manifest.renderIdentitySha256 === plan.identitySha256 &&
+    canonicalJson(manifest.renderIdentity) === canonicalJson(plan.identity)
+  ) {
+    return true
+  }
+  const migration = AFFINE_WAV_GATE_REUSE_MIGRATION
+  if (
+    config.sha256 !== migration.successorProductionConfigSha256 ||
+    plan.identity.workerRuntime.workerSha256 !== migration.successorWorkerSha256 ||
+    manifest.observedProductionConfigSha256 !== migration.predecessorProductionConfigSha256
+  ) {
+    return false
+  }
+  const predecessorIdentity: RenderIdentity = {
+    ...plan.identity,
+    workerRuntime: {
+      ...plan.identity.workerRuntime,
+      workerSha256: migration.predecessorWorkerSha256,
+    },
+  }
+  return (
+    manifest.renderIdentitySha256 === sha256(canonicalJson(predecessorIdentity)) &&
+    canonicalJson(manifest.renderIdentity) === canonicalJson(predecessorIdentity)
+  )
+}
+
 export async function tryReuse(
   plan: SegmentPlan,
   config: LoadedProductionConfig,
@@ -236,8 +284,7 @@ export async function tryReuse(
   if (
     manifest.schemaVersion !== 1 ||
     manifest.segmentId !== plan.request.segmentId ||
-    manifest.renderIdentitySha256 !== plan.identitySha256 ||
-    canonicalJson(manifest.renderIdentity) !== canonicalJson(plan.identity) ||
+    !matchesRenderIdentity(manifest, plan, config) ||
     manifest.audio?.file !== `${plan.request.segmentId}.wav`
   ) {
     return undefined

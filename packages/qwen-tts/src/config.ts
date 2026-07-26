@@ -40,6 +40,8 @@ export interface WavRequirements {
   readonly minimumActiveFrameFraction: number
   readonly minimumSecondsPerWord: number
   readonly maximumSecondsPerWord: number
+  /** Calibrated upper-envelope allowance for fixed per-utterance duration variance (#91). */
+  readonly fixedUtteranceOverheadSeconds: number
   readonly maximumDurationSeconds: number
 }
 
@@ -218,6 +220,7 @@ function validateConfig(value: unknown): QwenProductionConfig {
       'minimumActiveFrameFraction',
       'minimumSecondsPerWord',
       'maximumSecondsPerWord',
+      'fixedUtteranceOverheadSeconds',
       'maximumDurationSeconds',
     ],
     'wav',
@@ -232,6 +235,9 @@ function validateConfig(value: unknown): QwenProductionConfig {
     minimumActiveFrameFraction: 0.15,
     minimumSecondsPerWord: 0.08,
     maximumSecondsPerWord: 2,
+    // 38 measured short renders: 2.64 s shipped-voice maximum; 3.00 s ceiling leaves
+    // 0.36 s safety margin while retaining a full second of separation from the 4 s runaway probe.
+    fixedUtteranceOverheadSeconds: 1,
     maximumDurationSeconds: 30,
   } as const
   for (const [key, expected] of Object.entries(wavGateLocks))
