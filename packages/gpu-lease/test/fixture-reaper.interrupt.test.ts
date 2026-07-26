@@ -18,6 +18,13 @@ interface RegisteredMarker {
   readonly registeredAt: number
 }
 
+interface StartedMarker {
+  readonly workerPid: number
+  readonly holderPgid: number
+  readonly root: string
+  readonly scriptsRoot: string
+}
+
 const spawned: ChildProcess[] = []
 const cleanupGroups = new Set<number>()
 const cleanupRoots = new Set<string>()
@@ -46,6 +53,22 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<numb
     ])
   } finally {
     clearTimeout(timer)
+  }
+}
+
+async function waitForGroupExit(groupId: number, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs
+  for (;;) {
+    try {
+      process.kill(-groupId, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    if (performance.now() >= deadline) {
+      throw new Error(`holder group ${groupId} is still alive`)
+    }
+    await delay(10)
   }
 }
 
@@ -159,5 +182,41 @@ describe('interrupt fixture reaper round trip (#67)', () => {
     expect((await loadRegistry()).some((entry) => entry.holderPgid === marker.holderPgid)).toBe(
       false,
     )
+  }, 60_000)
+
+  it('an interrupt in the pre-registration window leaves no live unregistered holder', async () => {
+    const fixturePath = join(
+      REPO_ROOT,
+      'packages/gpu-lease/test/fixtures/interrupt-holder.fixture.test.ts',
+    )
+    const probeDir = join(tmpdir(), `gpu-lease-interrupt-probe-${crypto.randomUUID()}`)
+    await mkdir(probeDir, { recursive: true })
+    const nonce = crypto.randomUUID()
+    cleanupRoots.add(probeDir)
+    cleanupRoots.add(join(tmpdir(), `gpu-lease-interrupt-holder-${nonce}`))
+    cleanupRoots.add(join(tmpdir(), `gpu-lease-interrupt-scripts-${nonce}`))
+    const first = startProbe(fixturePath, {
+      LNA_REAPER_PROBE_PHASE: 'hold-pre',
+      LNA_REAPER_PROBE_DIR: probeDir,
+      LNA_REAPER_PROBE_NONCE: nonce,
+    })
+
+    // The worker has spawned the hostile flock subtree and published its pgid, but is blocked
+    // before registerHolder: this is the pre-registration window itself. A genuine SIGINT to
+    // the whole nested Vitest process group interrupts it there.
+    const started = JSON.parse(await waitForFile(join(probeDir, 'started.json'))) as StartedMarker
+    cleanupGroups.add(started.holderPgid)
+    if (first.pid === undefined) throw new Error('nested Vitest did not expose a pid')
+    process.kill(-first.pid, 'SIGINT')
+    expect(await waitForExit(first, 15_000)).not.toBe(0)
+    // The holder never saw the arming gate, so it was still benign: the worker's death EOF'd its
+    // stdin and it exited like the production holder. Nothing hostile survives the window, so
+    // nothing needs reaping and the registry carries no entry for it.
+    await waitForGroupExit(started.holderPgid, 10_000)
+    expect((await loadRegistry()).some((entry) => entry.holderPgid === started.holderPgid)).toBe(
+      false,
+    )
+    expect(await reapOrphanedHolders()).toBe(0)
+    expect(() => process.kill(-started.holderPgid, 0)).toThrow()
   }, 60_000)
 })

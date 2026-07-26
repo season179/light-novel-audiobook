@@ -15,8 +15,13 @@ const RELEASE_GRACE_MS = 500
 /** Any release that outlives this is the unbounded wait the lease must never perform again. */
 const RELEASE_DEADLINE_MS = 6_000
 
-function trackHolder(path: string): (holderPgid: number) => Promise<void> {
-  return async (holderPgid) => await registerHolder(holderPgid, dirname(path))
+function trackHolder(path: string, armGatePath?: string): (holderPgid: number) => Promise<void> {
+  return async (holderPgid) => {
+    await registerHolder(holderPgid, dirname(path))
+    // Arming is strictly after the durable registration above: a hostile holder must never exist
+    // while it is unreapable (#67).
+    if (armGatePath !== undefined) await writeFile(armGatePath, '', 'utf8')
+  }
 }
 
 function coordinator(path: string): FileGpuLeaseCoordinator {
@@ -87,19 +92,36 @@ async function fakeNvidiaSmi(
 }
 
 /**
- * Stands in for flock with a holder that survives stdin end and SIGTERM, so release must escalate
- * to SIGKILL. `$9` is the token the coordinator appends to the holder argv.
+ * Stands in for flock with a holder that starts benign and survives stdin end and SIGTERM only
+ * after its arming gate appears (written by `trackHolder` after durable registration), so release
+ * must then escalate to SIGKILL. `$9` is the token the coordinator appends to the holder argv.
  */
-async function fakeStubbornFlock(root: string, body: string): Promise<string> {
-  const path = join(root, 'fake-flock')
+async function fakeStubbornFlock(
+  root: string,
+  body: string,
+): Promise<{ readonly flockPath: string; readonly armGatePath: string }> {
+  const flockPath = join(root, 'fake-flock')
+  const armGatePath = join(root, 'go-hostile')
   await writeFile(
-    path,
-    ['#!/bin/sh', body, "trap '' TERM", 'while true; do sleep 1; done', ''].join('\n'),
+    flockPath,
+    [
+      '#!/bin/sh',
+      '# Benign until the arming gate exists: the watcher ends us on stdin EOF and SIGTERM keeps',
+      '# its default disposition, so an interrupt before registration leaves nothing behind (#67).',
+      '# fd 3 keeps the real stdin: a backgrounded subshell in sh gets /dev/null instead.',
+      'exec 3<&0',
+      '( while read -r _ <&3; do :; done; kill -TERM $$ ) &',
+      `while [ ! -f '${armGatePath}' ]; do sleep 0.02; done`,
+      "trap '' TERM",
+      body,
+      'while true; do sleep 1; done',
+      '',
+    ].join('\n'),
     {
       mode: 0o700,
     },
   )
-  return path
+  return { flockPath, armGatePath }
 }
 
 /** A live process inside this test's process tree, standing in for our own llama.cpp server. */
@@ -639,7 +661,7 @@ describe('FileGpuLeaseCoordinator', () => {
   it('reports the diagnostic cause even when stopping the holder needs SIGKILL', async () => {
     const root = await makeRoot('gpu-flock-cause')
     const path = join(root, 'exclusive.lock')
-    const flockExecutable = await fakeStubbornFlock(root, `printf '%s\\n' "$9"`)
+    const { flockPath, armGatePath } = await fakeStubbornFlock(root, `printf '%s\\n' "$9"`)
     const nvidiaSmiExecutable = await fakeNvidiaSmi(root, {
       computeApps: '1, [Not Found], [N/A]',
       memoryUsedMiB: '231',
@@ -648,10 +670,10 @@ describe('FileGpuLeaseCoordinator', () => {
     await expect(
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
-        flockExecutable,
+        flockExecutable: flockPath,
         nvidiaSmiExecutable,
         releaseGraceMs: 200,
-        onHolderStarted: trackHolder(path),
+        onHolderStarted: trackHolder(path, armGatePath),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'diagnostic',
@@ -662,7 +684,7 @@ describe('FileGpuLeaseCoordinator', () => {
   it('stops a holder whose handshake is unusable instead of waiting on a live process', async () => {
     const root = await makeRoot('gpu-flock-unusable')
     const path = join(root, 'exclusive.lock')
-    const flockExecutable = await fakeStubbornFlock(
+    const stubborn = await fakeStubbornFlock(
       root,
       // Comfortably past the 4 KB handshake ceiling without ever printing the token.
       'i=0; while [ $i -lt 400 ]; do printf "not-the-token-%s\\n" "$i"; i=$((i+1)); done',
@@ -671,10 +693,10 @@ describe('FileGpuLeaseCoordinator', () => {
     await expect(
       new FileGpuLeaseCoordinator({
         lockFilePath: path,
-        flockExecutable,
+        flockExecutable: stubborn.flockPath,
         inspectExistingComputeProcesses: false,
         releaseGraceMs: 200,
-        onHolderStarted: trackHolder(path),
+        onHolderStarted: trackHolder(path, stubborn.armGatePath),
       }).acquire('gemma'),
     ).rejects.toMatchObject({
       code: 'unavailable',

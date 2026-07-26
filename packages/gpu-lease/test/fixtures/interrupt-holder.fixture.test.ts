@@ -14,7 +14,7 @@ beforeAll(async () => {
   await reapOrphanedHolders()
 })
 
-it.skipIf(phase !== 'hold')(
+it.skipIf(phase !== 'hold' && phase !== 'hold-pre')(
   'holds a registered hostile flock subtree until worker SIGINT',
   async () => {
     if (probeDir === undefined || nonce === undefined) {
@@ -44,7 +44,17 @@ it.skipIf(phase !== 'hold')(
       gatePath,
       beforeRegister: async (pgid) => {
         holderPgid = pgid
-        await writeFile(startedPath, JSON.stringify({ workerPid: process.pid }), 'utf8')
+        await writeFile(
+          startedPath,
+          JSON.stringify({ workerPid: process.pid, holderPgid: pgid, root, scriptsRoot }),
+          'utf8',
+        )
+        if (phase === 'hold-pre') {
+          // Blocked before durable registration: the outer probe delivers SIGINT here, inside
+          // the pre-registration window. The holder must still be benign at this point, so the
+          // interrupt EOFs it and leaves nothing unregistered behind.
+          await new Promise<void>(() => undefined)
+        }
       },
       afterRegister: async (pgid) => {
         registeredAt = performance.now()
