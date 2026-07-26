@@ -505,6 +505,31 @@ def write_wav_atomic(
         temporary.unlink(missing_ok=True)
 
 
+def fatal_detail(error: Exception, output_directory: Path | None) -> str:
+    """The fatal channel reaches the driver's stderr, so it must never carry story text.
+
+    The worker's own ValueErrors are curated and text-free and pass through. Anything else is
+    reduced to its type name: a third-party exception can quote the input it failed on. The full
+    traceback goes to a file beside the output -- the same trust domain as the workspace script
+    database -- never to stderr or the protocol.
+    """
+    if isinstance(error, ValueError):
+        return f"{type(error).__name__}: {str(error)[:1000]}"
+    detail = (
+        f"{type(error).__name__} (message withheld: third-party exceptions may quote segment text)"
+    )
+    if output_directory is not None:
+        try:
+            traceback_path = output_directory / f"qwen-worker-traceback-{os.getpid()}.log"
+            traceback_path.write_text(
+                "".join(traceback.format_exception(error)), encoding="utf-8"
+            )
+            detail = f"{detail}; full traceback: {traceback_path}"
+        except OSError:
+            pass
+    return detail
+
+
 def generation_kwargs(generation: dict[str, Any]) -> dict[str, Any]:
     return {
         "do_sample": generation["doSample"],
@@ -527,6 +552,7 @@ def run() -> int:
     tts = None
     torch = None
     active_segment: str | None = None
+    output_directory: Path | None = None
     try:
         bind_to_parent_lifetime()
         request = read_begin_request()
@@ -655,11 +681,10 @@ def run() -> int:
     except Cancelled:
         return 130
     except Exception as error:
-        traceback.print_exc(file=sys.stderr)
         emit(
             "fatal",
             stage="render-batch",
-            message=f"{type(error).__name__}: {str(error)[:1000]}",
+            message=fatal_detail(error, output_directory),
             **({"segmentId": active_segment} if active_segment is not None else {}),
         )
         return 1

@@ -95,7 +95,9 @@ export interface RunPipelineReport {
  * 2. **The cast is derived from the pinned Qwen config**, never restated. See `voice-cast.ts`.
  */
 export async function runPipeline(options: RunPipelineOptions): Promise<RunPipelineReport> {
-  const startedAt = Date.now()
+  // Monotonic on purpose: Date.now() runs backward on some hosts, and a negative total in the
+  // report is how that surfaces.
+  const startedAt = performance.now()
   const { transports } = options
 
   const epubBytes = new Uint8Array(await readFile(options.epubPath))
@@ -261,7 +263,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
         speechEngine: speechEngineFactory.identity,
         assembler: audioAssembler.identity,
       },
-      durationsMs: { total: Date.now() - startedAt },
+      durationsMs: { total: Math.round(performance.now() - startedAt) },
     }
   } finally {
     database.close()
