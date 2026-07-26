@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" unique-identifier="book-id" xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="book-id">urn:uuid:00000000-0000-4000-8000-000000000021</dc:identifier>
+    <dc:title>Northlight Station — M1 Acceptance Fixture</dc:title>
+    <dc:creator id="creator-author">Fixture Author</dc:creator>
+    <meta refines="#creator-author" property="role" scheme="marc:relators">aut</meta>
+    <dc:language>en</dc:language>
+    <dc:description>An original redistributable EPUB written for the M1 acceptance proof. Two chapters of mixed narration and dialogue between two named characters.</dc:description>
+    <dc:rights>CC0-1.0</dc:rights>
+    <dc:date>2026-07-28</dc:date>
+    <meta property="dcterms:modified">2026-07-28T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="chapter-1" href="chapter-1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="chapter-2" href="chapter-2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter-1"/>
+    <itemref idref="chapter-2"/>
+  </spine>
+</package>
