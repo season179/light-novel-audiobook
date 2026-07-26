@@ -112,9 +112,12 @@ QWEN3_TTS_GPU_LEASE_PATH="$HOME/.local/state/light-novel-audiobook/gpu/exclusive
 pnpm --filter @light-novel-audiobook/qwen-tts smoke:real
 ```
 
-The command renders Aiden calm, Ryan energetic, and Ryan low/weary in one process, validates all
-three canonical WAVs/hashes, creates manifests, constructs a fresh adapter, and requires all
-three clips to be reused without another Python model process. Before engine construction or GPU
+The command renders **one segment per approved profile** in a single process — ten as of issue #92,
+derived from the pinned config rather than listed in the script, so a profile added to the inventory
+cannot skip real-GPU coverage. It validates every canonical WAV/hash, requires all ten waveforms to be
+distinct (two approved voices rendering identical bytes would mean the inventory advertises a voice it
+does not have), creates manifests, constructs a fresh adapter, and requires every clip to be reused
+without another Python model process. Before engine construction or GPU
 lease acquisition it requires a completely empty output root; the worker also uses atomic
 no-replace installation. It refuses non-WSL2 hosts, non-ext4 output, active GPU compute processes,
 and output inside Git.

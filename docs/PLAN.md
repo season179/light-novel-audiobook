@@ -159,7 +159,7 @@ Example segment:
 7. **Voice creation and consistency**
    - Require no user-provided recordings.
    - Use approved built-in speaker/instruction profiles as local synthetic voice candidates for the narrator and recurring characters.
-   - Begin with narrator Aiden calm, character one Ryan energetic, and character two Ryan low/weary restrained; retain all accepted Aiden/Ryan audition variants as candidates and exclude Serena from English casting.
+   - Begin with narrator Aiden calm, character one Ryan energetic, and character two Ryan low/weary restrained; retain all accepted Aiden/Ryan audition variants as candidates. As of issue #92 the approved character inventory is all nine built-in speakers at the auditioned instruction, so a book with many characters no longer collapses them onto the fallback voice. Serena's issue-8 exclusion is superseded by that decision.
    - Let the user preview recommended candidates and approve or regenerate instruction variants before bulk rendering.
    - Save each approved speaker, instruction, seed/profile, transcript, model revision, and audition-output hash as a stable voice profile; no reference clip is required.
    - Use a generic fallback voice only when the user explicitly approves an unresolved speaker.
