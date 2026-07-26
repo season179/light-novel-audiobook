@@ -169,10 +169,20 @@ const canonicalProposal = (proposal: CastProposal): CastProposal => {
   }
 
   const byMaterial = new Map<string, CastAssignment[]>()
+  const materialBySharingGroup = new Map<string, string>()
   for (const assignment of assignments) {
     const group = byMaterial.get(assignment.materialProfileId) ?? []
     group.push(assignment)
     byMaterial.set(assignment.materialProfileId, group)
+    if (assignment.sharingGroupId !== null) {
+      const groupedMaterial = materialBySharingGroup.get(assignment.sharingGroupId)
+      if (groupedMaterial !== undefined && groupedMaterial !== assignment.materialProfileId) {
+        throw new DomainError(
+          `Cast sharing group ${assignment.sharingGroupId} cannot name more than one voice material`,
+        )
+      }
+      materialBySharingGroup.set(assignment.sharingGroupId, assignment.materialProfileId)
+    }
   }
   for (const [materialProfileId, group] of byMaterial) {
     const sharingIds = new Set(group.map((item) => item.sharingGroupId))

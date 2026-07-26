@@ -96,6 +96,29 @@ describe('cast proposal and human approval', () => {
     ).toThrow(/must name the same sharing group/)
   })
 
+  it('rejects one sharing-group label applied to different material', () => {
+    expect(() =>
+      parseCastProposal({
+        bookId: 'book-abc123',
+        epubSha256: 'a'.repeat(64),
+        assignments: [
+          ...['amber', 'basil'].map((speaker) => ({
+            speakerId: `speaker-${speaker}`,
+            aliases: [speaker],
+            materialProfileId: 'material-bright',
+            sharingGroupId: 'minor-shared',
+          })),
+          ...['coral', 'dahlia'].map((speaker) => ({
+            speakerId: `speaker-${speaker}`,
+            aliases: [speaker],
+            materialProfileId: 'material-low',
+            sharingGroupId: 'minor-shared',
+          })),
+        ],
+      }),
+    ).toThrow(/cannot name more than one voice material/)
+  })
+
   it('rejects material absent from the listening-evidence-backed inventory', async () => {
     const review = new ReviewCastApprovals({
       approvals: new InMemoryCastApprovals(),
