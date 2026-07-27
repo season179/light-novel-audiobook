@@ -313,6 +313,45 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     expect(await harness.repo.findJob(job.id)).toBeDefined()
   })
 
+  it('loads and re-saves a legacy schema-v4 job row with no direction key', async () => {
+    const legacySnapshot = {
+      schemaVersion: 4,
+      id: 'job-legacy-direction-row',
+      state: 'failed',
+      stage: 'directing',
+      commandIdentity: COMMAND_IDENTITY,
+      renderContract: null,
+      catalogRevision: null,
+      bookId: BOOK_ID,
+      progress: {
+        currentChapterId: CHAPTER_ID,
+        completedSegments: 0,
+        totalSegments: 0,
+        latestMessage: 'Synthetic director stopped',
+      },
+      warnings: [],
+      error: 'Synthetic director stopped',
+    } as const
+    harness.db
+      .prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)')
+      .run(legacySnapshot.id, JSON.stringify(legacySnapshot))
+
+    harness.reopen()
+    const legacy = await harness.repo.findJob(legacySnapshot.id)
+    expect(legacy?.state).toBe('failed')
+    expect(legacy?.stage).toBe('directing')
+    expect(legacy?.progress.direction).toBeNull()
+    legacy?.retry()
+    if (legacy === undefined) throw new Error('Legacy job row disappeared')
+    await harness.repo.saveJob(legacy)
+
+    harness.reopen()
+    const saved = await harness.repo.findJob(legacySnapshot.id)
+    expect(saved?.state).toBe('running')
+    expect(saved?.stage).toBe('extracting')
+    expect(saved?.progress.direction).toBeNull()
+  })
+
   it('stores completed output separately from public job state across restart and reopen', async () => {
     const job = new AudiobookJob('job-separated-output')
     job.bindCommand(COMMAND_IDENTITY)

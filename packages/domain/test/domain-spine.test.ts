@@ -470,6 +470,40 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(failedReloaded.state).toBe('running')
   })
 
+  it('loads a legacy schema-v4 failed-direction snapshot with no direction key', () => {
+    const legacySnapshot = {
+      schemaVersion: 4,
+      id: 'job-legacy-direction-progress',
+      state: 'failed',
+      stage: 'directing',
+      commandIdentity,
+      renderContract: null,
+      catalogRevision: null,
+      bookId,
+      progress: {
+        currentChapterId: chapterId,
+        completedSegments: 0,
+        totalSegments: 0,
+        latestMessage: 'Synthetic director stopped',
+      },
+      warnings: [],
+      error: 'Synthetic director stopped',
+    } as const
+    const reconstitute = (): AudiobookJob =>
+      AudiobookJob.reconstitute(legacySnapshot as unknown as AudiobookJobSnapshot)
+
+    expect(reconstitute).not.toThrow()
+    const job = reconstitute()
+    expect(job.state).toBe('failed')
+    expect(job.stage).toBe('directing')
+    expect(job.progress.direction).toBeNull()
+
+    job.retry()
+    expect(job.state).toBe('running')
+    expect(job.stage).toBe('extracting')
+    expect(job.progress.direction).toBeNull()
+  })
+
   it('rejects corrupt snapshots and duplicate completed output paths', () => {
     const pending = new AudiobookJob('job-invalid-snapshot').snapshot()
     expect(() =>
