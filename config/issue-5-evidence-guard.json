@@ -2,8 +2,6 @@
   "schemaVersion": 1,
   "implementationCommit": "7a0ed3c935d5980838a0c7a59ca416ce884ef53d",
   "authorizedVerifierPatches": {
-    "packages/llama-cpp-spike/scripts/real-host-smoke.ts": "8be6bbd3f7a7a74c06b16c83e96bdd374f342ce3dcfbdcb4374112becf3c08a3",
-    "packages/llama-cpp-spike/test/client.test.ts": "12bcb3a8ac56740b48e433f566c72b4fa90084a46b23f81cde4db6791621bc25",
-    "packages/llama-cpp-spike/test/evidence.test.ts": "5b1279f1bf8f64832b3dc6020eea0c302d93b7895474dd44758f041e89f0b39d"
+    "packages/llama-cpp-spike/test/evidence.test.ts": "ba30a508e962fb3b50953388720c574d6473f69bac6be98b699b45656f19606f"
   }
 }

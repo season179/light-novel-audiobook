@@ -70,6 +70,7 @@ async function readUnapprovedSpikeChanges(
   for (const path of changes) {
     const expectedPatch = authorizedVerifierPatches[path]
     if (
+      path !== provenanceVerifier ||
       !expectedPatch ||
       (await verifierDiffSha256(repository, implementationCommit, currentRevision, path)) !==
         expectedPatch
@@ -255,23 +256,6 @@ describe('committed spike provenance and host evidence', () => {
           authorization,
         ),
       ).toContain(`${spikeRoot}/src/client.ts`)
-      const sourceAuthorization = {
-        ...authorization,
-        [`${spikeRoot}/src/client.ts`]: await verifierDiffSha256(
-          repository,
-          implementationCommit,
-          sourceEdit,
-          `${spikeRoot}/src/client.ts`,
-        ),
-      }
-      expect(
-        await readUnapprovedSpikeChanges(
-          repository,
-          implementationCommit,
-          sourceEdit,
-          sourceAuthorization,
-        ),
-      ).toEqual([])
 
       await gitOutput(repository, ['reset', '--hard', allowedCommit])
       await writeFile(verifierPath, 'export const verifier = 3\n')

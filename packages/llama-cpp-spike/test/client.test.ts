@@ -13,9 +13,9 @@ import { LlamaFixtureServer } from './llama-fixture-server'
 const FIXTURE_API_KEY = 'fixture-server-side-key-00000001'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
-  const deadline = performance.now() + timeoutMs
+  const deadline = Date.now() + timeoutMs
   while (!predicate()) {
-    if (performance.now() >= deadline) throw new Error('Timed out waiting for fixture state')
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture state')
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }

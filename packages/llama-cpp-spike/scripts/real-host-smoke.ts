@@ -66,8 +66,8 @@ async function waitForHealth(
   apiKey: string,
   throwIfChildError: () => void,
 ): Promise<void> {
-  const deadline = performance.now() + timeoutMs
-  while (performance.now() < deadline) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     throwIfChildError()
     try {
       const response = await fetch(`${ORIGIN}/health`, {
@@ -98,8 +98,8 @@ async function slotsIdle(apiKey: string): Promise<boolean> {
 }
 
 async function observeBusySlot(timeoutMs: number, apiKey: string): Promise<boolean> {
-  const deadline = performance.now() + timeoutMs
-  while (performance.now() < deadline) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     try {
       if ((await readSlots(apiKey)).some((slot) => slot.is_processing === true)) return true
     } catch {
@@ -111,8 +111,8 @@ async function observeBusySlot(timeoutMs: number, apiKey: string): Promise<boole
 }
 
 async function waitForIdleSlots(timeoutMs: number, apiKey: string): Promise<void> {
-  const deadline = performance.now() + timeoutMs
-  while (performance.now() < deadline) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     if (await slotsIdle(apiKey)) return
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
   }
