@@ -21,27 +21,53 @@ const WAIT = { timeout: 5_000, interval: 25 }
 
 const JOB_ID = 'job-uitest0000000000000001'
 
-const view = (overrides: Partial<JobStateView>): JobStateView => ({
-  jobId: JOB_ID,
-  state: 'running',
-  stage: 'rendering',
-  stageLabel: 'Rendering speech',
-  bookId: 'book-uitest0000000000000001',
-  bookTitle: 'Fixture Book',
-  currentChapterId: 'book-uitest0000000000000001-ch0002',
-  currentChapterLabel: 'Chapter 2',
-  currentChapterTitle: 'A Fixture Chapter',
-  completedSegments: 13,
-  totalSegments: 16,
-  percentComplete: 81,
-  latestMessage: 'Completed segment 13',
-  error: null,
-  active: true,
-  finished: false,
-  warnings: [],
-  output: null,
-  ...overrides,
-})
+const view = (overrides: Partial<JobStateView>): JobStateView => {
+  const stage = overrides.stage ?? 'rendering'
+  const stageIndex = ['extracting', 'directing', 'rendering', 'assembling'].indexOf(stage)
+  return {
+    jobId: JOB_ID,
+    state: 'running',
+    stage,
+    stageLabel: 'Rendering speech',
+    bookId: 'book-uitest0000000000000001',
+    bookTitle: 'Fixture Book',
+    currentChapterId: 'book-uitest0000000000000001-ch0002',
+    currentChapterLabel: 'Chapter 2',
+    currentChapterTitle: 'A Fixture Chapter',
+    completedChapters: 2,
+    totalChapters: 2,
+    completedPassages: 8,
+    totalPassages: 8,
+    directionPercentComplete: 100,
+    completedSegments: 13,
+    totalSegments: 16,
+    percentComplete: 81,
+    pipelineStages: (
+      [
+        { stage: 'extracting', label: 'Reading the EPUB' },
+        { stage: 'directing', label: 'Directing chapters' },
+        { stage: 'rendering', label: 'Rendering speech' },
+        { stage: 'assembling', label: 'Assembling the audiobook' },
+      ] as const
+    ).map((item, index) => ({
+      ...item,
+      status:
+        stage === 'completed' || index < stageIndex
+          ? ('completed' as const)
+          : index === stageIndex
+            ? ('current' as const)
+            : ('upcoming' as const),
+      summary: null,
+    })),
+    latestMessage: 'Completed segment 13',
+    error: null,
+    active: true,
+    finished: false,
+    warnings: [],
+    output: null,
+    ...overrides,
+  }
+}
 
 const reviewView = (overrides: Partial<FallbackReviewView> = {}): FallbackReviewView => ({
   jobId: JOB_ID,
@@ -174,6 +200,71 @@ describe('JobProgressPanel — stage and progress on screen', () => {
     }
   })
 
+  it('shows passage and chapter progress during direction without using segment counts', async () => {
+    const directing = view({
+      stage: 'directing',
+      stageLabel: 'Directing chapters',
+      completedChapters: 3,
+      totalChapters: 15,
+      completedPassages: 421,
+      totalPassages: 2_328,
+      directionPercentComplete: 18,
+      completedSegments: 0,
+      totalSegments: 0,
+      percentComplete: null,
+    })
+    const getJobState = vi.fn(async () => ({ ok: true as const, value: directing }))
+    renderPanel(stubClient({ getJobState }))
+
+    expect(await screen.findByText('3 of 15', undefined, WAIT)).toBeDefined()
+    expect(screen.getByText('421 of 2328')).toBeDefined()
+    expect(screen.getByText('0 of not yet counted')).toBeDefined()
+    const bar = screen.getByRole('progressbar') as HTMLProgressElement
+    expect(screen.getByText('Passages directed', { selector: 'label' })).toBeDefined()
+    expect(bar.value).toBe(421)
+    expect(bar.max).toBe(2_328)
+    expect(bar.textContent).toContain('18%')
+  })
+
+  it('marks exactly the current pipeline stage, not that stage as completed', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({ stage: 'directing', stageLabel: 'Directing chapters' }),
+    }))
+    renderPanel(stubClient({ getJobState }))
+
+    await screen.findByText('Directing chapters · running', undefined, WAIT)
+    const pipeline = screen.getByLabelText('Audiobook pipeline stages')
+    expect(pipeline.textContent).toContain('Reading the EPUBCompleted')
+    expect(pipeline.textContent).toContain('Directing chaptersCurrent')
+    expect(pipeline.textContent).toContain('Rendering speechUpcoming')
+    expect(pipeline.querySelectorAll('[aria-current="step"]')).toHaveLength(1)
+  })
+
+  it('does not turn a zero passage total into 100% or a divide-by-zero progress bar', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedChapters: 0,
+        totalChapters: 4,
+        completedPassages: 0,
+        totalPassages: 0,
+        directionPercentComplete: null,
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+      }),
+    }))
+    renderPanel(stubClient({ getJobState }))
+
+    await screen.findByText('Directing chapters · running', undefined, WAIT)
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByText('0 of 0')).toBeDefined()
+    expect(screen.queryByText('100%')).toBeNull()
+  })
+
   it('keeps polling while the job is active', async () => {
     const getJobState = vi.fn(async () => ({ ok: true as const, value: view({}) }))
     renderPanel(stubClient({ getJobState }))
@@ -285,6 +376,13 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
       }),
     )
 
+    expect(
+      await screen.findByText(
+        'Waiting for fallback voice review. Continuing starts speech rendering.',
+        undefined,
+        WAIT,
+      ),
+    ).toBeDefined()
     expect(
       await screen.findByRole(
         'heading',

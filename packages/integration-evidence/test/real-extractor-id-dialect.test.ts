@@ -126,7 +126,7 @@ function directingJob(bookId: string): AudiobookJob {
   job.bindCommand('c'.repeat(64))
   job.start()
   job.attachBook(bookId)
-  job.beginDirection()
+  job.beginDirection(1, 1)
   return job
 }
 

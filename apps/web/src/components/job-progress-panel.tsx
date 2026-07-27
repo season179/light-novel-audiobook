@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useId } from 'react'
+import { Fragment, useId } from 'react'
 import type { AudiobookClient } from '../client/audiobook-client.js'
 import type { JobStateView } from '../server/job-state-view.js'
 import { ChapterAudioList } from './chapter-audio-list.js'
@@ -21,7 +21,16 @@ const chapterText = (job: JobStateView): string => {
   return `${job.currentChapterLabel} — ${job.currentChapterTitle}`
 }
 
-const stageText = (job: JobStateView): string => `${job.stageLabel} · ${job.state}`
+const stageText = (job: JobStateView): string =>
+  job.state === 'awaiting_review'
+    ? 'Waiting for fallback voice review. Continuing starts speech rendering.'
+    : `${job.stageLabel} · ${job.state}`
+
+const passagesText = (job: JobStateView): string =>
+  `${job.completedPassages} of ${job.totalPassages}`
+
+const chaptersText = (job: JobStateView): string =>
+  `${job.completedChapters} of ${job.totalChapters}`
 
 const segmentsText = (job: JobStateView): string => {
   const total = job.totalSegments === 0 ? 'not yet counted' : String(job.totalSegments)
@@ -136,9 +145,36 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
         <p className="latest">{job.latestMessage}</p>
       </div>
 
+      <h3>Pipeline</h3>
+      <dl className="summary" aria-label="Audiobook pipeline stages">
+        {job.pipelineStages.map((stage) => (
+          <Fragment key={stage.stage}>
+            <dt>{stage.label}</dt>
+            <dd>
+              <strong aria-current={stage.status === 'current' ? 'step' : undefined}>
+                {stage.status === 'completed'
+                  ? 'Completed'
+                  : stage.status === 'current'
+                    ? 'Current'
+                    : 'Upcoming'}
+              </strong>
+              {stage.summary === null ? null : ` — ${stage.summary}`}
+            </dd>
+          </Fragment>
+        ))}
+      </dl>
+
       <dl className="summary">
         <dt>Chapter</dt>
         <dd>{chapterText(job)}</dd>
+        {job.totalChapters > 0 && (
+          <>
+            <dt>Chapters directed</dt>
+            <dd>{chaptersText(job)}</dd>
+            <dt>Passages directed</dt>
+            <dd>{passagesText(job)}</dd>
+          </>
+        )}
         <dt>Segments</dt>
         <dd>{segmentsText(job)}</dd>
         <dt>Job</dt>
@@ -147,7 +183,16 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
         </dd>
       </dl>
 
-      {job.totalSegments > 0 && (
+      {job.stage === 'directing' && job.totalPassages > 0 && (
+        <div className="field">
+          <label htmlFor={progressId}>Passages directed</label>
+          <progress id={progressId} value={job.completedPassages} max={job.totalPassages}>
+            {job.directionPercentComplete ?? 0}%
+          </progress>
+        </div>
+      )}
+
+      {job.stage !== 'directing' && job.totalSegments > 0 && (
         <div className="field">
           <label htmlFor={progressId}>Segments rendered</label>
           <progress id={progressId} value={job.completedSegments} max={job.totalSegments}>

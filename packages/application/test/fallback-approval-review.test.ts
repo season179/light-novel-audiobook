@@ -192,7 +192,17 @@ const directedJob = (jobs: StubJobRepository, book: Book, jobId = 'job-review'):
   job.bindCommand('a'.repeat(64))
   job.start()
   job.attachBook(book.id)
-  job.beginDirection()
+  const totalPassages = book.chapters.reduce(
+    (total, chapter) => total + chapter.sourcePassages.length,
+    0,
+  )
+  job.beginDirection(book.chapters.length, totalPassages)
+  job.recordDirectionProgress(
+    book.chapters.at(-1)?.id ?? 'chapter-fixture',
+    book.chapters.length,
+    totalPassages,
+    `Directed chapter ${book.chapters.length} of ${book.chapters.length}`,
+  )
   job.awaitReview()
   jobs.jobs.set(jobId, job)
   jobs.book = book

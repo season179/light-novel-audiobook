@@ -135,7 +135,7 @@ async function preparedWorkspace(
   job.bindCommand('d'.repeat(64))
   job.start()
   job.attachBook(book.id)
-  job.beginDirection()
+  job.beginDirection(1, chapter.sourcePassages.length)
   for (const segment of segments) {
     const unresolved = segment.speakerId === null
     job.addFallbackWarning({
@@ -146,6 +146,12 @@ async function preparedWorkspace(
       speakerReason: unresolved ? speakerReason : secondSpeakerReason,
     })
   }
+  job.recordDirectionProgress(
+    chapter.id,
+    1,
+    chapter.sourcePassages.length,
+    'Directed chapter 1 of 1',
+  )
   job.awaitReview()
 
   const layout = layoutFor(root)

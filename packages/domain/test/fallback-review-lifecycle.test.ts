@@ -24,7 +24,8 @@ const directedJob = (): AudiobookJob => {
   job.bindCommand(COMMAND_IDENTITY)
   job.start()
   job.attachBook(BOOK_ID)
-  job.beginDirection()
+  job.beginDirection(1, 1)
+  job.recordDirectionProgress(CHAPTER_ID, 1, 1, 'Directed chapter 1 of 1')
   return job
 }
 

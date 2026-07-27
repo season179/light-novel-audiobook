@@ -188,7 +188,12 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     // decides — there is no policy or default that approves them. One click covers the whole book.
     const firstVisit = renderJobPanel(jobId)
     await waitFor(
-      () => expect(screen.getByText('Directing chapters · awaiting_review')).toBeTruthy(),
+      () =>
+        expect(
+          screen.getByText(
+            'Waiting for fallback voice review. Continuing starts speech rendering.',
+          ),
+        ).toBeTruthy(),
       WAIT,
     )
     const approveAll = await screen.findByRole(
@@ -196,7 +201,8 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
       { name: /Use the fallback voice for all \d+ unresolved speakers/ },
       WAIT,
     )
-    // Nothing has been rendered at this point: no progress bar and no audio.
+    // Nothing has been rendered at this point: direction may be 100%, but there is no segment
+    // rendering bar or audio.
     expect(screen.queryByRole('progressbar', { name: 'Segments rendered' })).toBeNull()
     await user.click(approveAll)
     await user.click(await screen.findByRole('button', { name: 'Render approved script' }, WAIT))

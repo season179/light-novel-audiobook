@@ -25,6 +25,8 @@ import {
   type ChapterAudioView,
   fileNameOf,
   type JobStateView,
+  PIPELINE_STAGES,
+  STAGE_LABELS,
 } from './job-state-view.js'
 import type { ContainedFile, LocalWorkspace } from './workspace.js'
 
@@ -560,9 +562,20 @@ export class AudiobookWebApi {
       currentChapterId: null,
       currentChapterLabel: null,
       currentChapterTitle: null,
+      completedChapters: 0,
+      totalChapters: 0,
+      completedPassages: 0,
+      totalPassages: 0,
+      directionPercentComplete: null,
       completedSegments: 0,
       totalSegments: 0,
       percentComplete: null,
+      pipelineStages: PIPELINE_STAGES.map((stage, index) => ({
+        stage,
+        label: STAGE_LABELS[stage],
+        status: index === 0 ? 'current' : 'upcoming',
+        summary: null,
+      })),
       latestMessage: message,
       error: null,
       active: true,

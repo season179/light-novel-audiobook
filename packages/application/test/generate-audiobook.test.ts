@@ -200,11 +200,25 @@ class FakeDirector implements DirectorModel {
   ): Promise<DirectedChapter> {
     this.receivedOptions.push(options)
     this.events.push(`direct:${chapter.id}`)
+    await options?.onProgress?.({
+      chapterId: chapter.id,
+      state: 'started',
+      completedPassages: 0,
+      totalPassages: chapter.sourcePassages.length,
+      message: `Started chapter ${chapter.position}`,
+    })
     if (this.failOnceOnChapterId === chapter.id) {
       this.failOnceOnChapterId = null
       throw new Error('synthetic direction failure')
     }
     const segments = directionFor(chapter)
+    await options?.onProgress?.({
+      chapterId: chapter.id,
+      state: 'completed',
+      completedPassages: chapter.sourcePassages.length,
+      totalPassages: chapter.sourcePassages.length,
+      message: `Completed chapter ${chapter.position}`,
+    })
     if (this.corrupt && chapter.position === 1) {
       const first = segments[0]
       if (first === undefined) throw new Error('fixture direction missing')
@@ -675,18 +689,33 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(materialized.approvals[0]?.decidedBy).toBe(REVIEWER)
   })
 
-  it('forwards operational director options to every chapter without changing identity', async () => {
+  it('forwards operational director options and records passage progress, not segments', async () => {
     const controller = new AbortController()
+    const progressEvents: number[] = []
     const command: GenerateAudiobookCommand = {
       jobId: 'job-options',
       epubPath: '/uploads/story.epub',
       epubSha256: sourceHash,
       voices: makeCast(),
-      directorOptions: { signal: controller.signal, timeoutMs: 42_000 },
+      directorOptions: {
+        signal: controller.signal,
+        timeoutMs: 42_000,
+        onProgress: (progress) => {
+          progressEvents.push(progress.completedPassages)
+        },
+      },
     }
     const result = await generate(app, command)
 
     expect(result.job.state).toBe('completed')
+    expect(result.job.progress.direction).toEqual({
+      completedChapters: 2,
+      totalChapters: 2,
+      completedPassages: 2,
+      totalPassages: 2,
+    })
+    expect(result.job.progress.totalSegments).toBe(4)
+    expect(progressEvents).toEqual([0, 1, 0, 1])
     expect(app.director.receivedOptions).toHaveLength(2)
     for (const received of app.director.receivedOptions) {
       expect(received?.timeoutMs).toBe(42_000)

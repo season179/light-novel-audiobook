@@ -37,6 +37,15 @@ export interface AudiobookOutputView {
   readonly chapters: readonly ChapterAudioView[]
 }
 
+export type PipelineStageStatus = 'completed' | 'current' | 'upcoming'
+
+export interface PipelineStageView {
+  readonly stage: Exclude<AudiobookJobStage, 'completed'>
+  readonly label: string
+  readonly status: PipelineStageStatus
+  readonly summary: string | null
+}
+
 export interface JobStateView {
   readonly jobId: string
   readonly state: AudiobookJobState
@@ -47,9 +56,15 @@ export interface JobStateView {
   readonly currentChapterId: string | null
   readonly currentChapterLabel: string | null
   readonly currentChapterTitle: string | null
+  readonly completedChapters: number
+  readonly totalChapters: number
+  readonly completedPassages: number
+  readonly totalPassages: number
+  readonly directionPercentComplete: number | null
   readonly completedSegments: number
   readonly totalSegments: number
   readonly percentComplete: number | null
+  readonly pipelineStages: readonly PipelineStageView[]
   readonly latestMessage: string
   readonly error: string | null
   readonly active: boolean
@@ -58,12 +73,58 @@ export interface JobStateView {
   readonly output: AudiobookOutputView | null
 }
 
-const STAGE_LABELS: Readonly<Record<AudiobookJobStage, string>> = {
+export const STAGE_LABELS: Readonly<Record<AudiobookJobStage, string>> = {
   extracting: 'Reading the EPUB',
   directing: 'Directing chapters',
   rendering: 'Rendering speech',
   assembling: 'Assembling the audiobook',
   completed: 'Completed',
+}
+
+export const PIPELINE_STAGES = ['extracting', 'directing', 'rendering', 'assembling'] as const
+
+const buildPipelineStages = (
+  snapshot: AudiobookJobSnapshot,
+  book: BookReadModel | undefined,
+  output: AudiobookOutputView | null,
+): readonly PipelineStageView[] => {
+  const currentIndex =
+    snapshot.stage === 'completed'
+      ? PIPELINE_STAGES.length
+      : PIPELINE_STAGES.indexOf(snapshot.stage)
+  const direction = snapshot.progress.direction
+  return PIPELINE_STAGES.map((stage, index) => {
+    const status: PipelineStageStatus =
+      index < currentIndex ? 'completed' : index === currentIndex ? 'current' : 'upcoming'
+    let summary: string | null = null
+    if (stage === 'extracting' && status === 'completed') {
+      const chapters = direction?.totalChapters ?? book?.chapters.length
+      const passages = direction?.totalPassages ?? book?.totalPassages
+      if (chapters !== undefined && passages !== undefined) {
+        summary = `${chapters} chapters and ${passages} passages extracted`
+      }
+    }
+    if (
+      stage === 'directing' &&
+      (status === 'completed' || snapshot.state === 'awaiting_review') &&
+      book?.totalSegments !== undefined &&
+      book.fallbackSegments !== undefined
+    ) {
+      summary = `${book.totalSegments} segments directed; ${book.fallbackSegments} needed a fallback voice`
+    }
+    if (stage === 'rendering' && status === 'completed' && snapshot.progress.totalSegments > 0) {
+      summary = `${snapshot.progress.totalSegments} segment audio files ready`
+    }
+    if (stage === 'assembling' && status === 'completed' && output !== null) {
+      summary = `Output ${output.versionLabel} assembled`
+    }
+    return {
+      stage,
+      label: STAGE_LABELS[stage],
+      status,
+      summary,
+    }
+  })
 }
 
 const FALLBACK_REASON_MESSAGES: Readonly<Record<FallbackReason, string>> = {
@@ -139,12 +200,23 @@ export const buildJobStateView = (
       progress.currentChapterId === null
         ? null
         : (chapterTitles.get(progress.currentChapterId) ?? null),
+    completedChapters: progress.direction?.completedChapters ?? 0,
+    totalChapters: progress.direction?.totalChapters ?? 0,
+    completedPassages: progress.direction?.completedPassages ?? 0,
+    totalPassages: progress.direction?.totalPassages ?? 0,
+    directionPercentComplete:
+      progress.direction === null || progress.direction.totalPassages === 0
+        ? null
+        : Math.round(
+            (progress.direction.completedPassages / progress.direction.totalPassages) * 100,
+          ),
     completedSegments: progress.completedSegments,
     totalSegments: progress.totalSegments,
     percentComplete:
       progress.totalSegments === 0
         ? null
         : Math.round((progress.completedSegments / progress.totalSegments) * 100),
+    pipelineStages: buildPipelineStages(snapshot, book, output),
     latestMessage: progress.latestMessage,
     error: snapshot.error,
     active: snapshot.state === 'running' || snapshot.state === 'pending',

@@ -31,9 +31,30 @@ export interface DirectedChapter {
   readonly segments: readonly DirectedSegment[]
 }
 
+export type DirectChapterProgressState =
+  | 'started'
+  | 'requesting'
+  | 'response_started'
+  | 'streaming'
+  | 'validating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+/** Content-free progress already known by a chapter director. Passage counts are not segments. */
+export interface DirectChapterProgress {
+  readonly chapterId: string
+  readonly state: DirectChapterProgressState
+  readonly completedPassages: number
+  readonly totalPassages: number
+  readonly message: string
+}
+
 export interface DirectChapterOptions {
   /** Cancellation for the whole chapter direction, including every underlying model request. */
   readonly signal?: AbortSignal
+  /** Optional so existing adapters, callers, and test fakes need no progress implementation. */
+  readonly onProgress?: ((progress: DirectChapterProgress) => void | Promise<void>) | undefined
   /**
    * Whole-chapter deadline in milliseconds, covering every underlying request the adapter needs
    * (for example every passage window) plus retries. Adapters own their per-request timeout as a

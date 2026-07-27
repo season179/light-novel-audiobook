@@ -318,7 +318,8 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     job.bindCommand(COMMAND_IDENTITY)
     job.start()
     job.attachBook(BOOK_ID)
-    job.beginDirection()
+    job.beginDirection(1, 1)
+    job.recordDirectionProgress(CHAPTER_ID, 1, 1, 'Directed chapter 1 of 1')
     job.beginRendering(1)
     job.recordSegmentCompleted('segment-1')
     job.beginAssembly()
@@ -532,7 +533,17 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     job.bindCommand(COMMAND_IDENTITY)
     job.start()
     job.attachBook(book.id)
-    job.beginDirection()
+    const totalPassages = book.chapters.reduce(
+      (total, chapter) => total + chapter.sourcePassages.length,
+      0,
+    )
+    job.beginDirection(book.chapters.length, totalPassages)
+    job.recordDirectionProgress(
+      book.chapters.at(-1)?.id ?? CHAPTER_ID,
+      book.chapters.length,
+      totalPassages,
+      `Directed chapter ${book.chapters.length} of ${book.chapters.length}`,
+    )
     job.beginRendering(3)
     await harness.repo.saveBook(book)
     await harness.repo.saveJob(job)
