@@ -44,13 +44,13 @@ export class WebApiError extends Error {
   }
 }
 
-const UNEXPECTED_MESSAGE =
-  'The local server hit an unexpected error. Check the server log for details.'
+const UNEXPECTED_MESSAGE = 'The local server hit an unexpected error.'
 
 /**
  * Only messages this codebase authored reach the browser. `WebApiError` and `DomainError` are ours
  * by construction and stay intact; anything else — a SQLite path, a model key, an FFmpeg stack — is
  * logged here and replaced, because the browser is not the place to publish infrastructure internals.
+ * This boundary cannot promise an artifact: job failures add the exact path only after persistence.
  */
 export const toPublicFailure = (error: unknown, context: string): WebApiFailure => {
   if (error instanceof WebApiError) return error.failure

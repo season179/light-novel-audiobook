@@ -229,6 +229,12 @@ export interface ReusableSegmentQuery {
 export interface JobRepository {
   findJob(jobId: string): Promise<AudiobookJob | undefined>
   saveJob(job: AudiobookJob): Promise<void>
+  /**
+   * Persists a copyright-safe structured cause outside the frequently-polled job snapshot. Returns
+   * its durable absolute path, or `undefined` when diagnostics could not be written. A diagnostic
+   * failure must not replace the pipeline failure or prevent the job itself from being saved.
+   */
+  saveFailureDiagnostic(jobId: string, error: unknown): Promise<string | undefined>
   /** Atomically persists the terminal job state and its separately held output. */
   saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void>
   /**

@@ -106,6 +106,8 @@ export interface AudiobookJobSnapshot {
   readonly progress: AudiobookJobProgress
   readonly warnings: readonly FallbackVoiceWarning[]
   readonly error: string | null
+  /** Absolute path to the structured cause artifact; the large payload stays out of polling. */
+  readonly failureDiagnosticPath: string | null
 }
 
 export class AudiobookJob {
@@ -125,6 +127,7 @@ export class AudiobookJob {
   })
   private fallbackWarnings: readonly FallbackVoiceWarning[] = Object.freeze([])
   private failureMessage: string | null = null
+  private currentFailureDiagnosticPath: string | null = null
 
   constructor(id: string) {
     if (id.trim().length === 0) throw new DomainError('Audiobook job ID is required')
@@ -165,6 +168,10 @@ export class AudiobookJob {
 
   get error(): string | null {
     return this.failureMessage
+  }
+
+  get failureDiagnosticPath(): string | null {
+    return this.currentFailureDiagnosticPath
   }
 
   bindCommand(commandIdentity: string): void {
@@ -351,6 +358,7 @@ export class AudiobookJob {
     this.currentStage = 'directing'
     this.completedCatalogRevision = null
     this.failureMessage = null
+    this.currentFailureDiagnosticPath = null
     this.currentProgress = Object.freeze({
       ...this.currentProgress,
       currentChapterId: null,
@@ -442,13 +450,20 @@ export class AudiobookJob {
     this.reportCompleted('Audiobook completed')
   }
 
-  fail(error: string): void {
+  fail(error: string, failureDiagnosticPath: string | null = null): void {
     if (this.currentState !== 'running') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'failed')
     }
-    if (error.trim().length === 0) throw new DomainError('Failure message is required')
+    if (
+      error.trim().length === 0 ||
+      (failureDiagnosticPath !== null &&
+        (failureDiagnosticPath.trim().length === 0 || !error.includes(failureDiagnosticPath)))
+    ) {
+      throw new DomainError('Failure message and diagnostic path are invalid')
+    }
     this.currentState = 'failed'
     this.failureMessage = error
+    this.currentFailureDiagnosticPath = failureDiagnosticPath
     this.currentProgress = Object.freeze({ ...this.currentProgress, latestMessage: error })
   }
 
@@ -474,6 +489,7 @@ export class AudiobookJob {
         this.fallbackWarnings.map((warning) => Object.freeze({ ...warning })),
       ),
       error: this.failureMessage,
+      failureDiagnosticPath: this.currentFailureDiagnosticPath,
     })
   }
 
@@ -482,6 +498,9 @@ export class AudiobookJob {
     // making an existing resting/completed job unreadable; every newly saved snapshot writes it.
     const normalized = {
       ...snapshot,
+      // Schema v4 also predates failure artifacts. A real legacy row has no property at runtime;
+      // every newly saved snapshot writes an explicit null or path.
+      failureDiagnosticPath: snapshot.failureDiagnosticPath ?? null,
       progress: {
         ...snapshot.progress,
         direction: snapshot.progress.direction ?? null,
@@ -506,6 +525,7 @@ export class AudiobookJob {
       normalized.warnings.map((warning) => Object.freeze({ ...warning })),
     )
     job.failureMessage = normalized.error
+    job.currentFailureDiagnosticPath = normalized.failureDiagnosticPath
     return job
   }
 
@@ -556,6 +576,14 @@ export class AudiobookJob {
     }
     if ((snapshot.error !== null) !== (snapshot.state === 'failed') || snapshot.error === '') {
       throw new DomainError('Only failed jobs can contain a nonempty error')
+    }
+    if (
+      (snapshot.failureDiagnosticPath !== null && snapshot.state !== 'failed') ||
+      (snapshot.failureDiagnosticPath !== null &&
+        (snapshot.failureDiagnosticPath.trim().length === 0 ||
+          snapshot.error?.includes(snapshot.failureDiagnosticPath) !== true))
+    ) {
+      throw new DomainError('Audiobook job snapshot has an invalid failure diagnostic path')
     }
     const progress = snapshot.progress
     const direction = progress.direction
@@ -780,6 +808,7 @@ export class AudiobookJob {
     this.fallbackWarnings = Object.freeze([])
     this.completedCatalogRevision = null
     this.failureMessage = null
+    this.currentFailureDiagnosticPath = null
   }
 
   private advance(to: AudiobookJobStage, message: string): void {

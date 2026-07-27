@@ -1,11 +1,18 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  DirectorFidelityExhaustedError,
+  type FidelityFinding,
+  type FidelityRecoveryAttempt,
+} from '@light-novel-audiobook/gemma-director'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { audioFileErrorResponse } from '../src/server/audio-file-response.js'
 import type { AudiobookWebApi } from '../src/server/audiobook-web-api.js'
 import { createAudiobookWebApi } from '../src/server/composition-root.js'
 import { toPublicFailure, toWebApiResult, WebApiError } from '../src/server/errors.js'
+import { FakeDirectorModel } from '../src/server/fakes/fake-director-model.js'
 import { createRequestOriginPolicy } from '../src/server/request-origin-policy.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 import { createTestHarness, type TestHarness } from './support/test-harness.js'
@@ -72,7 +79,8 @@ describe('one error contract at every boundary', () => {
     expect(failure.code).toBe('internal')
     expect(failure.message).not.toContain('secret')
     expect(failure.message).not.toContain('SQLITE')
-    // The detail is not lost: it goes to the server log only.
+    expect(failure.message).not.toMatch(/log|diagnostic/i)
+    // No job exists at this boundary, so there is no durable artifact path to promise.
     expect(logged).toHaveBeenCalledOnce()
     expect(String(logged.mock.calls[0]?.[1])).toContain('SQLITE_CANTOPEN')
   })
@@ -184,12 +192,13 @@ describe('asynchronous adapter failures are sanitized too', () => {
     }
 
     expect(job.state).toBe('failed')
-    expect(job.error).toBe(
-      'The local server hit an unexpected error. Check the server log for details.',
-    )
+    expect(job.error).toContain('The local server hit an unexpected error.')
+    expect(job.failureDiagnosticPath).not.toBeNull()
+    expect(job.error).toContain(job.failureDiagnosticPath as string)
+    expect(job.error).not.toContain('Check the server log')
     expect(job.latestMessage).not.toContain('model.gguf')
     expect(JSON.stringify(job)).not.toContain('MODEL_KEY_FAILURE')
-    // The cause is not lost; it is only kept server-side.
+    // Console output remains secondary; the job now also points at the durable structured cause.
     expect(
       logged.mock.calls.some((call) =>
         call
@@ -198,5 +207,99 @@ describe('asynchronous adapter failures are sanitized too', () => {
           .includes(secret),
       ),
     ).toBe(true)
+  })
+
+  it('persists a nested real fidelity error while hashing passage text out of the artifact', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const sentinel = 'SENTINEL_STORY_PASSAGE_97_DO_NOT_PERSIST'
+    const findings = [
+      {
+        code: 'text_substitution',
+        sourcePassageId: 'passage-synthetic-0007',
+        message: 'Model output substitutes or reorders immutable source text',
+        source_text: sentinel,
+      },
+    ] as unknown as readonly FidelityFinding[]
+    const attempts: readonly FidelityRecoveryAttempt[] = [
+      {
+        attemptNumber: 1,
+        sampling: {
+          seed: 41,
+          temperature: 0.2,
+          topP: 0.95,
+          maxTokens: 2048,
+          confidenceThreshold: 0.5,
+        },
+        requestSha256: '1'.repeat(64),
+        rawOutputSha256: '2'.repeat(64),
+        validatedOutputSha256: '3'.repeat(64),
+        findingCodes: ['text_substitution'],
+        sourcePassageIds: ['passage-synthetic-0007'],
+      },
+    ]
+    const fidelity = new DirectorFidelityExhaustedError(findings, attempts)
+    const invocation = new Error('Director invocation failed', { cause: fidelity })
+
+    api = await createAudiobookWebApi({
+      workspaceRoot: root,
+      createDirectorModel: () =>
+        new (class extends FakeDirectorModel {
+          override async directChapter(): Promise<never> {
+            throw invocation
+          }
+        })(),
+    })
+    const upload = await api.uploadEpub({
+      fileName: 'structured-failure.epub',
+      bytes: createStubEpubBytes('structured-failure'),
+    })
+    const started = await api.startGeneration({ uploadId: upload.uploadId })
+
+    const deadline = performance.now() + 10_000
+    let job = started.job
+    while (performance.now() < deadline) {
+      const latest = await api.getJobState({ jobId: started.jobId })
+      if (latest !== null) job = latest
+      if (!job.active) break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    expect(job.state).toBe('failed')
+    expect(job.failureDiagnosticPath).not.toBeNull()
+    expect(job.error).toContain(job.failureDiagnosticPath as string)
+    const persisted = await readFile(job.failureDiagnosticPath as string, 'utf8')
+    expect(persisted).not.toContain(sentinel)
+    expect(persisted).toContain(createHash('sha256').update(sentinel, 'utf8').digest('hex'))
+    const diagnostic = JSON.parse(persisted) as { error: Record<string, unknown> }
+    expect(diagnostic.error).toMatchObject({
+      kind: 'error',
+      cause: {
+        kind: 'error',
+        message: 'Director invocation failed',
+        cause: {
+          kind: 'error',
+          name: 'DirectorFidelityExhaustedError',
+          findings: [
+            {
+              code: 'text_substitution',
+              sourcePassageId: 'passage-synthetic-0007',
+              source_text: {
+                redacted: true,
+                length: sentinel.length,
+              },
+            },
+          ],
+          attempts: [
+            {
+              attemptNumber: 1,
+              sampling: { seed: 41, temperature: 0.2, topP: 0.95, maxTokens: 2048 },
+              rawOutputSha256: '2'.repeat(64),
+              findingCodes: ['text_substitution'],
+              sourcePassageIds: ['passage-synthetic-0007'],
+            },
+          ],
+        },
+      },
+    })
   })
 })

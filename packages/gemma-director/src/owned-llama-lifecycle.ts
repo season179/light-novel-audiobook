@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { chmod, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
+import { BoundedProcessCapture } from './bounded-process-capture.js'
 import type { DirectorRuntimeLifecycle } from './port.js'
 import { SELECTED_GEMMA_PROFILE } from './profile.js'
 
@@ -11,6 +12,8 @@ export interface OwnedLlamaLifecycleOptions {
   /** Written to `keyPath` at 0600 for `--api-key-file`, so the key never appears in argv. */
   readonly apiKey: string
   readonly keyPath: string
+  /** Durable, bounded stdout/stderr capture for this lifecycle; defaults beside the key file. */
+  readonly capturePath?: string
   readonly origin: string
   readonly port: number
   readonly startupTimeoutMs: number
@@ -140,8 +143,10 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
   #childError: Error | undefined
   #startPromise: Promise<void> | undefined
   #releasePromise: Promise<void> | undefined
+  #childCaptureClosed: Promise<void> | undefined
   #releasing = false
   #cleanupComplete = false
+  #capture: BoundedProcessCapture | undefined
 
   constructor(private readonly options: OwnedLlamaLifecycleOptions) {}
 
@@ -160,12 +165,39 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     return this.#cleanupComplete
   }
 
+  get capturePath(): string {
+    return this.#processCapture().path
+  }
+
   start(): Promise<void> {
     this.#startPromise ??= this.#startOnce()
     return this.#startPromise
   }
 
   async #startOnce(): Promise<void> {
+    // Keep this check before even reading capture/key path accessors. `release()` closes the spawn
+    // gate synchronously, and hostile-but-type-valid getters must not reopen the old race window.
+    this.#assertSpawnStillAllowed()
+    const capture = this.#processCapture()
+    capture.mark('starting')
+    void capture.persist()
+    try {
+      await this.#startAndWaitForHealth(capture)
+    } catch (error) {
+      capture.mark('startup_failed')
+      void capture.persist()
+      throw error
+    }
+  }
+
+  #processCapture(): BoundedProcessCapture {
+    this.#capture ??= new BoundedProcessCapture(
+      this.options.capturePath ?? `${this.options.keyPath}.log`,
+    )
+    return this.#capture
+  }
+
+  async #startAndWaitForHealth(capture: BoundedProcessCapture): Promise<void> {
     this.#assertSpawnStillAllowed()
     await writeFile(this.options.keyPath, `${this.options.apiKey}\n`, { flag: 'wx', mode: 0o600 })
     await chmod(this.options.keyPath, 0o600)
@@ -180,9 +212,21 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
     const args = Array.from(this.options.args, (arg) => String(arg))
     this.#assertSpawnStillAllowed()
     const child = spawn(binaryPath, args, {
-      stdio: ['ignore', 'ignore', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.#child = child
+    // Attach consumers synchronously with spawn. Even after the 1 MiB capture bound is reached both
+    // streams continue to drain, so llama-server can never block on a full OS pipe.
+    child.stdout?.on('data', (chunk: Buffer) => capture.append('stdout', chunk))
+    child.stderr?.on('data', (chunk: Buffer) => capture.append('stderr', chunk))
+    this.#childCaptureClosed = new Promise<void>((resolveCaptureClosed) => {
+      child.once('close', (code, signal) => {
+        capture.append('lifecycle', `exit_code=${code ?? 'null'} signal=${signal ?? 'null'}`)
+        capture.mark('exited')
+        void capture.persist()
+        resolveCaptureClosed()
+      })
+    })
     child.on('error', (error: Error) => {
       this.#childError = error
     })
@@ -193,6 +237,8 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
       childError: () => this.#childError,
       timeoutMs: this.options.startupTimeoutMs,
     })
+    capture.mark('healthy')
+    void capture.persist()
   }
 
   #assertSpawnStillAllowed(): void {
@@ -224,6 +270,12 @@ export class OwnedLlamaLifecycle implements DirectorRuntimeLifecycle {
       await rm(this.options.keyPath, { force: true })
     }
     await waitForPortFree(this.options.port, this.options.portFreeTimeoutMs ?? 10_000)
+    await settledWithin(this.#childCaptureClosed ?? Promise.resolve(), 500)
+    const capture = this.#processCapture()
+    void capture.persist()
+    // A slow or failed diagnostic filesystem cannot hold the GPU lease indefinitely. The write
+    // continues in Node's fs queue, while lifecycle success depends only on process/port cleanup.
+    await settledWithin(capture.settled(), 500)
     this.#cleanupComplete = true
   }
 
@@ -317,6 +369,5 @@ export function llamaServerArgs(options: {
     '--no-webui',
     '--metrics',
     '--slots',
-    '--log-disable',
   ]
 }

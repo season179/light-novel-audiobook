@@ -16,6 +16,7 @@ export {
   type GpuLeaseErrorCode,
   type GpuOwner,
 } from '@light-novel-audiobook/gpu-lease'
+export { OWNED_LLAMA_CAPTURE_MAX_BYTES } from './bounded-process-capture.js'
 export { canonicalJson, canonicalSha256 } from './canonical-json.js'
 export {
   DEFAULT_DIRECTION_CHUNKING,

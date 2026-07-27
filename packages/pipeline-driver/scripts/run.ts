@@ -132,6 +132,7 @@ const transports =
           flag('snapshot') ?? (await resolveDefaultModelSnapshotPath(REPOSITORY_ROOT)),
         ),
         gpuLockFilePath: path.resolve(required('gpu-lock')),
+        directorCaptureDirectory: path.join(workspaceRoot, 'diagnostics', 'llama-server'),
       })
 
 process.stderr.write(

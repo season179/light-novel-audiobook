@@ -1,10 +1,11 @@
 import { type Mode, mkdtempSync, type PathLike, rmSync } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { OWNED_LLAMA_CAPTURE_MAX_BYTES } from '../src/bounded-process-capture.js'
 import { OwnedLlamaLifecycle } from '../src/owned-llama-lifecycle.js'
 
 const chmodGate = vi.hoisted(() => {
@@ -153,6 +154,95 @@ describe('OwnedLlamaLifecycle', () => {
     expect(isAlive(childPid as number)).toBe(false)
   }, 20_000)
 
+  it('continuously captures bounded stdout/stderr and lifecycle phases without blocking the child', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-capture-'))
+    roots.push(root)
+    const port = await freePort()
+    const capturePath = join(root, 'llama-server.log')
+    const script = `
+const { once } = require('node:events')
+const { createServer } = require('node:http')
+const port = Number(process.argv[1])
+;(async () => {
+  process.stdout.write('STARTUP_OUTPUT\\n')
+  const chunk = 'x'.repeat(64 * 1024)
+  for (let index = 0; index < 40; index += 1) {
+    if (!process.stdout.write(chunk)) await once(process.stdout, 'drain')
+  }
+  const server = createServer((request, response) => {
+    if (request.url === '/health') {
+      response.writeHead(200)
+      response.end('ok')
+      return
+    }
+    if (request.url === '/reject') {
+      process.stderr.write('REQUEST_REJECTED status=400\\n')
+      response.writeHead(400)
+      response.end('rejected')
+      return
+    }
+    response.writeHead(404)
+    response.end()
+  })
+  server.listen(port, '127.0.0.1')
+})()
+`
+    const lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: ['-e', script, String(port)],
+      apiKey: API_KEY,
+      keyPath: join(root, 'llama.key'),
+      capturePath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 10_000,
+    })
+
+    await lifecycle.start()
+    await expect(fetch(`http://127.0.0.1:${port}/reject`)).resolves.toMatchObject({ status: 400 })
+    await lifecycle.release()
+
+    const capture = await readFile(capturePath)
+    const text = capture.toString('utf8')
+    expect(capture.byteLength).toBeLessThanOrEqual(OWNED_LLAMA_CAPTURE_MAX_BYTES)
+    expect(text).toContain('truncated=true')
+    expect(text).toContain('STARTUP_OUTPUT')
+    expect(text).toContain('REQUEST_REJECTED status=400')
+    expect(text).toContain('phase=healthy')
+    expect(text).toContain('phase=exited')
+    expect(text).not.toContain(API_KEY)
+  }, 20_000)
+
+  it('does not fail an otherwise healthy lifecycle when the capture path is unwritable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-unwritable-capture-'))
+    roots.push(root)
+    const blockedParent = join(root, 'not-a-directory')
+    await writeFile(blockedParent, 'blocked')
+    server = createServer((request, response) => {
+      response.writeHead(request.url === '/health' ? 200 : 404)
+      response.end()
+      if (request.url === '/health') setTimeout(() => server?.close(), 25)
+    })
+    await new Promise<void>((resolveListen) => server?.listen(0, '127.0.0.1', resolveListen))
+    const port = (server.address() as AddressInfo).port
+    const capturePath = join(blockedParent, 'llama-server.log')
+    const lifecycle = new OwnedLlamaLifecycle({
+      binaryPath: process.execPath,
+      args: ['-e', 'setInterval(() => undefined, 1000)'],
+      apiKey: API_KEY,
+      keyPath: join(root, 'llama.key'),
+      capturePath,
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      startupTimeoutMs: 10_000,
+    })
+
+    await expect(lifecycle.start()).resolves.toBeUndefined()
+    await expect(lifecycle.release()).resolves.toBeUndefined()
+    expect(lifecycle.cleanupComplete).toBe(true)
+    await expect(stat(capturePath)).rejects.toMatchObject({ code: 'ENOTDIR' })
+  })
+
   it('is permanently single-use after a completed start and release', async () => {
     const root = mkdtempSync(join(tmpdir(), 'lna-lifecycle-single-use-'))
     roots.push(root)
@@ -247,6 +337,9 @@ describe('OwnedLlamaLifecycle', () => {
     expect(lifecycle.running).toBe(false)
     expect(lifecycle.cleanupComplete).toBe(true)
     await expect(stat(keyPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    const failedCapture = await readFile(`${keyPath}.log`, 'utf8')
+    expect(failedCapture).toContain('phase=startup_failed')
+    expect(failedCapture).not.toContain('phase=healthy')
   })
 
   it('fails closed within a bound when a pre-spawn operation never settles', async () => {

@@ -217,6 +217,8 @@ export interface RealTransportConfig {
    * out of VRAM once the lease moves on is `OwnedLlamaLifecycle` reaping the server before release.
    */
   readonly gpuLockFilePath: string
+  /** Workspace directory retaining one bounded stdout/stderr file per owned director lifecycle. */
+  readonly directorCaptureDirectory: string
   readonly startupTimeoutMs?: number
 }
 
@@ -275,6 +277,7 @@ export async function createRealTransports(
   const endpoint = new GemmaDirectorEndpoint(config.directorBaseUrl)
   const { binaryPath, modelPath } = llamaRuntimePaths(config.llamaRuntimeRoot)
 
+  await mkdir(config.directorCaptureDirectory, { recursive: true, mode: 0o700 })
   await assertExecutable(binaryPath, 'Owned llama-server binary')
   await assertDirectory(config.modelSnapshotPath, 'Pinned Qwen model snapshot')
   const modelStats = await stat(modelPath).catch(() => undefined)
@@ -362,6 +365,10 @@ export async function createRealTransports(
       }),
       apiKey,
       keyPath,
+      capturePath: path.join(
+        config.directorCaptureDirectory,
+        `llama-server-${process.pid}-${runtimeSequence}.log`,
+      ),
       origin: endpoint.origin,
       port: endpoint.port,
       startupTimeoutMs: config.startupTimeoutMs ?? 600_000,

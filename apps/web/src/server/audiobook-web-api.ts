@@ -578,6 +578,7 @@ export class AudiobookWebApi {
       })),
       latestMessage: message,
       error: null,
+      failureDiagnosticPath: null,
       active: true,
       finished: false,
       warnings: [],

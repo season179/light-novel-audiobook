@@ -291,10 +291,11 @@ describe('AudiobookWebApi', () => {
     const stored = await upload()
     const first = await harness.api.startGeneration({ uploadId: stored.uploadId })
     const failed = await waitForJobState(harness.api, first.jobId, (job) => job.state === 'failed')
-    // The adapter's own words are logged, never persisted into job state the browser reads back.
-    expect(failed.error).toBe(
-      'The local server hit an unexpected error. Check the server log for details.',
-    )
+    // The browser gets authored prose and an exact artifact path, never the adapter's own words.
+    expect(failed.error).toContain('The local server hit an unexpected error.')
+    expect(failed.failureDiagnosticPath).not.toBeNull()
+    expect(failed.error).toContain(failed.failureDiagnosticPath as string)
+    expect(failed.error).not.toContain('Simulated speech engine crash')
     expect(
       logged.mock.calls.some((call) =>
         call

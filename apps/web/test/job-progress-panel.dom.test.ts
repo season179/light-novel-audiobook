@@ -66,6 +66,7 @@ const view = (overrides: Partial<JobStateView>): JobStateView => {
     warnings: [],
     output: null,
     ...overrides,
+    failureDiagnosticPath: overrides.failureDiagnosticPath ?? null,
   }
 }
 
