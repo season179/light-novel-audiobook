@@ -56,7 +56,6 @@ export {
   type GenerateAudiobookCommand,
   type GenerateAudiobookDependencies,
   type GenerateAudiobookResult,
-  PendingFallbackReviewError,
 } from './generate-audiobook.js'
 export {
   createGenerationCommandIdentity,
@@ -95,6 +94,7 @@ export {
   RenderContractMismatchError,
   StaleFallbackCatalogError,
   UnapprovedFallbackSegmentsError,
+  UnconfirmedDirectionError,
 } from './render-audiobook.js'
 export { createRenderContract, type RenderContractInput } from './render-contract.js'
 export { createRenderInputIdentity, type RenderInputApproval } from './render-input-identity.js'

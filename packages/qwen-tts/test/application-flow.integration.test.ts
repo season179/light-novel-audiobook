@@ -29,10 +29,12 @@ import {
   type DirectorModelFactory,
   type EpubExtractor,
   GenerateAudiobook,
-  PendingFallbackReviewError,
   RenderAudiobook,
+  ReviewDirection,
   ReviewFallbackApprovals,
+  resolveReviewerIdentity,
   StaleFallbackCatalogError,
+  UnapprovedFallbackSegmentsError,
 } from '@light-novel-audiobook/application'
 import {
   type AudiobookOutput,
@@ -49,6 +51,7 @@ import {
 import {
   layoutFor,
   openWorkspace,
+  SqliteDirectionApprovalRepository,
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
@@ -304,6 +307,7 @@ interface Fixture {
   readonly db: DatabaseSync
   readonly jobs: SqliteJobRepository
   readonly approvals: SqliteFallbackApprovalRepository
+  readonly directionApprovals: SqliteDirectionApprovalRepository
   readonly engine: QwenTtsSpeechEngine
   readonly gate: FixtureGpuGate
   readonly workerLog: string
@@ -314,7 +318,7 @@ interface Fixture {
   readonly assembler: FixtureAssembler
 }
 
-const REVIEWER = 'local-reviewer'
+const REVIEWER = resolveReviewerIdentity({ LNA_REVIEWER: 'local-reviewer' })
 
 /**
  * The cast is derived from the pinned production configuration rather than hardcoded, so a config
@@ -407,6 +411,7 @@ const makeFixture = async (): Promise<Fixture> => {
     db,
     jobs: new SqliteJobRepository(layout, db),
     approvals: new SqliteFallbackApprovalRepository(db),
+    directionApprovals: new SqliteDirectionApprovalRepository(db),
     engine,
     gate,
     workerLog,
@@ -459,6 +464,18 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
       approvals: fixture.approvals,
       now: () => DECIDED_AT,
     })
+    const directionReview = new ReviewDirection({
+      jobs: fixture.jobs,
+      approvals: fixture.directionApprovals,
+      now: () => DECIDED_AT,
+    })
+    const render = new RenderAudiobook({
+      speechEngineFactory: createQwenSpeechEngineFactory(fixture.engine),
+      audioAssembler: fixture.assembler,
+      jobs: fixture.jobs,
+      approvals: fixture.approvals,
+      directionApprovals: fixture.directionApprovals,
+    })
     const command = {
       jobId: 'job-issue-45',
       epubPath: EPUB_PATH,
@@ -469,12 +486,9 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     // ---- Run 0: no human decision exists, so nothing is approved and nothing renders. ----------
     // The command has no approval-policy field at all, so this is not "the safe default" — it is the
     // only behaviour available. Round 2's HIGH was that omitting a policy silently approved the book.
-    const stopped = await generate
-      .execute(command)
-      .then(() => undefined)
-      .catch((error: unknown) => error)
-    expect(stopped).toBeInstanceOf(PendingFallbackReviewError)
-    expect((stopped as PendingFallbackReviewError).pending).toHaveLength(FALLBACK_SEGMENT_COUNT)
+    const stopped = await generate.execute(command)
+    expect(stopped.job.state).toBe('awaiting_review')
+    expect(stopped.pendingFallbackApprovals).toHaveLength(FALLBACK_SEGMENT_COUNT)
     expect((await fixture.approvals.readCatalog(BOOK_ID)).approvals).toEqual([])
     expect(await workerBatches(fixture.workerLog)).toHaveLength(0)
     expect((await fixture.jobs.findJob(command.jobId))?.state).toBe('awaiting_review')
@@ -487,7 +501,8 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     expect(granted.created).toHaveLength(FALLBACK_SEGMENT_COUNT)
     expect(granted.grant?.decidedBy).toBe(REVIEWER)
 
-    const first = await generate.execute(command)
+    await directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+    const first = await render.execute({ jobId: command.jobId, voices: fixture.voices })
     expect(first.job.state).toBe('completed')
     expect(first.generatedSegments).toBe(TOTAL_SEGMENTS)
     expect(first.reusedSegments).toBe(0)
@@ -531,10 +546,9 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     if (reopened === undefined) throw new Error('job vanished')
     reopened.reopenForReview()
     await fixture.jobs.saveJob(reopened)
-    const second = await generate.execute(command)
+    const second = await render.execute({ jobId: command.jobId, voices: fixture.voices })
     expect(second.generatedSegments).toBe(0)
     expect(second.reusedSegments).toBe(TOTAL_SEGMENTS)
-    expect(second.recordedFallbackApprovals).toBe(0)
     expect(await workerBatches(fixture.workerLog)).toHaveLength(1)
     // Still no second director: two review resumes, one director.
     expect(fixture.directorFactory.created).toHaveLength(1)
@@ -561,25 +575,22 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     expect(reopenedByRevoke?.state).toBe('awaiting_review')
     expect(reopenedByRevoke?.catalogRevision).toBeNull()
 
-    const refusal = await generate
-      .execute(command)
+    const refusal = await render
+      .execute({ jobId: command.jobId, voices: fixture.voices })
       .then(() => undefined)
       .catch((error: unknown) => error)
-    expect(refusal).toBeInstanceOf(PendingFallbackReviewError)
+    expect(refusal).toBeInstanceOf(UnapprovedFallbackSegmentsError)
     // MEASURED: exactly mira's segments lost their authorization, and no others.
-    expect(
-      (refusal as PendingFallbackReviewError).pending.map((item) => item.segmentId).sort(),
-    ).toEqual(MIRA_SEGMENTS.slice().sort())
-    expect(
-      (refusal as PendingFallbackReviewError).pending.every((item) => item.decision === 'excluded'),
-    ).toBe(true)
+    expect((refusal as UnapprovedFallbackSegmentsError).segmentIds.slice().sort()).toEqual(
+      MIRA_SEGMENTS.slice().sort(),
+    )
     expect(await workerBatches(fixture.workerLog)).toHaveLength(1)
 
     // ---- Run 4: re-approve mira as a fresh decision; only her segments re-render. ------------
     for (const segmentId of MIRA_SEGMENTS) {
       await later.approve({ jobId: command.jobId, segmentId, decidedBy: REVIEWER })
     }
-    const fourth = await generate.execute(command)
+    const fourth = await render.execute({ jobId: command.jobId, voices: fixture.voices })
     expect(fourth.job.state).toBe('completed')
     // MEASURED: 3 of 9 segments re-rendered, 6 reused.
     expect(fourth.generatedSegments).toBe(MIRA_SEGMENTS.length)
@@ -671,6 +682,11 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
       now: () => DECIDED_AT,
     })
     await review.grantBookFallback({ jobId: 'job-catalog-race', decidedBy: REVIEWER })
+    await new ReviewDirection({
+      jobs: fixture.jobs,
+      approvals: fixture.directionApprovals,
+      now: () => DECIDED_AT,
+    }).confirm({ jobId: 'job-catalog-race', decidedBy: REVIEWER })
 
     // A decision that lands after the render captured its catalog. The render cannot see it — that
     // is the point — so the barrier is the revision it claimed, re-checked before anything is
@@ -678,9 +694,8 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
     // mutate a running job at all; this simulates the residual window before that guard applies.
     const racing = new (class extends SqliteFallbackApprovalRepository {
       override async readCatalog(bookId: string) {
-        const catalog = await super.readCatalog(bookId)
-        if (this.armed) {
-          this.armed = false
+        this.reads += 1
+        if (this.reads === 3) {
           const victim = MIRA_SEGMENTS[0]
           if (victim !== undefined) {
             await super.revoke(bookId, victim, {
@@ -690,9 +705,9 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
             })
           }
         }
-        return catalog
+        return super.readCatalog(bookId)
       }
-      armed = true
+      reads = 0
     })(fixture.db)
 
     const render = new RenderAudiobook({
@@ -700,6 +715,7 @@ describe('issue #45 — real Qwen adapter over a book with unresolved speakers',
       audioAssembler: fixture.assembler,
       jobs: fixture.jobs,
       approvals: racing,
+      directionApprovals: fixture.directionApprovals,
     })
     const failure = await render
       .execute({ jobId: 'job-catalog-race', voices: fixture.voices })

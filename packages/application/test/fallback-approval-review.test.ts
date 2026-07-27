@@ -24,6 +24,7 @@ import {
   CompletedOutputAuthority,
   collectFallbackSubjects,
   createRenderContract,
+  type DirectionApprovalRepository,
   FALLBACK_EXCERPT_MAX_LENGTH,
   fallbackApprovalExcerpt,
   hashSourceText,
@@ -42,6 +43,16 @@ const CHAPTER_ID = StableIds.chapter(BOOK_ID, 1)
 const PASSAGE_ID = StableIds.passage(CHAPTER_ID, 1)
 const DECIDED_AT = new Date('2026-07-25T10:00:00.000Z')
 const LATER = new Date('2026-07-25T15:45:00.000Z')
+
+const confirmedDirections: DirectionApprovalRepository = {
+  findDirectionApproval: async (query) => ({
+    ...query,
+    approvalId: `test-direction-${query.scriptSha256}`,
+    decidedBy: 'test-reviewer',
+    decidedAt: DECIDED_AT.toISOString(),
+  }),
+  saveDirectionApproval: async () => {},
+}
 
 const voice = (
   id: string,
@@ -626,6 +637,7 @@ describe('standalone render provenance (issue #45, round-2 MEDIUM)', () => {
       },
       jobs: app.jobs,
       approvals: app.approvals,
+      directionApprovals: confirmedDirections,
     })
 
     await expect(render.execute({ jobId: 'job-review', voices: cast })).rejects.toThrow(
@@ -730,6 +742,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
       },
       jobs: app.jobs,
       approvals: app.approvals,
+      directionApprovals: confirmedDirections,
     })
     const refusal = await render
       .execute({ jobId: 'job-review', voices: cast })
@@ -771,6 +784,7 @@ describe('a revocation cannot be lost to a race (issue #45, round 3)', () => {
       },
       jobs: app.jobs,
       approvals: app.approvals,
+      directionApprovals: confirmedDirections,
     })
     const result = await render.execute({ jobId: 'job-review', voices: cast })
     expect(result.job.state).toBe('completed')

@@ -7,7 +7,10 @@
  * unresolved speakers stops, nothing is rendered, and only an explicit user action through the real
  * API creates approvals.
  */
+import type { DirectedChapter } from '@light-novel-audiobook/application'
+import type { Book, Chapter } from '@light-novel-audiobook/domain'
 import { afterEach, describe, expect, it } from 'vitest'
+import { FakeDirectorModel } from '../src/server/fakes/fake-director-model.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 import {
   createTestHarness,
@@ -17,6 +20,27 @@ import {
 } from './support/test-harness.js'
 
 let harness: TestHarness | undefined
+
+class NarrationOnlyDirector extends FakeDirectorModel {
+  override async directChapter(_book: Book, chapter: Chapter): Promise<DirectedChapter> {
+    return {
+      chapterId: chapter.id,
+      segments: chapter.sourcePassages.map((passage) => ({
+        sourcePassageId: passage.id,
+        sourceText: passage.sourceText,
+        kind: 'narration',
+        speakerId: null,
+        confidence: 1,
+        delivery: {
+          emotion: 'neutral',
+          pace: 'normal',
+          volume: 'normal',
+          pauseAfterMs: 100,
+        },
+      })),
+    }
+  }
+}
 
 afterEach(async () => {
   await harness?.dispose()
@@ -43,6 +67,42 @@ const startAndStopForReview = async (marker: string) => {
 }
 
 describe('fallback approvals in the web app (issue #45)', () => {
+  it('makes the zero-warning ready-to-confirm boundary durable across a browser refresh', async () => {
+    harness = await createTestHarness({ createDirectorModel: () => new NarrationOnlyDirector() })
+    const upload = await harness.api.uploadEpub({
+      fileName: 'zero-warning.epub',
+      bytes: createStubEpubBytes('zero-warning'),
+    })
+    const started = await harness.api.startGeneration({ uploadId: upload.uploadId })
+    const deadline = performance.now() + 10_000
+    let boundary = await harness.api.getJobState({ jobId: started.jobId })
+    while (
+      performance.now() < deadline &&
+      (boundary?.state !== 'awaiting_review' || boundary.active)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      boundary = await harness.api.getJobState({ jobId: started.jobId })
+    }
+
+    expect(boundary?.review).toEqual({ status: 'ready_to_confirm', blockers: 0, total: 0 })
+    expect(boundary?.output).toBeNull()
+    expect(harness.speechEngine.rendered).toBe(0)
+
+    // A browser refresh performs the same fresh read from persisted state; it must not resume work.
+    const refreshed = await harness.api.getJobState({ jobId: started.jobId })
+    expect(refreshed).toMatchObject({
+      state: 'awaiting_review',
+      review: { status: 'ready_to_confirm', blockers: 0, total: 0 },
+      output: null,
+    })
+    expect(harness.speechEngine.rendered).toBe(0)
+
+    await harness.api.renderApprovedScript({ jobId: started.jobId })
+    const completed = await waitForJobState(harness.api, started.jobId, (job) => job.finished)
+    expect(completed.state).toBe('completed')
+    expect(harness.speechEngine.rendered).toBeGreaterThan(0)
+  })
+
   it('stops a book with unresolved speakers and renders nothing until a human decides', async () => {
     const { api, jobId, harness: app } = await startAndStopForReview('needs-review')
 
@@ -94,6 +154,7 @@ describe('fallback approvals in the web app (issue #45)', () => {
     // from the message would still report needs_decisions here.
     expect(decided?.latestMessage).toBe(waiting?.latestMessage)
     expect(decided?.latestMessage).toContain('Awaiting fallback approval review')
+    expect(harness?.speechEngine.rendered).toBe(0)
   })
 
   it('records one attributed decision per unresolved speaker from one book-wide action', async () => {

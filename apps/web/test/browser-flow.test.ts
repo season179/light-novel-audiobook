@@ -203,7 +203,24 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     // rendering bar or audio.
     expect(screen.queryByRole('progressbar', { name: 'Segments rendered' })).toBeNull()
     await user.click(approveAll)
-    await user.click(await screen.findByRole('button', { name: 'Render approved script' }, WAIT))
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(
+            'Direction finished and nothing needs a decision. Confirming starts speech rendering.',
+          ),
+        ).toBeTruthy(),
+      WAIT,
+    )
+
+    // Refresh while resting at the hard boundary. The same confirmation action remains visible and
+    // no browser mount, query cache, or polling tick starts audio by itself.
+    firstVisit.unmount()
+    const boundaryRefresh = renderJobPanel(jobId)
+    const renderButton = await screen.findByRole('button', { name: 'Render approved script' }, WAIT)
+    expect(harness.speechEngine.rendered).toBe(0)
+    expect((await harness.api.getJobState({ jobId }))?.state).toBe('awaiting_review')
+    await user.click(renderButton)
 
     // Watching a live job.
     await waitFor(() => expect(screen.getByText('Rendering speech · running')).toBeTruthy(), WAIT)
@@ -211,7 +228,7 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     expect(screen.getByRole('progressbar', { name: 'Segments rendered' })).toBeTruthy()
 
     // A page refresh mid-generation: nothing is kept in React, so the server answers again.
-    firstVisit.unmount()
+    boundaryRefresh.unmount()
     const refreshed = renderJobPanel(jobId)
     await waitFor(() => expect(screen.getByText('2 of 16')).toBeTruthy(), WAIT)
     expect(screen.getByText('Rendering speech · running')).toBeTruthy()

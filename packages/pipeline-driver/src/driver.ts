@@ -3,7 +3,10 @@ import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   characterSharesFallbackMaterial,
-  GenerateAudiobook,
+  DirectAudiobook,
+  RenderAudiobook,
+  ReviewDirection,
+  type ReviewerIdentity,
   withDirectorContentIdentity,
 } from '@light-novel-audiobook/application'
 import { FfmpegAudioAssembler } from '@light-novel-audiobook/audio-assembly'
@@ -20,6 +23,7 @@ import {
   migrateSchema,
   openWorkspace,
   SqliteCastApprovalRepository,
+  SqliteDirectionApprovalRepository,
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
@@ -59,6 +63,7 @@ export interface RunPipelineOptions {
 }
 
 export interface RunPipelineReport {
+  readonly operation: 'direction' | 'confirmed-render'
   readonly mode: 'fake' | 'real'
   readonly jobId: string
   readonly bookId: string
@@ -67,10 +72,10 @@ export interface RunPipelineReport {
   readonly slice: SliceReport | undefined
   readonly generatedSegments: number
   readonly reusedSegments: number
-  readonly outputVersion: number
-  readonly m4bPath: string
-  readonly m4bBytes: number
-  readonly m4bSha256: string
+  readonly outputVersion: number | null
+  readonly m4bPath: string | null
+  readonly m4bBytes: number | null
+  readonly m4bSha256: string | null
   readonly chapterOutputs: readonly {
     readonly chapterId: string
     readonly path: string
@@ -97,7 +102,8 @@ export interface RunPipelineReport {
 }
 
 /**
- * The composition root: all five real adapters, the real `GenerateAudiobook`, one bounded run.
+ * The composition root for explicit Stage A direction. It always reports success at review and
+ * never requires or produces an M4B.
  *
  * Two constraints from the pre-flight audit are honoured here and must stay honoured.
  *
@@ -108,6 +114,22 @@ export interface RunPipelineReport {
  * 2. **The cast is derived from the pinned Qwen config**, never restated. See `voice-cast.ts`.
  */
 export async function runPipeline(options: RunPipelineOptions): Promise<RunPipelineReport> {
+  return executePipeline(options, 'direction')
+}
+
+/** Explicit Stage B operation: confirm the exact persisted script, then render it. */
+export async function runConfirmedRender(
+  options: RunPipelineOptions,
+  reviewer: ReviewerIdentity,
+): Promise<RunPipelineReport> {
+  return executePipeline(options, 'confirmed-render', reviewer)
+}
+
+async function executePipeline(
+  options: RunPipelineOptions,
+  operation: 'direction' | 'confirmed-render',
+  reviewer?: ReviewerIdentity,
+): Promise<RunPipelineReport> {
   // Monotonic on purpose: Date.now() runs backward on some hosts, and a negative total in the
   // report is how that surfaces.
   const startedAt = performance.now()
@@ -125,6 +147,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
   migrateSchema(database)
   const jobs = new SqliteJobRepository(layout, database)
   const approvals = new SqliteFallbackApprovalRepository(database)
+  const directionApprovals = new SqliteDirectionApprovalRepository(database)
   const castApprovals = new SqliteCastApprovalRepository(database)
   const castApproval = await castApprovals.findCastApproval(epubSha256)
 
@@ -237,33 +260,57 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
     options.ffmpegDirectory === undefined ? {} : { toolchainDirectory: options.ffmpegDirectory },
   )
 
-  const useCase = new GenerateAudiobook({
-    epubExtractor: extractor,
-    directorModelFactory,
-    speechEngineFactory,
-    audioAssembler,
-    jobs,
-    approvals,
-  })
-
   try {
-    const result = await useCase.execute({
-      jobId: options.jobId,
-      epubPath: options.epubPath,
-      epubSha256,
-      voices: cast,
-    })
+    let result: {
+      readonly job: Awaited<ReturnType<DirectAudiobook['execute']>>['job']
+      readonly generatedSegments: number
+      readonly reusedSegments: number
+      readonly output?: Awaited<ReturnType<RenderAudiobook['execute']>>['output']
+    }
+    if (operation === 'direction') {
+      const direction = new DirectAudiobook({
+        epubExtractor: extractor,
+        directorModelFactory,
+        speechEngineFactory,
+        audioAssembler,
+        jobs,
+      })
+      const directed = await direction.execute({
+        jobId: options.jobId,
+        epubPath: options.epubPath,
+        epubSha256,
+        voices: cast,
+      })
+      result = { job: directed.job, generatedSegments: 0, reusedSegments: 0 }
+    } else {
+      if (reviewer === undefined) throw new DomainError('Confirmed render requires a reviewer')
+      await new ReviewDirection({ jobs, approvals: directionApprovals }).confirm({
+        jobId: options.jobId,
+        decidedBy: reviewer,
+      })
+      result = await new RenderAudiobook({
+        speechEngineFactory,
+        audioAssembler,
+        jobs,
+        approvals,
+        directionApprovals,
+      }).execute({ jobId: options.jobId, voices: cast })
+    }
 
-    const chapterOutputs = await Promise.all(
-      result.output.chapters.map(async (chapter) => ({
-        chapterId: chapter.chapterId,
-        path: chapter.path,
-        bytes: (await readFile(chapter.path)).byteLength,
-      })),
-    )
-    const m4b = await readFile(result.output.m4bPath)
+    const chapterOutputs =
+      result.output === undefined
+        ? []
+        : await Promise.all(
+            result.output.chapters.map(async (chapter) => ({
+              chapterId: chapter.chapterId,
+              path: chapter.path,
+              bytes: (await readFile(chapter.path)).byteLength,
+            })),
+          )
+    const m4b = result.output === undefined ? undefined : await readFile(result.output.m4bPath)
 
     return {
+      operation,
       mode: transports.mode,
       jobId: options.jobId,
       bookId: result.job.bookId ?? '',
@@ -272,10 +319,10 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunPipel
       slice: slicedExtractor.report,
       generatedSegments: result.generatedSegments,
       reusedSegments: result.reusedSegments,
-      outputVersion: result.output.version.value,
-      m4bPath: result.output.m4bPath,
-      m4bBytes: m4b.byteLength,
-      m4bSha256: createHash('sha256').update(m4b).digest('hex'),
+      outputVersion: result.output?.version.value ?? null,
+      m4bPath: result.output?.m4bPath ?? null,
+      m4bBytes: m4b?.byteLength ?? null,
+      m4bSha256: m4b === undefined ? null : createHash('sha256').update(m4b).digest('hex'),
       chapterOutputs,
       fallbackWarnings: result.job.warnings.length,
       cast: {

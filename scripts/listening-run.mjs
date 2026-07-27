@@ -169,8 +169,6 @@ const killGroup = (child) => {
 
 // ----------------------------------------------------------------------------- review gate
 
-const REVIEW_GATE_ERROR = 'PendingFallbackReviewError'
-
 const parseReviewList = (stdout) => {
   const lines = stdout
     .split('\n')
@@ -536,21 +534,30 @@ const main = async () => {
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
 
-  let gateApproved = false
-  if (driver.exitCode !== 0 && driver.stderr.includes(REVIEW_GATE_ERROR)) {
-    await walkReviewGate({ workspace, jobId, reviewer, logFile: driverLog })
-    gateApproved = true
-    log('[review] resuming the render from the persisted script (completed segments are reused)')
-    driver = await runPnpmScript({
-      args: driverArgs,
-      env: {},
-      logFile: driverLog,
-    })
+  if (driver.exitCode !== 0) {
+    fail(`the direction operation failed (see ${driverLog})`)
   }
+  const directionReport = JSON.parse(driver.stdout.trim())
+  if (
+    directionReport.operation !== 'direction' ||
+    directionReport.jobState !== 'awaiting_review' ||
+    directionReport.m4bPath !== null
+  ) {
+    fail('direction did not stop at review without an audiobook output')
+  }
+  log('[review] direction complete; the job is resting before any audio starts')
+  await walkReviewGate({ workspace, jobId, reviewer, logFile: driverLog })
+  const gateApproved = true
+  log('[review] confirming the exact script and starting the separate render operation')
+  driver = await runPnpmScript({
+    args: [...driverArgs, '--operation', 'render'],
+    env: { LNA_REVIEWER: reviewer },
+    logFile: driverLog,
+  })
   if (driver.exitCode !== 0) {
     fail(
-      `the pipeline driver failed (see ${driverLog}). ` +
-        `Resume a failed run with the same --workspace and --job-id; after an interrupted (killed) run, pass a fresh --job-id so the stale one is left alone.`,
+      `the confirmed render operation failed (see ${driverLog}). ` +
+        `Resume with the same --workspace and --job-id; after a killed run, leave the stale job alone.`,
     )
   }
 

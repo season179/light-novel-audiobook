@@ -2,13 +2,14 @@ import {
   ApprovalCatalogAccess,
   type AudioAssembler,
   CompletedOutputAuthority,
+  DirectAudiobook,
   type DirectChapterOptions,
   type DirectionApprovalRepository,
   type DirectorModel,
   type EpubExtractor,
   type FallbackApprovalRepository,
-  GenerateAudiobook,
   type JobRepository,
+  RenderAudiobook,
   ReviewDirection,
   ReviewFallbackApprovals,
   type SpeechEngineFactory,
@@ -37,7 +38,7 @@ import { createWorkspace, type LocalWorkspace } from './workspace.js'
  * The single place where concrete adapters meet the application ports.
  *
  * Adapters are supplied as **factories, called once per generation run**, not as instances. This is
- * not a style choice: `GenerateAudiobook` always releases the director when direction finishes, and
+ * not a style choice: `DirectAudiobook` always releases the director when direction finishes, and
  * a real director's release is terminal, so a retained director would serve the first book and fail
  * every book after it. A factory may still return a long-lived shared instance where the adapter
  * genuinely supports repeated use — see the per-field notes.
@@ -160,41 +161,40 @@ export const createAudiobookWebApi = async (
   const catalogAccess = new ApprovalCatalogAccess()
   const completedOutputs = new CompletedOutputAuthority(approvals, jobs, catalogAccess)
 
-  // One use case per run, with adapters that have not been released or batched yet.
-  //
-  // The director is passed as a factory, not an instance, and that is load-bearing rather than
-  // stylistic: `GenerateAudiobook` skips direction entirely for a job already awaiting review, so a
-  // director constructed here would never be used and never released. With Gemma that leaks a
-  // GPU-resident model — `release()` is terminal — while Qwen then starts rendering beside it.
-  const runner = new GenerationRunner(async (command) => {
-    const [epubExtractor, audioAssembler] = await Promise.all([
-      createEpubExtractor(),
-      createAudioAssembler(),
-    ])
-    // The slice bounds live in exactly one place — the job ID — and this is the only read of them:
-    // start, retry, and review resume all reach the runner with the same job ID, so the extractor
-    // is always wrapped for the window the ID states. The bounds are bound into the extractor
-    // identity by `SlicingEpubExtractor` itself (the driver's rule), which the command identity
-    // folds in, so a bounded run can never be handed another window's stored audio.
-    const limits = sliceLimitsForJobId(command.jobId)
-    const boundedExtractor =
-      Object.keys(limits).length === 0
-        ? epubExtractor
-        : new SlicingEpubExtractor(epubExtractor, limits)
-    return new GenerateAudiobook({
-      epubExtractor: withSanitizedFailures.epubExtractor(boundedExtractor),
-      // Sanitized around `create()` as well as around the adapter: construction now happens inside
-      // the run, so a factory that throws must fail the job with a message the browser may read.
-      directorModelFactory: withSanitizedFailures.directorModelFactory({
-        identity: directorIdentity,
-        create: createDirectorModel,
+  // Stage A and Stage B have separate factories. In particular, the upload path cannot even obtain
+  // a `RenderAudiobook`, so a zero-warning script has no route to speech without another user action.
+  const runner = new GenerationRunner({
+    createDirection: async (command) => {
+      const [epubExtractor, audioAssembler] = await Promise.all([
+        createEpubExtractor(),
+        createAudioAssembler(),
+      ])
+      // Slice bounds live in the job ID and are folded into extractor identity.
+      const limits = sliceLimitsForJobId(command.jobId)
+      const boundedExtractor =
+        Object.keys(limits).length === 0
+          ? epubExtractor
+          : new SlicingEpubExtractor(epubExtractor, limits)
+      return new DirectAudiobook({
+        epubExtractor: withSanitizedFailures.epubExtractor(boundedExtractor),
+        directorModelFactory: withSanitizedFailures.directorModelFactory({
+          identity: directorIdentity,
+          create: createDirectorModel,
+        }),
+        speechEngineFactory: withSanitizedFailures.speechEngineFactory(speechEngineFactory),
+        audioAssembler: withSanitizedFailures.audioAssembler(audioAssembler),
+        jobs,
+      })
+    },
+    createRendering: async () =>
+      new RenderAudiobook({
+        speechEngineFactory: withSanitizedFailures.speechEngineFactory(speechEngineFactory),
+        audioAssembler: withSanitizedFailures.audioAssembler(await createAudioAssembler()),
+        jobs,
+        approvals,
+        directionApprovals,
+        completedOutputs,
       }),
-      speechEngineFactory: withSanitizedFailures.speechEngineFactory(speechEngineFactory),
-      audioAssembler: withSanitizedFailures.audioAssembler(audioAssembler),
-      jobs,
-      approvals,
-      completedOutputs,
-    })
   })
 
   return new AudiobookWebApi({

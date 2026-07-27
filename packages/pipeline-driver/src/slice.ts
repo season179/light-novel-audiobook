@@ -66,7 +66,7 @@ export const canonicalSliceDescriptor = (limits: SliceLimits): string | null => 
 /**
  * Wraps the real extractor and narrows the `Book` it returns.
  *
- * `GenerateAudiobookCommand` has no slice option and the use case calls `extract()` itself, so
+ * `DirectAudiobookCommand` has no slice option and the use case calls `extract()` itself, so
  * bounding a run has to happen here, at the composition root. Deliberately a decorator rather than a
  * change to `DomainEpubExtractor`: the real extractor still ingests the entire publication — all 21
  * spine documents and 2,328 passages of the real book — so real-scale extraction, fidelity checks and
@@ -79,7 +79,7 @@ export const canonicalSliceDescriptor = (limits: SliceLimits): string | null => 
  * `ExactSourceCoverage` runs over the sliced book, so "every passage represented exactly once" still
  * means that for the slice.
  *
- * `identity` binds the slice bounds. `GenerateAudiobook` folds the extractor identity into the command
+ * `identity` binds the slice bounds. `DirectAudiobook` folds the extractor identity into the command
  * identity, and a completed job returns its stored output without re-extracting — so an unbound slice
  * would let a second run with different bounds silently reuse the first run's audio. On a
  * 2,328-passage book that is the difference between three paragraphs and an unintended full render.

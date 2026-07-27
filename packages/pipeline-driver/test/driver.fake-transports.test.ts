@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createCastApprovalRecord } from '@light-novel-audiobook/application'
+import {
+  createCastApprovalRecord,
+  resolveReviewerIdentity,
+} from '@light-novel-audiobook/application'
 import { defaultFfmpegDirectory, FFMPEG_DIRECTORY_ENV } from '@light-novel-audiobook/audio-assembly'
 import {
   layoutFor,
@@ -12,7 +15,7 @@ import {
   SqliteCastApprovalRepository,
 } from '@light-novel-audiobook/persistence'
 import { afterEach, describe, expect, it } from 'vitest'
-import { runPipeline } from '../src/driver.js'
+import { runConfirmedRender, runPipeline } from '../src/driver.js'
 import { NarrationEchoDirectorServer } from '../src/fake-director-server.js'
 import { createFakeTransports } from '../src/transports.js'
 
@@ -43,6 +46,7 @@ if (!TOOLCHAIN_PRESENT) {
   )
 }
 
+const REVIEWER = resolveReviewerIdentity({ LNA_REVIEWER: 'pipeline-driver-test' })
 const workspaces: string[] = []
 const servers: NarrationEchoDirectorServer[] = []
 
@@ -65,7 +69,7 @@ async function directorServer(): Promise<NarrationEchoDirectorServer> {
 }
 
 describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () => {
-  it('takes a committed fixture EPUB through all five real adapters to a real M4B', async () => {
+  it('stops a zero-warning book at review without creating audio', async () => {
     const workspaceRoot = await workspace('fixture')
     const server = await directorServer()
     const transports = await createFakeTransports(
@@ -86,20 +90,14 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       },
     })
 
-    // A real export exists on disk, produced by pinned ffmpeg from real segment audio.
-    expect(report.m4bBytes).toBeGreaterThan(0)
-    expect(existsSync(report.m4bPath)).toBe(true)
-    expect(report.m4bPath.endsWith('-v001.m4b')).toBe(true)
-    expect(report.outputVersion).toBe(1)
-    expect(report.chapterOutputs).toHaveLength(1)
-    for (const chapter of report.chapterOutputs) {
-      expect(chapter.bytes).toBeGreaterThan(0)
-      expect(existsSync(chapter.path)).toBe(true)
-    }
-
-    // The job really completed, through the domain gates that rejected the old ID dialect.
-    expect(report.jobState).toBe('completed')
-    expect(report.jobStage).toBe('completed')
+    // Direction succeeds without requiring or producing an audiobook.
+    expect(report.operation).toBe('direction')
+    expect(report.m4bBytes).toBeNull()
+    expect(report.m4bPath).toBeNull()
+    expect(report.outputVersion).toBeNull()
+    expect(report.chapterOutputs).toEqual([])
+    expect(report.jobState).toBe('awaiting_review')
+    expect(report.jobStage).toBe('directing')
     expect(report.bookId).toMatch(/^book-[0-9a-f]{24}$/)
     expect(report.fallbackWarnings).toBe(0)
 
@@ -110,7 +108,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     // Extraction was NOT bounded: the real extractor still ingested the whole publication.
     expect(report.slice?.extractedChapters).toBe(2)
     expect(report.slice?.extractedPassages).toBe(2)
-    expect(report.generatedSegments).toBe(1)
+    expect(report.generatedSegments).toBe(0)
     expect(report.reusedSegments).toBe(0)
 
     // Every adapter contributed a real identity to the run.
@@ -118,11 +116,9 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       expect(identity.length).toBeGreaterThan(0)
     }
 
-    // Gemma must have released the GPU before Qwen leased it, or both would be resident at once.
-    const directorRelease = report.lifecycleEvents.indexOf('director:release')
-    const speechAcquire = report.lifecycleEvents.indexOf('lease:acquire:qwen3-tts')
-    expect(directorRelease).toBeGreaterThanOrEqual(0)
-    expect(speechAcquire).toBeGreaterThan(directorRelease)
+    // Gemma is released and Qwen never starts by itself at the boundary.
+    expect(report.lifecycleEvents.indexOf('director:release')).toBeGreaterThanOrEqual(0)
+    expect(report.lifecycleEvents).not.toContain('lease:acquire:qwen3-tts')
 
     // The fake transport was asked for exactly the sliced chapters, one request each.
     expect(server.requests).toHaveLength(1)
@@ -205,7 +201,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       characterSharesFallbackMaterial: false,
     })
     expect(castRun.fallbackWarnings).toBe(0)
-    expect(castRun.jobState).toBe('completed')
+    expect(castRun.jobState).toBe('awaiting_review')
   }, 600_000)
 
   it('flags a character cast onto the fallback voice material in the run report', async () => {
@@ -278,7 +274,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
       characterSharesFallbackMaterial: true,
     })
     expect(castRun.fallbackWarnings).toBe(0)
-    expect(castRun.jobState).toBe('completed')
+    expect(castRun.jobState).toBe('awaiting_review')
   }, 600_000)
 
   it('rejects an approved cast whose recorded book identity differs from the extracted book', async () => {
@@ -336,10 +332,11 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
     expect(report).toBeUndefined()
   }, 600_000)
 
-  it('reuses completed segment audio when the same job is run again', async () => {
+  it('reuses completed segment audio across explicit confirmed renders', async () => {
     const workspaceRoot = await workspace('resume')
+    const limits = { maxChapters: 1, maxPassagesPerChapter: 1 }
     const first = await directorServer()
-    const report = await runPipeline({
+    const firstDirection = await runPipeline({
       jobId: 'driver-resume-run',
       epubPath: FIXTURE_EPUB,
       workspaceRoot,
@@ -348,14 +345,32 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
         { runtimeDirectory: path.join(workspaceRoot, 'runtime'), repositoryRoot: REPOSITORY_ROOT },
         first.baseUrl,
       ),
-      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+      limits,
     })
-    expect(report.generatedSegments).toBe(1)
+    const firstRender = await runConfirmedRender(
+      {
+        jobId: 'driver-resume-run',
+        epubPath: FIXTURE_EPUB,
+        workspaceRoot,
+        repositoryRoot: REPOSITORY_ROOT,
+        transports: await createFakeTransports(
+          {
+            runtimeDirectory: path.join(workspaceRoot, 'runtime-render'),
+            repositoryRoot: REPOSITORY_ROOT,
+          },
+          first.baseUrl,
+        ),
+        limits,
+      },
+      REVIEWER,
+    )
+    expect(firstDirection.jobState).toBe('awaiting_review')
+    expect(firstRender.generatedSegments).toBe(1)
 
     // A different job over the same workspace stands in for a restart after a crash: the segment
     // ledger is real, so the audio should be reused rather than re-rendered.
     const second = await directorServer()
-    const resumed = await runPipeline({
+    const secondDirection = await runPipeline({
       jobId: 'driver-resume-run-2',
       epubPath: FIXTURE_EPUB,
       workspaceRoot,
@@ -367,16 +382,36 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('pipeline driver with fake transports', () =
         },
         second.baseUrl,
       ),
-      limits: { maxChapters: 1, maxPassagesPerChapter: 1 },
+      limits,
     })
+    const resumed = await runConfirmedRender(
+      {
+        jobId: 'driver-resume-run-2',
+        epubPath: FIXTURE_EPUB,
+        workspaceRoot,
+        repositoryRoot: REPOSITORY_ROOT,
+        transports: await createFakeTransports(
+          {
+            runtimeDirectory: path.join(workspaceRoot, 'runtime-render-2'),
+            repositoryRoot: REPOSITORY_ROOT,
+          },
+          second.baseUrl,
+        ),
+        limits,
+      },
+      REVIEWER,
+    )
 
+    expect(secondDirection.jobState).toBe('awaiting_review')
     expect(resumed.jobState).toBe('completed')
-    expect(resumed.identities.director).toBe(report.identities.director)
+    expect(resumed.identities.director).toBe(firstRender.identities.director)
     expect(resumed.reusedSegments).toBe(1)
     expect(resumed.generatedSegments).toBe(0)
     // A second export never overwrites the first.
     expect(resumed.outputVersion).toBe(2)
-    expect(existsSync(report.m4bPath)).toBe(true)
-    expect(resumed.m4bPath).not.toBe(report.m4bPath)
+    expect(firstRender.m4bPath).not.toBeNull()
+    if (firstRender.m4bPath === null) throw new Error('first confirmed render produced no M4B')
+    expect(existsSync(firstRender.m4bPath)).toBe(true)
+    expect(resumed.m4bPath).not.toBe(firstRender.m4bPath)
   }, 600_000)
 })

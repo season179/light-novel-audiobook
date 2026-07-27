@@ -1,7 +1,7 @@
 # @light-novel-audiobook/web
 
-The local-only TanStack Start app for the M1 flow: upload an EPUB, generate it, watch progress, play
-the chapters, download the numbered M4B. One user, no login, bound to `127.0.0.1` only.
+The local-only TanStack Start app for the M1 flow: upload an EPUB, review the completed direction,
+then explicitly confirm and render a numbered M4B. One user, no login, bound to `127.0.0.1` only.
 
 ```bash
 pnpm --filter @light-novel-audiobook/web dev   # http://localhost:3000
@@ -51,12 +51,11 @@ constructed alongside the extractor would always carry an empty catalog.
 
 Why `directorIdentity` is supplied separately: the generation command identity must bind the
 director before direction runs, but building the model at composition time would defeat the factory.
-`GenerateAudiobook` skips direction entirely for a job already awaiting review, so a director built
-eagerly there is never used and never released — with Gemma that leaks a GPU-resident model, because
-`release()` is terminal. Director identity is a pure function of configuration, so it is passed as a
-value.
+Stage B has no director dependency at all, so a director built eagerly would never be used or
+released — with Gemma that leaks a GPU-resident model, because `release()` is terminal. Director
+identity is a pure function of configuration, so it is passed as a value.
 
-Why `createDirectorModel` has to construct per run: `GenerateAudiobook` always calls
+Why `createDirectorModel` has to construct per run: `DirectAudiobook` always calls
 `DirectorModel.release()` when direction finishes, and `GemmaDirectorModel.release()` memoises its
 shutdown so every later `directChapter()` throws `Gemma Director has been released`. A retained
 director would generate the first book and fail every book after it.
@@ -85,6 +84,8 @@ detail never reaches the browser.
 | `getJobStateFn` | GET | `{ jobId }` | `JobStateView \| null` (`null` = no such job) |
 | `listChapterAudioFn` | GET | `{ jobId }` | `ChapterAudioListing` |
 | `listUploadsFn` | GET | — | `EpubUploadView[]` |
+| `listFallbackReviewFn` | GET | `{ jobId }` | `FallbackReviewView` |
+| `renderApprovedScriptFn` | POST | `{ jobId }` | `{ jobId, job }` |
 
 Binary routes: `GET /api/jobs/$jobId/audio/$chapterId` (inline chapter audio) and
 `GET /api/jobs/$jobId/download` (the M4B as an attachment). Both resolve paths from persisted job
@@ -123,7 +124,7 @@ Two consequences worth knowing:
   | `listFallbackReview({ jobId })` | the queue, each entry with a short excerpt of the approved line |
   | `approveAllFallbacks({ jobId })` | one book-wide decision, written out as one durable per-segment record each |
   | `revokeFallback({ jobId, segmentId })` | withdraws one speaker; a completed job returns to review and its audio for that speaker becomes unreachable |
-  | `renderApprovedScript({ jobId })` | continues from the persisted script, with no re-extraction and no re-direction |
+  | `renderApprovedScript({ jobId })` | confirms the exact current script, then starts rendering with no re-extraction or re-direction |
 
   Withdrawing one speaker invalidates only that speaker's audio, because the approval identity is
   hashed into that segment's render input identity and nothing else moves. A withdrawal is recorded
@@ -152,8 +153,8 @@ Two consequences worth knowing:
   `real-output-extensions.test.ts`. The fake's refusal is what stops a fake from hiding that class of
   mismatch again.
 
-Adapter failures are also sanitized at the composition boundary, because `GenerateAudiobook` persists
-an adapter's message into job state and the browser reads that back. The raw cause is logged
+Adapter failures are also sanitized at the composition boundary, because the direction and render
+operations persist adapter messages into job state and the browser reads them back. The raw cause is logged
 server-side; only `WebApiError` and `DomainError` messages pass through.
 
 ### What the served-file guarantee is, and is not
