@@ -94,9 +94,15 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
 
   if (jobQuery.isPending) {
     return (
-      <section className="panel" aria-labelledby="job-heading">
+      <section className="panel stack" aria-labelledby="job-heading">
         <h2 id="job-heading">Generation</h2>
-        <p role="status">Loading job state…</p>
+        {/* No data-state yet: the neutral base treatment is the honest one until the job's real
+            state arrives. The bar is indeterminate because there is no total to show. */}
+        <div className="status-block" role="status" aria-live="polite">
+          <p className="stage">Loading</p>
+          <p className="latest">Loading job state…</p>
+          <progress aria-label="Loading job state" />
+        </div>
       </section>
     )
   }
@@ -140,48 +146,16 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     <section className="panel stack" aria-labelledby="job-heading">
       <h2 id="job-heading">{job.bookTitle ?? 'Generation'}</h2>
 
-      <div className="status-block" role="status" aria-live="polite">
+      <div className="status-block" data-state={job.state} role="status" aria-live="polite">
         <p className="stage">{stageText(job)}</p>
         <p className="latest">{job.latestMessage}</p>
       </div>
 
-      <h3>Pipeline</h3>
-      <dl className="summary" aria-label="Audiobook pipeline stages">
-        {job.pipelineStages.map((stage) => (
-          <Fragment key={stage.stage}>
-            <dt>{stage.label}</dt>
-            <dd>
-              <strong aria-current={stage.status === 'current' ? 'step' : undefined}>
-                {stage.status === 'completed'
-                  ? 'Completed'
-                  : stage.status === 'current'
-                    ? 'Current'
-                    : 'Upcoming'}
-              </strong>
-              {stage.summary === null ? null : ` — ${stage.summary}`}
-            </dd>
-          </Fragment>
-        ))}
-      </dl>
-
-      <dl className="summary">
-        <dt>Chapter</dt>
-        <dd>{chapterText(job)}</dd>
-        {job.totalChapters > 0 && (
-          <>
-            <dt>Chapters directed</dt>
-            <dd>{chaptersText(job)}</dd>
-            <dt>Passages directed</dt>
-            <dd>{passagesText(job)}</dd>
-          </>
-        )}
-        <dt>Segments</dt>
-        <dd>{segmentsText(job)}</dd>
-        <dt>Job</dt>
-        <dd>
-          <code>{job.jobId}</code>
-        </dd>
-      </dl>
+      {job.error !== null && (
+        <p className="error" role="alert">
+          Generation failed: {job.error}
+        </p>
+      )}
 
       {job.stage === 'directing' && job.totalPassages > 0 && (
         <div className="field">
@@ -201,12 +175,6 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
         </div>
       )}
 
-      {job.error !== null && (
-        <p className="error" role="alert">
-          Generation failed: {job.error}
-        </p>
-      )}
-
       {reviewError !== undefined && !reviewError.ok && (
         <p className="error" role="alert">
           {reviewError.error.message}
@@ -223,6 +191,53 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
           onRender={() => render.mutate()}
         />
       )}
+
+      {/* Reference material: the pipeline and the counts recede into a recessed box so the live
+          status above keeps the eye. */}
+      <section className="stack bordered details" aria-labelledby="pipeline-heading">
+        <h3 id="pipeline-heading">Pipeline</h3>
+        <dl className="summary" aria-label="Audiobook pipeline stages">
+          {job.pipelineStages.map((stage) => (
+            <Fragment key={stage.stage}>
+              <dt>{stage.label}</dt>
+              <dd>
+                <strong
+                  data-status={stage.status}
+                  aria-current={stage.status === 'current' ? 'step' : undefined}
+                >
+                  {stage.status === 'completed'
+                    ? 'Completed'
+                    : stage.status === 'current'
+                      ? 'Current'
+                      : 'Upcoming'}
+                </strong>
+                {stage.summary === null ? null : ` — ${stage.summary}`}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+
+        <dl className="summary">
+          <dt>Chapter</dt>
+          <dd className={job.currentChapterLabel === null ? 'empty' : undefined}>
+            {chapterText(job)}
+          </dd>
+          {job.totalChapters > 0 && (
+            <>
+              <dt>Chapters directed</dt>
+              <dd>{chaptersText(job)}</dd>
+              <dt>Passages directed</dt>
+              <dd>{passagesText(job)}</dd>
+            </>
+          )}
+          <dt>Segments</dt>
+          <dd>{segmentsText(job)}</dd>
+          <dt>Job</dt>
+          <dd>
+            <code>{job.jobId}</code>
+          </dd>
+        </dl>
+      </section>
 
       <FallbackWarningList warnings={job.warnings} />
       {job.output !== null && <ChapterAudioList output={job.output} />}

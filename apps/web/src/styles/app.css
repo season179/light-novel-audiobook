@@ -4,6 +4,14 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
+
+  /* One measure for the whole app: the shell, and every element that used to cap itself at 34rem. */
+  --measure: 40rem;
+  --ink: #e9edf5;
+  --muted: #aeb8ca;
+  --faint: #8e9ab1;
+  --edge: #273044;
+  --accent: #b9a9ff;
 }
 
 * {
@@ -18,42 +26,47 @@ body {
 }
 
 .shell {
-  width: min(920px, calc(100% - 2rem));
+  width: min(var(--measure), calc(100% - 2rem));
   margin: 0 auto;
   padding: 12vh 0 4rem;
 }
 
-.hero {
-  max-width: 680px;
-}
-
 h1,
 h2,
+h3,
 p {
   margin-top: 0;
 }
 
+/* One typographic scale, from the page title down to reference text. The old marketing-scale hero
+   (5.7rem at -0.06em) belonged to a landing page, not a tool you watch for an hour. */
 h1 {
   margin-bottom: 1rem;
-  font-size: clamp(2.8rem, 8vw, 5.7rem);
-  line-height: 0.95;
-  letter-spacing: -0.06em;
+  font-size: clamp(2.1rem, 4.5vw, 3.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
 }
 
 h2 {
   margin-bottom: 0.6rem;
-  font-size: 1.5rem;
+  font-size: 1.4rem;
+  line-height: 1.2;
+}
+
+h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
 }
 
 p {
-  color: #aeb8ca;
-  font-size: 1.05rem;
+  color: var(--muted);
+  font-size: 1rem;
   line-height: 1.65;
 }
 
 .eyebrow {
   margin-bottom: 0.65rem;
-  color: #b9a9ff;
+  color: var(--accent);
   font-size: 0.75rem;
   font-weight: 750;
   letter-spacing: 0.14em;
@@ -67,7 +80,7 @@ p {
   gap: 2rem;
   margin-top: 4rem;
   padding: 1.5rem;
-  border: 1px solid #273044;
+  border: 1px solid var(--edge);
   border-radius: 1rem;
   background: rgb(18 24 36 / 82%);
   box-shadow: 0 1rem 4rem rgb(0 0 0 / 30%);
@@ -75,17 +88,6 @@ p {
 
 .panel p:last-child {
   margin-bottom: 0;
-}
-
-.status {
-  flex: none;
-  padding: 0.45rem 0.75rem;
-  border: 1px solid #51488a;
-  border-radius: 999px;
-  color: #d5ccff;
-  background: #262140;
-  font-size: 0.8rem;
-  font-weight: 700;
 }
 
 @media (max-width: 560px) {
@@ -109,6 +111,7 @@ p {
 .panel.stack {
   align-items: stretch;
   justify-content: flex-start;
+  margin-top: 2rem;
 }
 
 .field {
@@ -135,7 +138,7 @@ input[type="file"] {
 
 .hint {
   margin-bottom: 0;
-  color: #8e9ab1;
+  color: var(--faint);
   font-size: 0.9rem;
 }
 
@@ -149,7 +152,8 @@ input[type="file"] {
   font-size: 0.95rem;
 }
 
-.actions {
+.actions,
+.row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
@@ -176,36 +180,179 @@ button:disabled {
 }
 
 :focus-visible {
-  outline: 2px solid #b9a9ff;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
+/* Reference material (review, warnings, results) sits in these recessed boxes so the live status
+   block above them can dominate. */
 .bordered {
   padding: 1.15rem;
-  border: 1px solid #273044;
+  border: 1px solid var(--edge);
   border-radius: 0.8rem;
   background: rgb(13 18 28 / 70%);
 }
 
+/*
+ * The job-state vocabulary. The status block is the element the user reads from across the desk,
+ * so every one of the six job states gets colour AND a non-colour signal: a leading glyph, a thick
+ * accent spine on the left edge, and (for abandoned) a dashed border. Colour is never the only
+ * carrier — the stage line also names the state in words.
+ *
+ * The base block is deliberately neutral: it renders while the real state is still loading, and a
+ * job state always arrives as a data-state attribute from the view model.
+ */
 .status-block {
-  padding: 0.9rem 1.1rem;
-  border: 1px solid #2f4a45;
+  --state-edge: #39435a;
+  --state-bg: #131926;
+  --state-ink: #93a1b8;
+
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--state-edge);
+  border-left: 0.35rem solid var(--state-ink);
   border-radius: 0.7rem;
-  background: #10201e;
+  background: var(--state-bg);
 }
 
 .status-block .stage {
-  margin-bottom: 0.3rem;
-  color: #9ce3cf;
-  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  color: var(--state-ink);
+  font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
+.status-block .stage::before {
+  font-size: 0.9em;
+  line-height: 1;
+}
+
 .status-block .latest {
   margin-bottom: 0;
-  color: #e9edf5;
+  color: var(--ink);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+.status-block[data-state="pending"] {
+  --state-edge: #39435a;
+  --state-bg: #131926;
+  --state-ink: #93a1b8;
+}
+
+.status-block[data-state="pending"] .stage::before {
+  content: "○";
+}
+
+.status-block[data-state="running"] {
+  --state-edge: #51488a;
+  --state-bg: #18152e;
+  --state-ink: #b9a9ff;
+}
+
+.status-block[data-state="running"] .stage::before {
+  content: "▶";
+}
+
+.status-block[data-state="awaiting_review"] {
+  --state-edge: #7a5b23;
+  --state-bg: #241c0e;
+  --state-ink: #f2c14e;
+}
+
+.status-block[data-state="awaiting_review"] .stage::before {
+  content: "▮▮";
+}
+
+.status-block[data-state="abandoned"] {
+  --state-edge: #4a4f5c;
+  --state-bg: #161a20;
+  --state-ink: #8a93a6;
+
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.status-block[data-state="abandoned"] .stage::before {
+  content: "■";
+}
+
+.status-block[data-state="failed"] {
+  --state-edge: #7a3140;
+  --state-bg: #2c1620;
+  --state-ink: #ff9fb0;
+}
+
+.status-block[data-state="failed"] .stage::before {
+  content: "✕";
+}
+
+.status-block[data-state="completed"] {
+  --state-edge: #2f4a45;
+  --state-bg: #10201e;
+  --state-ink: #9ce3cf;
+}
+
+.status-block[data-state="completed"] .stage::before {
+  content: "✓";
+}
+
+/* A running job breathes; nothing else moves. Motion is opt-in via the OS setting. */
+@media (prefers-reduced-motion: no-preference) {
+  .status-block[data-state="running"] .stage::before {
+    animation: status-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Pipeline stages use the same glyph language as the status block. */
+strong[data-status]::before {
+  margin-right: 0.4rem;
+}
+
+strong[data-status="completed"] {
+  color: #9ce3cf;
+}
+
+strong[data-status="completed"]::before {
+  content: "✓";
+}
+
+strong[data-status="current"] {
+  color: var(--accent);
+}
+
+strong[data-status="current"]::before {
+  content: "▶";
+}
+
+strong[data-status="upcoming"] {
+  color: var(--faint);
+  font-weight: 500;
+}
+
+strong[data-status="upcoming"]::before {
+  content: "○";
+}
+
+/* Counts and pipeline detail are reference material: smaller and quieter than the status block. */
+.details {
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .summary {
@@ -216,14 +363,21 @@ button:disabled {
 }
 
 .summary dt {
-  color: #8e9ab1;
-  font-size: 0.85rem;
+  color: var(--faint);
+  font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 
 .summary dd {
   margin: 0;
+}
+
+/* An honest empty value ("Not in a chapter yet", "not yet counted") recedes instead of posing as
+   a known one. */
+.summary dd.empty {
+  color: var(--faint);
+  font-style: italic;
 }
 
 .listing,
@@ -261,17 +415,92 @@ button:disabled {
 
 audio {
   width: 100%;
-  max-width: 34rem;
 }
 
+/*
+ * The progress bar is the element watched for the longest, so it gets a real treatment: a rounded
+ * track in the panel's recessed tone and a fill in the app accent. Both cases are styled —
+ * determinate (a known total) and indeterminate (working, total unknown), the latter as drifting
+ * stripes rather than a fake fraction.
+ */
 progress {
   width: 100%;
-  max-width: 34rem;
   height: 0.9rem;
+  appearance: none;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: #101725;
+}
+
+progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: #101725;
+}
+
+progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #5a4fa0, var(--accent));
+}
+
+progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #5a4fa0, var(--accent));
+}
+
+progress:indeterminate {
+  background: #101725;
+}
+
+progress:indeterminate::-webkit-progress-bar {
+  background-color: #101725;
+  background-image: linear-gradient(
+    135deg,
+    rgb(185 169 255 / 45%) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgb(185 169 255 / 45%) 50%,
+    rgb(185 169 255 / 45%) 75%,
+    transparent 75%
+  );
+  background-size: 2rem 100%;
+}
+
+progress:indeterminate::-moz-progress-bar {
+  border-radius: 999px;
+  background-image: linear-gradient(
+    135deg,
+    rgb(185 169 255 / 45%) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgb(185 169 255 / 45%) 50%,
+    rgb(185 169 255 / 45%) 75%,
+    transparent 75%
+  );
+  background-size: 2rem 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  progress:indeterminate::-webkit-progress-bar {
+    animation: progress-drift 1.1s linear infinite;
+  }
+
+  progress:indeterminate::-moz-progress-bar {
+    animation: progress-drift 1.1s linear infinite;
+  }
+}
+
+@keyframes progress-drift {
+  from {
+    background-position: 0 0;
+  }
+
+  to {
+    background-position: 2rem 0;
+  }
 }
 
 a {
-  color: #b9a9ff;
+  color: var(--accent);
 }
 
 a.download {
