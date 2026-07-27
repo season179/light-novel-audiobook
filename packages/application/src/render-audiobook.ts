@@ -31,6 +31,8 @@ import { createRenderInputIdentity } from './render-input-identity.js'
 export interface RenderAudiobookCommand {
   readonly jobId: string
   readonly voices: VoiceCast
+  /** Explicitly takes over a job whose previous worker no longer owns its interrupted stage. */
+  readonly recoverAbandoned?: boolean | undefined
 }
 
 export interface RenderAudiobookResult {
@@ -161,14 +163,10 @@ export class RenderAudiobook {
     if (job === undefined) {
       throw new DomainError(`Audiobook job ${command.jobId} does not exist`)
     }
-    // Captured into a local rather than tested through the getter: narrowing `job.state` here would
-    // persist past `resumeApprovedRender()`, and the failure path below really can see 'running'.
-    const initialState = job.state
+
+    let initialState = job.state
     if (initialState === 'completed') {
       if (job.bookId === null) throw new DomainError('A completed job must have an attached book')
-      // The same authority every other consumer uses. It does not expose a raw output: construction
-      // of this return value is the authorized consumption and shares a critical section with every
-      // approval mutation.
       const authorization = await this.completedOutputs.authorize(
         job,
         (output): RenderAudiobookResult => ({
@@ -181,31 +179,35 @@ export class RenderAudiobook {
       if (authorization.exposable) return authorization.value
       job.reopenForReview()
       await this.jobs.saveJob(job)
-    } else if (initialState !== 'awaiting_review') {
+      initialState = job.state
+    }
+
+    if (initialState === 'running') {
+      if (command.recoverAbandoned !== true) {
+        throw new DomainError('Audiobook job is already running; duplicate request rejected')
+      }
+      job.markAbandoned()
+      await this.jobs.saveJob(job)
+      initialState = job.state
+    }
+    if (initialState === 'abandoned' && command.recoverAbandoned !== true) {
+      throw new DomainError('Audiobook job is abandoned; explicit recovery is required')
+    }
+
+    const interrupted = initialState === 'failed' || initialState === 'abandoned'
+    if (
+      initialState !== 'awaiting_review' &&
+      (!interrupted || (job.stage !== 'rendering' && job.stage !== 'assembling'))
+    ) {
       throw new DomainError(
-        `Audiobook job ${command.jobId} is ${initialState}; only a job awaiting review can be rendered`,
+        `Audiobook job ${command.jobId} is ${initialState} in ${job.stage}; it cannot continue rendering`,
       )
     }
     if (job.bookId === null) throw new DomainError('A rendered job must have an attached book')
 
-    // First application-layer check: refuse before constructing an expensive speech engine. This
-    // proves the persisted script is complete and exact, every fallback is still authorized, and a
-    // human confirmed this exact canonical script.
+    // A resume is not a route around review. Both reads require a live confirmation matching the
+    // exact persisted script, including for assembly where no speech engine will be constructed.
     const initialGate = await this.readRenderGate(job)
-
-    // Constructed here and nowhere earlier: the catalog is only complete once review is done, and an
-    // engine built alongside the extractor and director would always carry an empty one.
-    const speechEngine = await this.speechEngineFactory.create({
-      bookId: initialGate.book.id,
-      fallbackApprovals: [...initialGate.approvals.values()],
-    })
-    if (speechEngine.identity !== this.speechEngineFactory.identity) {
-      throw new DomainError(
-        'Speech engine identity depends on its approval catalog, which would stale every job on each approval',
-      )
-    }
-
-    // Verified before the job leaves its resting state, so a mismatched continuation never renders.
     const contract = createRenderContract({
       voices: command.voices,
       speechEngineIdentity: this.speechEngineFactory.identity,
@@ -215,58 +217,114 @@ export class RenderAudiobook {
       throw new RenderContractMismatchError(command.jobId)
     }
 
-    // Re-read every permission immediately before the aggregate leaves its resting state. API
-    // confirmation is not trusted, and a decision or script change during engine construction is
-    // refused rather than carried into `running`.
+    let planned: readonly PlannedSegment[]
+    try {
+      planned = await this.planRendering(
+        initialGate.book,
+        command.voices,
+        this.speechEngineFactory.identity,
+        initialGate.approvals,
+      )
+    } catch (error) {
+      if (!interrupted) {
+        const totalSegments = initialGate.book.chapters.reduce(
+          (total, chapter) => total + chapter.segments.length,
+          0,
+        )
+        job.resumeApprovedRender()
+        job.bindRenderContract(contract)
+        job.beginRendering(totalSegments)
+        await this.jobs.saveJob(job)
+        await persistJobFailure(this.jobs, job, error)
+      }
+      throw error
+    }
+    const reusableSegments = planned.filter((item) => item.reusable !== undefined).length
+    const missingSegments = planned.length - reusableSegments
+    if (job.stage === 'assembling' && missingSegments > 0) {
+      throw new DomainError(
+        'Assembly resume requires every planned segment artifact to be verified',
+      )
+    }
+
+    // No engine is constructed when all artifacts are durable. In particular, assembly recovery
+    // rebuilds its input and reserves a new numbered output with zero TTS calls.
+    let speechEngine: SpeechEngine | undefined
+    if (job.stage !== 'assembling' && missingSegments > 0) {
+      speechEngine = await this.speechEngineFactory.create({
+        bookId: initialGate.book.id,
+        fallbackApprovals: [...initialGate.approvals.values()],
+      })
+      if (speechEngine.identity !== this.speechEngineFactory.identity) {
+        throw new DomainError(
+          'Speech engine identity depends on its approval catalog, which would stale every job on each approval',
+        )
+      }
+    }
+
     const gate = await this.readRenderGate(job)
     if (gate.scriptSha256 !== initialGate.scriptSha256 || gate.revision !== initialGate.revision) {
       throw new DomainError('The reviewed script or fallback decisions changed before rendering')
     }
-    const { book, approvals: approvalsBySegment } = gate
-    const claimed = { revision: gate.revision }
+    const claimedRevision = gate.revision
 
-    job.resumeApprovedRender()
+    if (interrupted) {
+      job.resumeFailedStage(
+        job.stage === 'assembling'
+          ? {
+              stage: 'assembling',
+              completedSegments: planned.length,
+              totalSegments: planned.length,
+            }
+          : {
+              stage: 'rendering',
+              completedSegments: reusableSegments,
+              totalSegments: planned.length,
+            },
+      )
+    } else {
+      job.resumeApprovedRender()
+      job.beginRendering(planned.length, reusableSegments)
+    }
     job.bindRenderContract(contract)
     await this.jobs.saveJob(job)
 
     try {
-      const planned = await this.planRendering(
-        book,
-        command.voices,
-        speechEngine,
-        approvalsBySegment,
-      )
-      job.beginRendering(planned.length)
-      await this.jobs.saveJob(job)
+      const rendered =
+        job.stage === 'assembling'
+          ? {
+              chapters: this.assemblyChaptersFromVerified(gate.book, planned),
+              generatedSegments: 0,
+              reusedSegments: planned.length,
+            }
+          : await this.render(gate.book, command.voices, job, planned, speechEngine)
 
-      const { chapters, generatedSegments, reusedSegments } = await this.render(
-        book,
-        command.voices,
-        job,
-        planned,
-        speechEngine,
-      )
+      await this.assertCatalogUnmoved(gate.book.id, claimedRevision)
+      if (job.stage === 'rendering') {
+        job.beginAssembly()
+        await this.jobs.saveJob(job)
+      }
 
-      // The barrier, first half: nothing is assembled until the catalog this render claimed is
-      // proven unmoved, so a revocation that landed during rendering stops here instead of paying
-      // for an assembly it cannot publish.
-      await this.assertCatalogUnmoved(book.id, claimed.revision)
-
-      job.beginAssembly()
-      await this.jobs.saveJob(job)
-      const reservation = await this.jobs.reserveNextOutput(book)
-      this.validateReservation(book, reservation)
-      const output = await this.audioAssembler.assemble({ book, chapters, reservation })
+      // Never reuse an interrupted reservation: its paths may already have escaped to a player or
+      // partially published file. The durable ledger allocates the next free numbered version.
+      const reservation = await this.jobs.reserveNextOutput(gate.book)
+      this.validateReservation(gate.book, reservation)
+      const output = await this.audioAssembler.assemble({
+        book: gate.book,
+        chapters: rendered.chapters,
+        reservation,
+      })
       this.validateOutput(output, reservation)
 
-      // The barrier, second half: re-checked as late as it can be, immediately before the job is
-      // published. The revision is then recorded *with* the output, so a decision that lands in the
-      // remaining instant between this check and the commit leaves the output provably stale rather
-      // than silently authoritative — see the completed-job path above.
-      await this.assertCatalogUnmoved(book.id, claimed.revision)
-      job.complete(output, claimed.revision)
+      await this.assertCatalogUnmoved(gate.book.id, claimedRevision)
+      job.complete(output, claimedRevision)
       await this.jobs.saveCompletedJob(job, output)
-      return { job, output, generatedSegments, reusedSegments }
+      return {
+        job,
+        output,
+        generatedSegments: rendered.generatedSegments,
+        reusedSegments: rendered.reusedSegments,
+      }
     } catch (error) {
       if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
       throw error
@@ -353,7 +411,7 @@ export class RenderAudiobook {
   private async planRendering(
     book: Book,
     voices: VoiceCast,
-    speechEngine: SpeechEngine,
+    speechEngineIdentity: string,
     approvals: ReadonlyMap<string, PersistedFallbackApproval>,
   ): Promise<readonly PlannedSegment[]> {
     const planned: PlannedSegment[] = []
@@ -370,7 +428,7 @@ export class RenderAudiobook {
         const inputIdentity = createRenderInputIdentity(
           segment,
           voice,
-          speechEngine.identity,
+          speechEngineIdentity,
           approvals.get(segment.id) ?? null,
         )
         const reusable = await this.jobs.findReusableSegment({
@@ -389,7 +447,7 @@ export class RenderAudiobook {
     voices: VoiceCast,
     job: AudiobookJob,
     planned: readonly PlannedSegment[],
-    speechEngine: SpeechEngine,
+    speechEngine: SpeechEngine | undefined,
   ): Promise<{
     readonly chapters: readonly AssemblyChapter[]
     readonly generatedSegments: number
@@ -403,6 +461,8 @@ export class RenderAudiobook {
 
     try {
       if (missingCount > 0) {
+        if (speechEngine === undefined)
+          throw new DomainError('Missing speech engine for render batch')
         await speechEngine.beginBatch()
         batchStarted = true
       }
@@ -417,6 +477,9 @@ export class RenderAudiobook {
           for (const item of chapterItems) {
             let audio = item.reusable
             if (audio === undefined) {
+              if (speechEngine === undefined) {
+                throw new DomainError(`Missing speech engine for segment ${item.segment.id}`)
+              }
               const assignment = item.segment.voiceAssignment
               if (assignment === null)
                 throw new DomainError(`Segment ${item.segment.id} has no voice`)
@@ -428,6 +491,10 @@ export class RenderAudiobook {
               this.validateAudio(audio, item.segment.id, item.inputIdentity)
               await this.jobs.saveCompletedSegment(audio)
               generatedSegments += 1
+              // Verified reusable artifacts were counted when the stage was rebased. Only newly
+              // durable artifacts advance that honest checkpoint.
+              job.recordSegmentCompleted(item.segment.id)
+              await this.jobs.saveJob(job)
             } else {
               reusedSegments += 1
             }
@@ -435,8 +502,6 @@ export class RenderAudiobook {
               throw new DomainError(`Duplicate segment audio map key: ${item.segment.id}`)
             }
             audioBySegment.set(item.segment.id, audio)
-            job.recordSegmentCompleted(item.segment.id)
-            await this.jobs.saveJob(job)
           }
           chapter.markRendered()
         } catch (error) {
@@ -445,7 +510,7 @@ export class RenderAudiobook {
         }
       }
     } finally {
-      if (batchStarted) await speechEngine.endBatch()
+      if (batchStarted) await speechEngine?.endBatch()
     }
 
     const chapters = book.chapters.map((chapter): AssemblyChapter => {
@@ -457,6 +522,30 @@ export class RenderAudiobook {
       return { chapter, segments }
     })
     return { chapters, generatedSegments, reusedSegments }
+  }
+
+  private assemblyChaptersFromVerified(
+    book: Book,
+    planned: readonly PlannedSegment[],
+  ): readonly AssemblyChapter[] {
+    const bySegment = new Map(
+      planned.map((item) => {
+        if (item.reusable === undefined) {
+          throw new DomainError(`Missing verified audio for assembly segment ${item.segment.id}`)
+        }
+        return [item.segment.id, item.reusable] as const
+      }),
+    )
+    return book.chapters.map((chapter) => ({
+      chapter,
+      segments: chapter.segments.map((segment) => {
+        const audio = bySegment.get(segment.id)
+        if (audio === undefined) {
+          throw new DomainError(`Missing verified audio for assembly segment ${segment.id}`)
+        }
+        return { segment, audio }
+      }),
+    }))
   }
 
   private validateAudio(

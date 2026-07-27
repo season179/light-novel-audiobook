@@ -8,6 +8,7 @@ const serverFns = vi.hoisted(() => ({
   listFallbackReviewFn: vi.fn(),
   listUploadsFn: vi.fn(),
   renderApprovedScriptFn: vi.fn(),
+  resumeGenerationFn: vi.fn(),
   revokeFallbackFn: vi.fn(),
   startGenerationFn: vi.fn(),
   uploadEpubFn: vi.fn(),
@@ -20,6 +21,15 @@ import { serverFnAudiobookClient } from '../src/client/server-fn-audiobook-clien
 describe('production server-function audiobook client', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('forwards stage resume as its own operation', async () => {
+    await serverFnAudiobookClient.resumeGeneration({ jobId: 'job-resume-transport-probe' })
+
+    expect(serverFns.resumeGenerationFn).toHaveBeenCalledOnce()
+    expect(serverFns.resumeGenerationFn).toHaveBeenCalledWith({
+      data: { jobId: 'job-resume-transport-probe' },
+    })
   })
 
   it('forwards every slice bound in the outgoing start-generation payload', async () => {

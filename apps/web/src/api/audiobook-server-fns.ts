@@ -149,13 +149,7 @@ export const approveSelectedFallbacksFn = createServerFn({ method: 'POST' })
         const segmentIds = data.segmentIds.map((segmentId) =>
           requireIdInput(segmentId, 'Segment ID'),
         )
-        // Same composition singleton as `api()`: the decision sees the same runner guard and the
-        // same review ledgers, and the re-listed view reads what the write actually changed.
-        const composition = await (
-          await import('../server/composition-root.js')
-        ).getAudiobookComposition()
-        await composition.fallbackSelection.approveSelected({ jobId, segmentIds })
-        return composition.api.listFallbackReview({ jobId })
+        return (await api()).approveSelectedFallbacks({ jobId, segmentIds })
       }),
   )
 
@@ -168,6 +162,16 @@ export const revokeFallbackFn = createServerFn({ method: 'POST' })
           jobId: requireIdInput(data.jobId, 'Job ID'),
           segmentId: requireIdInput(data.segmentId, 'Segment ID'),
         }),
+      ),
+  )
+
+/** Continues the exact failed/abandoned stage without inventing a new review confirmation. */
+export const resumeGenerationFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<StartedGeneration>> =>
+      toWebApiResult('resumeGeneration', async () =>
+        (await api()).resumeGeneration({ jobId: requireIdInput(data.jobId, 'Job ID') }),
       ),
   )
 

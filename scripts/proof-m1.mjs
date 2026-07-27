@@ -479,22 +479,11 @@ const fakeForcedStop = async (config, client, jobId, armed, remainingMs) => {
     log(`[step 6] sabotage: truncated ${victim} to 8 bytes — the reuse assertion must now fail`)
   }
 
-  // Restart the render over the same HTTP surface. The failed job retries from its persisted
-  // script: no re-extraction, no re-direction, and completed segments come back from the reuse
-  // ledger instead of being re-rendered.
+  // Resume the failed render over the same explicit HTTP surface. The live exact-script
+  // confirmation is rechecked; no extraction or direction boundary is replayed.
   await rm(armed.blockedPath, { recursive: true })
-  const uploads = await client.call('listUploadsFn', {})
-  const upload = uploads.find((candidate) => candidate.jobId === jobId)
-  if (upload === undefined) fail('restart: the upload for this job is gone from the workspace')
-  await client.call('startGenerationFn', { uploadId: upload.uploadId }, '6-restart')
-  await pollJobUntil(
-    client,
-    jobId,
-    (view) => (view.state === 'awaiting_review' && !view.active ? view : undefined),
-    { timeoutMs: remainingMs(), label: 'restarted direction boundary' },
-  )
-  await client.call('renderApprovedScriptFn', { jobId }, '6-render-restart')
-  log('[step 6] restarted direction stopped for confirmation; explicit render resumed')
+  await client.call('resumeGenerationFn', { jobId }, '6-resume')
+  log('[step 6] failed rendering resumed in place with its existing live confirmation')
   const finalView = await pollJobUntil(
     client,
     jobId,

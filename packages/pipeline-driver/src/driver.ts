@@ -63,7 +63,7 @@ export interface RunPipelineOptions {
 }
 
 export interface RunPipelineReport {
-  readonly operation: 'direction' | 'confirmed-render'
+  readonly operation: 'direction' | 'confirmed-render' | 'resume'
   readonly mode: 'fake' | 'real'
   readonly jobId: string
   readonly bookId: string
@@ -125,9 +125,14 @@ export async function runConfirmedRender(
   return executePipeline(options, 'confirmed-render', reviewer)
 }
 
+/** Continues the persisted failed/abandoned stage without creating a confirmation. */
+export async function runResume(options: RunPipelineOptions): Promise<RunPipelineReport> {
+  return executePipeline(options, 'resume')
+}
+
 async function executePipeline(
   options: RunPipelineOptions,
-  operation: 'direction' | 'confirmed-render',
+  operation: 'direction' | 'confirmed-render' | 'resume',
   reviewer?: ReviewerIdentity,
 ): Promise<RunPipelineReport> {
   // Monotonic on purpose: Date.now() runs backward on some hosts, and a negative total in the
@@ -267,7 +272,17 @@ async function executePipeline(
       readonly reusedSegments: number
       readonly output?: Awaited<ReturnType<RenderAudiobook['execute']>>['output']
     }
-    if (operation === 'direction') {
+    const existing = await jobs.findJob(options.jobId)
+    if (
+      operation !== 'resume' &&
+      (existing?.state === 'failed' || existing?.state === 'abandoned')
+    ) {
+      throw new DomainError(
+        `Audiobook job ${options.jobId} is interrupted; use --operation resume to continue ${existing.stage}`,
+      )
+    }
+
+    const runDirection = async (recoverAbandoned: boolean) => {
       const direction = new DirectAudiobook({
         epubExtractor: extractor,
         directorModelFactory,
@@ -280,21 +295,42 @@ async function executePipeline(
         epubPath: options.epubPath,
         epubSha256,
         voices: cast,
+        ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
       })
-      result = { job: directed.job, generatedSegments: 0, reusedSegments: 0 }
-    } else {
-      if (reviewer === undefined) throw new DomainError('Confirmed render requires a reviewer')
-      await new ReviewDirection({ jobs, approvals: directionApprovals }).confirm({
-        jobId: options.jobId,
-        decidedBy: reviewer,
-      })
-      result = await new RenderAudiobook({
+      return { job: directed.job, generatedSegments: 0, reusedSegments: 0 }
+    }
+    const runRendering = async (recoverAbandoned: boolean) =>
+      await new RenderAudiobook({
         speechEngineFactory,
         audioAssembler,
         jobs,
         approvals,
         directionApprovals,
-      }).execute({ jobId: options.jobId, voices: cast })
+      }).execute({
+        jobId: options.jobId,
+        voices: cast,
+        ...(recoverAbandoned ? { recoverAbandoned: true } : {}),
+      })
+
+    if (operation === 'direction') {
+      result = await runDirection(false)
+    } else if (operation === 'confirmed-render') {
+      if (reviewer === undefined) throw new DomainError('Confirmed render requires a reviewer')
+      await new ReviewDirection({ jobs, approvals: directionApprovals }).confirm({
+        jobId: options.jobId,
+        decidedBy: reviewer,
+      })
+      result = await runRendering(false)
+    } else {
+      if (existing === undefined)
+        throw new DomainError(`Audiobook job ${options.jobId} does not exist`)
+      if (existing.state !== 'failed' && existing.state !== 'abandoned') {
+        throw new DomainError(`Audiobook job ${options.jobId} is not failed or abandoned`)
+      }
+      result =
+        existing.stage === 'extracting' || existing.stage === 'directing'
+          ? await runDirection(true)
+          : await runRendering(true)
     }
 
     const chapterOutputs =

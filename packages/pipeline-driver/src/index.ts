@@ -13,6 +13,7 @@ export {
   type RunPipelineReport,
   runConfirmedRender,
   runPipeline,
+  runResume,
 } from './driver.js'
 export { NarrationEchoDirectorServer } from './fake-director-server.js'
 export {

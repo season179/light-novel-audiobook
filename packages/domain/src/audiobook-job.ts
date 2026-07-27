@@ -76,6 +76,21 @@ export interface AudiobookJobProgress {
   readonly latestMessage: string
 }
 
+/** Durable work the application has re-read before taking ownership of an interrupted stage. */
+export type AudiobookResumeCheckpoint =
+  | { readonly stage: 'extracting' }
+  | ({ readonly stage: 'directing' } & AudiobookDirectionProgress)
+  | {
+      readonly stage: 'rendering'
+      readonly completedSegments: number
+      readonly totalSegments: number
+    }
+  | {
+      readonly stage: 'assembling'
+      readonly completedSegments: number
+      readonly totalSegments: number
+    }
+
 /** JSON-safe persistence shape for issue #27's repository adapter. */
 export interface AudiobookJobSnapshot {
   readonly schemaVersion: 4
@@ -240,6 +255,84 @@ export class AudiobookJob {
     this.resetForRecovery('Recovering abandoned job from EPUB extraction')
   }
 
+  /**
+   * Takes ownership of a failed or abandoned stage without pretending earlier durable work vanished.
+   * The application supplies counts rebuilt from the persisted book or verified audio ledger; an
+   * in-memory passage window and an unverified segment count are never trusted as checkpoints.
+   *
+   * The active error link is cleared because schema v4 permits it only on `failed`. Its immutable,
+   * content-addressed artifact remains in the job's diagnostics directory as failure history.
+   */
+  resumeFailedStage(checkpoint: AudiobookResumeCheckpoint): void {
+    if (this.currentState !== 'failed' && this.currentState !== 'abandoned') {
+      throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'running')
+    }
+    if (checkpoint.stage !== this.currentStage) {
+      throw new DomainError('Resume checkpoint must describe the interrupted job stage')
+    }
+
+    let progress: AudiobookJobProgress
+    switch (checkpoint.stage) {
+      case 'extracting':
+        progress = {
+          currentChapterId: null,
+          direction: null,
+          completedSegments: 0,
+          totalSegments: 0,
+          latestMessage: 'Retrying EPUB extraction',
+        }
+        this.fallbackWarnings = Object.freeze([])
+        break
+      case 'directing':
+        this.validateDirectionCheckpoint(checkpoint)
+        progress = {
+          currentChapterId: null,
+          direction: Object.freeze({
+            completedChapters: checkpoint.completedChapters,
+            totalChapters: checkpoint.totalChapters,
+            completedPassages: checkpoint.completedPassages,
+            totalPassages: checkpoint.totalPassages,
+          }),
+          completedSegments: 0,
+          totalSegments: 0,
+          latestMessage: `Continuing direction after ${checkpoint.completedChapters} of ${checkpoint.totalChapters} chapters`,
+        }
+        // Only warnings reconstructed from approved persisted chapters are durable.
+        this.fallbackWarnings = Object.freeze([])
+        break
+      case 'rendering':
+        this.validateSegmentCheckpoint(
+          checkpoint.completedSegments,
+          checkpoint.totalSegments,
+          false,
+        )
+        progress = {
+          ...this.currentProgress,
+          currentChapterId: null,
+          completedSegments: checkpoint.completedSegments,
+          totalSegments: checkpoint.totalSegments,
+          latestMessage: `Continuing speech rendering with ${checkpoint.completedSegments} verified segments`,
+        }
+        break
+      case 'assembling':
+        this.validateSegmentCheckpoint(checkpoint.completedSegments, checkpoint.totalSegments, true)
+        progress = {
+          ...this.currentProgress,
+          currentChapterId: null,
+          completedSegments: checkpoint.completedSegments,
+          totalSegments: checkpoint.totalSegments,
+          latestMessage: 'Reassembling from verified segment audio',
+        }
+        break
+    }
+
+    this.currentState = 'running'
+    this.currentProgress = Object.freeze(progress)
+    this.completedCatalogRevision = null
+    this.failureMessage = null
+    this.currentFailureDiagnosticPath = null
+  }
+
   attachBook(bookId: string): void {
     if (this.currentState !== 'running' || this.currentStage !== 'extracting') {
       throw new DomainError('A book can only be attached during extraction')
@@ -368,14 +461,20 @@ export class AudiobookJob {
     })
   }
 
-  beginRendering(totalSegments: number): void {
-    if (!Number.isSafeInteger(totalSegments) || totalSegments < 1) {
-      throw new DomainError('Rendering requires a positive segment count')
+  beginRendering(totalSegments: number, verifiedSegments = 0): void {
+    if (
+      !Number.isSafeInteger(totalSegments) ||
+      totalSegments < 1 ||
+      !Number.isSafeInteger(verifiedSegments) ||
+      verifiedSegments < 0 ||
+      verifiedSegments > totalSegments
+    ) {
+      throw new DomainError('Rendering requires valid segment totals')
     }
     this.advance('rendering', 'Rendering speech')
     this.currentProgress = Object.freeze({
       ...this.currentProgress,
-      completedSegments: 0,
+      completedSegments: verifiedSegments,
       totalSegments,
     })
   }
@@ -721,6 +820,42 @@ export class AudiobookJob {
           throw new DomainError('Completed audiobook job snapshot is unreachable')
         }
         break
+    }
+  }
+
+  private validateDirectionCheckpoint(checkpoint: AudiobookDirectionProgress): void {
+    if (
+      this.attachedBookId === null ||
+      !Number.isSafeInteger(checkpoint.completedChapters) ||
+      !Number.isSafeInteger(checkpoint.totalChapters) ||
+      !Number.isSafeInteger(checkpoint.completedPassages) ||
+      !Number.isSafeInteger(checkpoint.totalPassages) ||
+      checkpoint.totalChapters < 1 ||
+      checkpoint.completedChapters < 0 ||
+      checkpoint.completedChapters > checkpoint.totalChapters ||
+      checkpoint.totalPassages < checkpoint.totalChapters ||
+      checkpoint.completedPassages < 0 ||
+      checkpoint.completedPassages > checkpoint.totalPassages
+    ) {
+      throw new DomainError('Direction resume checkpoint is invalid')
+    }
+  }
+
+  private validateSegmentCheckpoint(
+    completedSegments: number,
+    totalSegments: number,
+    requireComplete: boolean,
+  ): void {
+    if (
+      this.attachedBookId === null ||
+      !Number.isSafeInteger(completedSegments) ||
+      !Number.isSafeInteger(totalSegments) ||
+      totalSegments < 1 ||
+      completedSegments < 0 ||
+      completedSegments > totalSegments ||
+      (requireComplete && completedSegments !== totalSegments)
+    ) {
+      throw new DomainError('Segment resume checkpoint is invalid')
     }
   }
 

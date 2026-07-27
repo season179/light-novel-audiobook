@@ -419,6 +419,7 @@ class FakeAssembler implements AudioAssembler {
   readonly identity: string
   readonly events: string[]
   calls: AssembleAudiobookRequest[] = []
+  failOnce = false
 
   constructor(events: string[], identity = 'fake-ffmpeg:aac-lc-64k:pause-policy-1') {
     this.events = events
@@ -428,6 +429,10 @@ class FakeAssembler implements AudioAssembler {
   async assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput> {
     this.calls.push(request)
     this.events.push(`assemble:${request.reservation.version.label}`)
+    if (this.failOnce) {
+      this.failOnce = false
+      throw new Error('synthetic assembly failure')
+    }
     return {
       version: request.reservation.version,
       m4bPath: request.reservation.m4bPath,
@@ -1185,6 +1190,52 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.speech.endCalls).toBe(2)
   })
 
+  it('resumes assembly with zero TTS and a new numbered reservation', async () => {
+    const command = {
+      jobId: 'job-resume-assembly',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    app.assembler.failOnce = true
+    await expect(generate(app, command)).rejects.toThrow('synthetic assembly failure')
+    const failed = await app.repository.findJob(command.jobId)
+    expect(failed?.stage).toBe('assembling')
+    const speechCalls = app.speech.renderCalls.length
+    const engineConstructions = app.speechFactory.contexts.length
+    expect(app.repository.reservations.map((item) => item.version.value)).toEqual([1])
+
+    const resumed = await app.rendering.execute({ jobId: command.jobId, voices: command.voices })
+
+    expect(resumed.job.state).toBe('completed')
+    expect(resumed.generatedSegments).toBe(0)
+    expect(resumed.reusedSegments).toBe(4)
+    expect(app.speech.renderCalls).toHaveLength(speechCalls)
+    expect(app.speechFactory.contexts).toHaveLength(engineConstructions)
+    expect(app.repository.reservations.map((item) => item.version.value)).toEqual([1, 2])
+    expect(resumed.output.m4bPath).not.toBe(app.repository.reservations[0]?.m4bPath)
+  })
+
+  it('refuses a rendering resume after its exact-script confirmation is gone', async () => {
+    const command = {
+      jobId: 'job-resume-render-unconfirmed',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    app.speech.failOnceAtRenderCall = 3
+    await expect(generate(app, command)).rejects.toThrow('synthetic speech failure')
+    expect((await app.repository.findJob(command.jobId))?.stage).toBe('rendering')
+    const speechCalls = app.speech.renderCalls.length
+    app.directionApprovals.records.splice(0)
+
+    await expect(
+      app.rendering.execute({ jobId: command.jobId, voices: command.voices }),
+    ).rejects.toThrow(UnconfirmedDirectionError)
+    expect(app.speech.renderCalls).toHaveLength(speechCalls)
+    expect((await app.repository.findJob(command.jobId))?.state).toBe('failed')
+  })
+
   it('resumes when the director moved hosts, and still stales when its content identity moved', async () => {
     // Issue #54 item 2: a real director hashes its baseUrl and GPU lease lock path into its
     // self-reported identity. The composition root wraps it with a content-only identity, so a
@@ -1232,7 +1283,6 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     await makeUseCase(
       wrapped('gemma-self-hash:http://localhost:9999:/var/lock/lease-b.lock'),
     ).execute(command)
-    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
     const resumed = await app.rendering.execute({ jobId: command.jobId, voices })
     expect(resumed.job.state).toBe('completed')
     expect(resumed.reusedSegments).toBe(2)

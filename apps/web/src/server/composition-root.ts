@@ -28,7 +28,6 @@ import { createFakeSpeechEngineFactory } from './fakes/fake-speech-engine.js'
 import { InMemoryDirectionApprovalRepository } from './fakes/in-memory-direction-approvals.js'
 import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-approvals.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
-import { FallbackSelectionReview } from './fallback-selection-review.js'
 import { GenerationRunner } from './generation-runner.js'
 import { sliceLimitsForJobId } from './job-identity.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
@@ -120,15 +119,9 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly directorOptions?: DirectChapterOptions | undefined
 }
 
-/**
- * Everything one process composition builds. The exact-set review decision (#96 step 4) shares the
- * review service, runner and reviewer with the web API — a second composition would not see an
- * active render — but is built beside `AudiobookWebApi` because the render-gate half of #96 owns
- * that file while this step lands.
- */
+/** Everything one process composition builds. */
 export interface AudiobookComposition {
   readonly api: AudiobookWebApi
-  readonly fallbackSelection: FallbackSelectionReview
 }
 
 export const createAudiobookComposition = async (
@@ -227,7 +220,6 @@ export const createAudiobookComposition = async (
         ? {}
         : { directorOptions: options.directorOptions }),
     }),
-    fallbackSelection: new FallbackSelectionReview({ review, runner, reviewer }),
   }
 }
 
