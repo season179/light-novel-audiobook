@@ -19,7 +19,9 @@ FAKE=0
 
 die() { echo "web-real: $*" >&2; exit 1; }
 
-if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':3000[[:space:]]'; then
+# `command grep`, not bare `grep`: this host can shadow grep with a shell function whose -q exit
+# code does not mean what it says, and this exit code decides whether the app starts.
+if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | command grep -q ':3000[[:space:]]'; then
   die "port 3000 is already in use (another dev server or proof run?)"
 fi
 
