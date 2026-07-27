@@ -508,6 +508,147 @@ describe('fallback review CLI', () => {
     expect(approved.stdout).not.toContain('Is anyone there')
   })
 
+  it('approves an exact selected set across decision groups and leaves the rest pending', async () => {
+    const { root, book } = await preparedWorkspace('job-selected-fallbacks', {
+      heterogeneous: true,
+    })
+    const notices: FallbackReviewApprovalNotice[] = []
+
+    // The two pending segments disagree on speaker, reason and group, which the whole-book bulk
+    // path refuses — an explicit selection names its exact set instead and needs no homogeneity.
+    const report = await runFallbackReviewCommand({
+      action: 'approve',
+      workspaceRoot: root,
+      jobId: 'job-selected-fallbacks',
+      segmentIds: [segmentId],
+      resolveReviewer: () => 'Synthetic Selecting Reviewer',
+      announceApproval: (notice) => notices.push(notice),
+    })
+
+    expect(notices).toEqual([
+      {
+        actor: 'Synthetic Selecting Reviewer',
+        jobId: 'job-selected-fallbacks',
+        decision: 'approve the fallback voice for exactly the listed pending segments',
+        items: [
+          {
+            segmentId,
+            sourcePassageId: passageId,
+            kind: 'dialogue',
+            speakerId: null,
+            fallbackReason: 'unresolved_speaker',
+            speakerReason,
+            proposedVoiceProfileId: 'fallback',
+            decision: 'pending',
+            decidedBy: null,
+          },
+        ],
+      },
+    ])
+    expect(report).toMatchObject({
+      action: 'approve',
+      scope: 'selection',
+      approvedCount: 1,
+      remainingReviewCount: 1,
+      approvalId: null,
+    })
+    expect(JSON.stringify(report)).not.toContain('Is anyone there')
+
+    const database = openWorkspace(layoutFor(root))
+    const catalog = await new SqliteFallbackApprovalRepository(database).readCatalog(book.id)
+    database.close()
+    expect(catalog.grant?.decidedBy).toBe('Synthetic Selecting Reviewer')
+    expect(catalog.grant?.subjects.map((subject) => subject.segmentId)).toEqual([segmentId])
+    expect(catalog.approvals.map((record) => record.segmentId)).toEqual([segmentId])
+
+    const remaining = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-selected-fallbacks',
+    })
+    expect(remaining.items.map((item) => [item.segmentId, item.decision])).toEqual([
+      [secondSegmentId, 'pending'],
+    ])
+  })
+
+  it('rejects an exact set containing a segment that is no longer pending, changing nothing', async () => {
+    const { root, book } = await preparedWorkspace('job-stale-selection', {
+      heterogeneous: true,
+    })
+    // The queue the reviewer read had both segments pending; one was decided before the set landed.
+    await runFallbackReviewCommand({
+      action: 'approve',
+      workspaceRoot: root,
+      jobId: 'job-stale-selection',
+      segmentId: secondSegmentId,
+      resolveReviewer: () => 'Synthetic First Reviewer',
+    })
+    const beforeDatabase = openWorkspace(layoutFor(root))
+    const before = await new SqliteFallbackApprovalRepository(beforeDatabase).readCatalog(book.id)
+    beforeDatabase.close()
+
+    await expect(
+      runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-stale-selection',
+        segmentIds: [segmentId, secondSegmentId],
+        resolveReviewer: () => 'Synthetic Stale Reviewer',
+      }),
+    ).rejects.toThrow('does not have a pending fallback decision')
+    await expect(
+      runFallbackReviewCommand({
+        action: 'approve',
+        workspaceRoot: root,
+        jobId: 'job-stale-selection',
+        segmentIds: [segmentId, `${book.id}-ch0001-p000009-s0001`],
+        resolveReviewer: () => 'Synthetic Stale Reviewer',
+      }),
+    ).rejects.toThrow('does not have a pending fallback decision')
+
+    const afterDatabase = openWorkspace(layoutFor(root))
+    const after = await new SqliteFallbackApprovalRepository(afterDatabase).readCatalog(book.id)
+    afterDatabase.close()
+    expect(after).toEqual(before)
+    expect(after.grant).toBeUndefined()
+    expect(after.approvals.map((record) => record.segmentId)).toEqual([secondSegmentId])
+  })
+
+  it('approves a listed set from the CLI process and reports the selection scope', async () => {
+    const { root } = await preparedWorkspace('job-process-selection', { heterogeneous: true })
+
+    const approved = await run(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        CLI,
+        'approve',
+        '--workspace',
+        root,
+        '--job-id',
+        'job-process-selection',
+        '--segment-ids',
+        `${segmentId},${secondSegmentId}`,
+      ],
+      { env: { ...process.env, LNA_REVIEWER: 'Synthetic Process Reviewer' } },
+    )
+    expect(approved.stdout).toContain('"scope":"selection"')
+    expect(approved.stdout).toContain('"approvedCount":2')
+    expect(approved.stdout).toContain('"remainingReviewCount":0')
+    expect(approved.stdout).not.toContain('Is anyone there')
+    expect(approved.stdout).not.toContain('The second fixture line')
+
+    const relisted = await runFallbackReviewCommand({
+      action: 'list',
+      workspaceRoot: root,
+      jobId: 'job-process-selection',
+    })
+    expect(relisted.action).toBe('list')
+    if (relisted.action !== 'list') throw new Error('list command returned an approval report')
+    expect(relisted.pendingCount).toBe(0)
+  })
+
   it('fails closed before approval when no real reviewer identity can be resolved', async () => {
     const { root } = await preparedWorkspace('job-no-reviewer')
 

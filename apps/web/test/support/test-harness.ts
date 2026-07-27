@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import type { DirectChapterOptions } from '@light-novel-audiobook/application'
 import type { AudiobookClient } from '../../src/client/audiobook-client.js'
 import type { AudiobookWebApi } from '../../src/server/audiobook-web-api.js'
-import { createAudiobookWebApi } from '../../src/server/composition-root.js'
+import { createAudiobookComposition } from '../../src/server/composition-root.js'
 import { toWebApiResult } from '../../src/server/errors.js'
 import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
+import type { FallbackSelectionReview } from '../../src/server/fallback-selection-review.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
 import {
   createM1VoiceCast,
@@ -48,6 +49,8 @@ export class RenderGate {
 
 export interface TestHarness {
   readonly api: AudiobookWebApi
+  /** The exact-set decision path, sharing the composition's review ledgers and runner. */
+  readonly selection: FallbackSelectionReview
   readonly workspace: LocalWorkspace
   /** The shared fake engine, so a test can count renders across runs. */
   readonly speechEngine: FakeSpeechEngine
@@ -78,7 +81,7 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   })
   const directors: FakeDirectorModel[] = []
 
-  const api = await createAudiobookWebApi({
+  const composition = await createAudiobookComposition({
     workspace,
     voices,
     // Supplied through the canonical resolver (explicit configuration, never the OS account), so a
@@ -102,11 +105,12 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   })
 
   return {
-    api,
+    api: composition.api,
+    selection: composition.fallbackSelection,
     workspace,
     speechEngine,
     directors,
-    client: createInProcessClient(api),
+    client: createInProcessClient(composition),
     dispose: () => rm(root, { recursive: true, force: true }),
   }
 }
@@ -115,25 +119,37 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
  * Calls the same API the server functions call, and normalizes failures exactly the same way, so a
  * component test sees the contract the browser sees.
  */
-export const createInProcessClient = (api: AudiobookWebApi): AudiobookClient => ({
-  uploadEpub: ({ file }) =>
-    toWebApiResult('uploadEpub', async () =>
-      api.uploadEpub({ fileName: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }),
-    ),
-  startGeneration: (input) => toWebApiResult('startGeneration', () => api.startGeneration(input)),
-  getJobState: (input) => toWebApiResult('getJobState', () => api.getJobState(input)),
-  listChapterAudio: (input) =>
-    toWebApiResult('listChapterAudio', () => api.listChapterAudio(input)),
-  listUploads: () => toWebApiResult('listUploads', () => api.listUploads()),
-  listFallbackReview: (input) =>
-    toWebApiResult('listFallbackReview', () => api.listFallbackReview(input)),
-  approveAllFallbacks: (input) =>
-    toWebApiResult('approveAllFallbacks', () => api.approveAllFallbacks(input)),
-  approveFallback: (input) => toWebApiResult('approveFallback', () => api.approveFallback(input)),
-  revokeFallback: (input) => toWebApiResult('revokeFallback', () => api.revokeFallback(input)),
-  renderApprovedScript: (input) =>
-    toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
-})
+export const createInProcessClient = (composition: {
+  readonly api: AudiobookWebApi
+  readonly fallbackSelection: FallbackSelectionReview
+}): AudiobookClient => {
+  const { api, fallbackSelection } = composition
+  return {
+    uploadEpub: ({ file }) =>
+      toWebApiResult('uploadEpub', async () =>
+        api.uploadEpub({ fileName: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }),
+      ),
+    startGeneration: (input) => toWebApiResult('startGeneration', () => api.startGeneration(input)),
+    getJobState: (input) => toWebApiResult('getJobState', () => api.getJobState(input)),
+    listChapterAudio: (input) =>
+      toWebApiResult('listChapterAudio', () => api.listChapterAudio(input)),
+    listUploads: () => toWebApiResult('listUploads', () => api.listUploads()),
+    listFallbackReview: (input) =>
+      toWebApiResult('listFallbackReview', () => api.listFallbackReview(input)),
+    approveAllFallbacks: (input) =>
+      toWebApiResult('approveAllFallbacks', () => api.approveAllFallbacks(input)),
+    approveFallback: (input) => toWebApiResult('approveFallback', () => api.approveFallback(input)),
+    // The exact-set decision and the re-listed view, in the same order the server function does them.
+    approveSelectedFallbacks: (input) =>
+      toWebApiResult('approveSelectedFallbacks', async () => {
+        await fallbackSelection.approveSelected(input)
+        return api.listFallbackReview({ jobId: input.jobId })
+      }),
+    revokeFallback: (input) => toWebApiResult('revokeFallback', () => api.revokeFallback(input)),
+    renderApprovedScript: (input) =>
+      toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
+  }
+}
 
 /**
  * Waits for a job state, making the user's fallback-voice decision if the job stops for it.

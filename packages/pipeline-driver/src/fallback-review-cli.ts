@@ -30,6 +30,7 @@ export interface FallbackReviewApprovalNotice {
   readonly jobId: string
   readonly decision:
     | 'approve one homogeneous fallback decision group for every listed pending segment'
+    | 'approve the fallback voice for exactly the listed pending segments'
     | 'approve the fallback voice for the listed segment'
   readonly items: readonly FallbackReviewItem[]
 }
@@ -45,7 +46,7 @@ export interface ListFallbackReviewReport {
 
 export interface ApproveFallbackReviewReport {
   readonly action: 'approve'
-  readonly scope: 'book' | 'segment'
+  readonly scope: 'book' | 'segment' | 'selection'
   readonly jobId: string
   readonly actor: string
   readonly approvedCount: number
@@ -63,6 +64,11 @@ export interface FallbackReviewCommandOptions {
   readonly jobId: string
   /** With approve, makes an individual decision and clears any withdrawal for this segment. */
   readonly segmentId?: string | undefined
+  /**
+   * With approve, makes one exact-set decision over these pending segments — the 190-of-200 case.
+   * Every ID must still be pending when the decision lands; one stale ID rejects the whole set.
+   */
+  readonly segmentIds?: readonly string[] | undefined
   /** Defaults to the same environment/OS-account resolver as the local web review path. */
   readonly resolveReviewer?: (() => string) | undefined
   /** Called before the durable grant or segment approval is written. */
@@ -114,6 +120,71 @@ export async function runFallbackReviewCommand(
     const requestedSegmentId = options.segmentId?.trim()
     if (options.segmentId !== undefined && requestedSegmentId?.length === 0) {
       throw new DomainError('Fallback segment approval requires a segment ID')
+    }
+    if (requestedSegmentId !== undefined && options.segmentIds !== undefined) {
+      throw new DomainError(
+        'Fallback review approves either one segment or an explicit set, never both',
+      )
+    }
+    if (options.segmentIds !== undefined) {
+      const selectedIds = options.segmentIds.map((id) => id.trim())
+      if (selectedIds.length === 0 || selectedIds.some((id) => id.length === 0)) {
+        throw new DomainError('Fallback set approval requires at least one segment ID')
+      }
+      if (new Set(selectedIds).size !== selectedIds.length) {
+        throw new DomainError('Fallback set approval cannot list the same segment twice')
+      }
+      const pendingById = new Map(pending.map((item) => [item.segmentId, item]))
+      const notPending = selectedIds.filter((id) => !pendingById.has(id))
+      if (notPending.length > 0) {
+        throw new DomainError(
+          `Segment ${notPending.join(', ')} does not have a pending fallback decision for audiobook job ${jobId}`,
+        )
+      }
+      const items = Object.freeze(
+        selectedIds.map((id) => {
+          const item = pendingById.get(id)
+          if (item === undefined) throw new DomainError(`Segment ${id} is not pending`)
+          return reviewItem(item)
+        }),
+      )
+      options.announceApproval?.(
+        Object.freeze({
+          actor,
+          jobId,
+          decision: 'approve the fallback voice for exactly the listed pending segments',
+          items,
+        }),
+      )
+      // The service re-checks every ID against the live queue inside the catalog lock, so a
+      // decision that moved between this listing and the write rejects the whole set.
+      const reconciliation = await review.grantBookFallback({
+        jobId,
+        decidedBy: actor,
+        segmentIds: selectedIds,
+      })
+      const grant = reconciliation.grant
+      if (grant === undefined || grant.decidedBy !== actor) {
+        throw new DomainError(
+          `Audiobook job ${jobId} did not persist the attributed fallback grant`,
+        )
+      }
+      if (reconciliation.created.length !== items.length) {
+        throw new DomainError(
+          `Audiobook job ${jobId} approved ${reconciliation.created.length} of the ${items.length} selected segments; an exact-set approval covers all or none`,
+        )
+      }
+      return Object.freeze({
+        action: 'approve',
+        scope: 'selection',
+        jobId,
+        actor,
+        approvedCount: reconciliation.created.length,
+        remainingReviewCount: reconciliation.pending.length,
+        grantId: grant.grantId,
+        approvalId: null,
+        items,
+      })
     }
     if (requestedSegmentId !== undefined) {
       const requested = reviewRequired.find((item) => item.segmentId === requestedSegmentId)

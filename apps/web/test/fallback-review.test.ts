@@ -185,3 +185,86 @@ describe('fallback approvals in the web app (issue #45)', () => {
     await waitForJobState(api, started.jobId, (state) => state.finished)
   })
 })
+
+describe('exact-set fallback decisions in the web app (issue #96 step 4)', () => {
+  it('approves exactly the selected lines and keeps the rest blocking', async () => {
+    const { api, jobId, harness: app } = await startAndStopForReview('exact-set')
+    const before = await api.listFallbackReview({ jobId })
+    // The fixture book produces more than one unresolved speaker; this test needs the N-of-M shape.
+    expect(before.items.length).toBeGreaterThan(1)
+    const selectedIds = before.items.slice(0, -1).map((item) => item.segmentId)
+    const leftOut = before.items.at(-1)
+    if (leftOut === undefined) throw new Error('fixture has no fallback segments')
+
+    const after = await app.client.approveSelectedFallbacks({ jobId, segmentIds: selectedIds })
+
+    if (!after.ok) throw new Error(`exact-set approval rejected: ${after.error.message}`)
+    // Exactly the selected lines carry a decision, each attributed to the server-side reviewer.
+    const decided = after.value.items.filter((item) => item.decision === 'approved')
+    expect(decided.map((item) => item.segmentId).sort()).toEqual([...selectedIds].sort())
+    expect(decided.every((item) => item.decidedBy === TEST_REVIEWER)).toBe(true)
+    expect(decided.every((item) => item.approvalId !== null)).toBe(true)
+    // The one line the user did not tick is still pending and still blocks the render.
+    expect(after.value.pendingCount).toBe(1)
+    const stillPending = after.value.items.find((item) => item.decision !== 'approved')
+    expect(stillPending?.segmentId).toBe(leftOut.segmentId)
+    const job = await api.getJobState({ jobId })
+    expect(job?.review).toEqual({
+      status: 'needs_decisions',
+      blockers: 1,
+      total: before.items.length,
+    })
+    expect(app.speechEngine.rendered).toBe(0)
+  })
+
+  it('rejects the whole set when one selected line was decided since the page was read', async () => {
+    const { api, jobId, harness: app } = await startAndStopForReview('stale-set')
+    const before = await api.listFallbackReview({ jobId })
+    expect(before.items.length).toBeGreaterThan(1)
+    const decidedElsewhere = before.items[0]
+    if (decidedElsewhere === undefined) throw new Error('fixture has no fallback segments')
+    await api.approveFallback({ jobId, segmentId: decidedElsewhere.segmentId })
+
+    const result = await app.client.approveSelectedFallbacks({
+      jobId,
+      segmentIds: before.items.map((item) => item.segmentId),
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.message).toContain('not awaiting a decision in the current review queue')
+    // Nothing partially approved: the remaining lines are exactly as pending as before, so the
+    // user re-reads the queue and decides over what is actually on offer.
+    const after = await api.listFallbackReview({ jobId })
+    expect(after.pendingCount).toBe(before.items.length - 1)
+    expect(after.grantedBy).toBeNull()
+    expect(app.speechEngine.rendered).toBe(0)
+  })
+
+  it('renders after every blocking line is approved through exact sets', async () => {
+    const { api, jobId, harness: app } = await startAndStopForReview('set-then-render')
+    const before = await api.listFallbackReview({ jobId })
+    expect(before.items.length).toBeGreaterThan(1)
+    const first = before.items[0]
+    if (first === undefined) throw new Error('fixture has no fallback segments')
+
+    // Two exact-set decisions, not one blanket one: the user accepts line by line in batches.
+    const firstSet = await app.client.approveSelectedFallbacks({
+      jobId,
+      segmentIds: [first.segmentId],
+    })
+    expect(firstSet.ok).toBe(true)
+    const rest = await app.client.approveSelectedFallbacks({
+      jobId,
+      segmentIds: before.items.slice(1).map((item) => item.segmentId),
+    })
+    if (!rest.ok) throw new Error(`second exact-set approval rejected: ${rest.error.message}`)
+    expect(rest.value.pendingCount).toBe(0)
+    expect(rest.value.items.every((item) => item.decision === 'approved')).toBe(true)
+
+    await api.renderApprovedScript({ jobId })
+    const finished = await waitForJobState(api, jobId, (state) => state.finished)
+    expect(finished.state).toBe('completed')
+    expect(app.speechEngine.rendered).toBeGreaterThan(0)
+  })
+})

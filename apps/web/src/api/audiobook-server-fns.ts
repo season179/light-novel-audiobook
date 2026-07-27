@@ -132,6 +132,33 @@ export const approveFallbackFn = createServerFn({ method: 'POST' })
       ),
   )
 
+/**
+ * One decision over exactly the selected lines (issue #96 step 4): the 190-of-200 case. The server
+ * rejects the whole set when any line is no longer awaiting a decision — the queue moves between
+ * reading it and clicking, and a silent subset would report success the user never granted.
+ */
+export const approveSelectedFallbacksFn = createServerFn({ method: 'POST' })
+  .validator((data: { jobId: string; segmentIds: string[] }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<FallbackReviewView>> =>
+      toWebApiResult('approveSelectedFallbacks', async () => {
+        const jobId = requireIdInput(data.jobId, 'Job ID')
+        if (!Array.isArray(data.segmentIds) || data.segmentIds.length === 0) {
+          throw new WebApiError('invalid_request', 'Choose at least one line to approve.')
+        }
+        const segmentIds = data.segmentIds.map((segmentId) =>
+          requireIdInput(segmentId, 'Segment ID'),
+        )
+        // Same composition singleton as `api()`: the decision sees the same runner guard and the
+        // same review ledgers, and the re-listed view reads what the write actually changed.
+        const composition = await (
+          await import('../server/composition-root.js')
+        ).getAudiobookComposition()
+        await composition.fallbackSelection.approveSelected({ jobId, segmentIds })
+        return composition.api.listFallbackReview({ jobId })
+      }),
+  )
+
 export const revokeFallbackFn = createServerFn({ method: 'POST' })
   .validator((data: { jobId: string; segmentId: string }) => data)
   .handler(

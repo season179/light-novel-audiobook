@@ -67,6 +67,7 @@
           <li><a href="#directing">Directing, known total</a></li>
           <li><a href="#rendering">Rendering</a></li>
           <li><a href="#awaiting-review">Awaiting review — needs decisions</a></li>
+          <li><a href="#awaiting-review-select">Awaiting review — exact-set selection</a></li>
           <li><a href="#awaiting-review-ready">Awaiting review — ready to confirm</a></li>
           <li><a href="#abandoned">Abandoned</a></li>
           <li><a href="#failed">Failed</a></li>
@@ -322,6 +323,92 @@
               <dt>Job</dt>
               <dd><code>job-preview0000000000001</code></dd>
             </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 6b. Awaiting review, exact-set selection: two lines ticked, the third stays blocking. -->
+    <section
+      class="preview"
+      id="awaiting-review-select"
+      aria-labelledby="preview-awaiting-review-select"
+    >
+      <h2 class="preview-label" id="preview-awaiting-review-select">
+        Awaiting review — exact-set selection, 2 of 3 ticked and 1 staying blocking
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-review-select">
+          <h2 id="job-heading-review-select">The Clockwork Tidewater</h2>
+          <div
+            class="status-block"
+            data-state="awaiting_review"
+            data-review="needs_decisions"
+            role="status"
+            aria-live="polite"
+          >
+            <p class="stage">Waiting for fallback voice review — 3 lines need a decision.</p>
+            <p class="latest">Awaiting fallback approval review</p>
+          </div>
+          <section class="stack bordered" aria-labelledby="review-heading-select">
+            <h3 id="review-heading-select">Unresolved speakers need your decision (3)</h3>
+            <p class="hint">
+              3 of 3 lines have no cast voice. Approving uses the fallback dialogue voice for them;
+              nothing is rendered until you decide.
+            </p>
+            <div class="row">
+              <button type="button">Use the fallback voice for all 3 unresolved speakers</button>
+              <button type="button" disabled>Render approved script</button>
+              <button type="button">Hide the lines</button>
+            </div>
+            <fieldset class="selection">
+              <legend>Approve selected lines</legend>
+              <div class="stack">
+                <p class="hint" aria-live="polite">
+                  2 of 3 waiting selected — approving them leaves 1 still blocking.
+                </p>
+                <div class="row">
+                  <button type="button">Approve the 2 selected lines</button>
+                  <button type="button">Select all 3 waiting</button>
+                  <button type="button">Clear selection</button>
+                </div>
+              </div>
+            </fieldset>
+            <ul class="listing">
+              <li>
+                <label class="review-select">
+                  <input type="checkbox" checked />
+                  <span>
+                    <strong>The Brine Road</strong> — no speaker could be identified. The director
+                    could not resolve a speaker from the supplied roster and context. “A lantern
+                    moves along the lock where no hand carries it.” <em>not decided</em>
+                  </span>
+                </label>
+                <button type="button">Approve this speaker</button>
+              </li>
+              <li>
+                <label class="review-select">
+                  <input type="checkbox" checked />
+                  <span>
+                    <strong>A Lantern Over the Lock</strong> — pell has no cast voice. Speaker pell
+                    has no approved cast voice. “Keep the gate until the second bell, whatever the
+                    tide says.” <em>not decided</em>
+                  </span>
+                </label>
+                <button type="button">Approve this speaker</button>
+              </li>
+              <li>
+                <label class="review-select">
+                  <input type="checkbox" />
+                  <span>
+                    <strong>A Lantern Over the Lock</strong> — no speaker could be identified. The
+                    director could not resolve a speaker from the supplied roster and context.
+                    “Then the towpath can keep my name as well.” <em>not decided</em>
+                  </span>
+                </label>
+                <button type="button">Approve this speaker</button>
+              </li>
+            </ul>
           </section>
         </section>
       </main>

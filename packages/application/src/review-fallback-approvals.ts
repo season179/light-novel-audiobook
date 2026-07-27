@@ -57,6 +57,15 @@ export interface FallbackApprovalDecisionRequest {
 export interface BookFallbackGrantRequest {
   readonly jobId: string
   readonly decidedBy: string
+  /**
+   * The exact pending segments the human selected from the displayed review queue, or `undefined`
+   * for the whole-queue decision. When present, every ID must still be on offer **at decision
+   * time**: the queue moves between the human reading it and clicking, and a grant that silently
+   * covers a segment they never saw — or silently skips one they think they approved — is the
+   * failure this gate exists to prevent. One stale ID therefore rejects the whole request, so the
+   * outcome is always "exactly what you approved", never a subset reported as the set.
+   */
+  readonly segmentIds?: readonly string[] | undefined
 }
 
 /** Raised when a review decision is attempted while a render owns the job. */
@@ -250,11 +259,14 @@ export class ReviewFallbackApprovals {
   }
 
   /**
-   * The M1 book-wide decision: authorize the fallback voice for every unresolved speaker in this
-   * book. One explicit human act, recorded durably with its actor, that still produces one record
-   * per segment — so revoking one speaker's approval later invalidates only that speaker's audio.
+   * One book-wide decision over an exact set: authorize the fallback voice for the listed pending
+   * segments — or, with no `segmentIds`, for every unresolved speaker in this book. One explicit
+   * human act, recorded durably with its actor, that still produces one record per segment — so
+   * revoking one speaker's approval later invalidates only that speaker's audio.
    *
-   * Segments the human has already excluded are **not** re-approved by a grant.
+   * Segments the human has already excluded are **not** re-approved by a grant, and are not part of
+   * the offerable set an explicit selection is checked against: a withdrawal outranks every bulk
+   * act and is only ever undone by naming that one segment again.
    */
   async grantBookFallback(
     request: BookFallbackGrantRequest,
@@ -266,11 +278,15 @@ export class ReviewFallbackApprovals {
       const catalog = await this.approvals.readCatalog(book.id)
       const live = new Map(catalog.approvals.map((record) => [record.segmentId, record]))
       const excluded = new Set(catalog.exclusions.map((record) => record.segmentId))
-      const subjects = collectFallbackSubjects(book).filter((subject) => {
+      const offerable = collectFallbackSubjects(book).filter((subject) => {
         if (excluded.has(subject.segment.id)) return false
         const existing = live.get(subject.segment.id)
         return existing === undefined || !approvalStillDescribes(existing, subject)
       })
+      const subjects =
+        request.segmentIds === undefined
+          ? offerable
+          : selectOfferable(offerable, request.segmentIds)
       if (subjects.length === 0) {
         if (catalog.grant === undefined) {
           throw new DomainError('A fallback grant requires at least one pending reviewed subject')
@@ -415,6 +431,38 @@ export class ReviewFallbackApprovals {
     if (Number.isNaN(instant.getTime())) throw new DomainError('Decision clock returned no time')
     return instant.toISOString()
   }
+}
+
+/**
+ * Resolves the human's announced selection against the queue as it is **now**, inside the catalog
+ * lock. Anything not on offer — resolved, excluded, already approved, or never a fallback subject
+ * — rejects the whole request rather than being silently ignored or silently approved, because the
+ * human's mental model is "I approved these exact N" and a partial success that reports nothing is
+ * a lie. Only segment IDs appear in the error, never story text.
+ */
+function selectOfferable(
+  offerable: readonly FallbackApprovalSubject[],
+  segmentIds: readonly string[],
+): readonly FallbackApprovalSubject[] {
+  if (segmentIds.length === 0) {
+    throw new DomainError('A fallback grant selection requires at least one segment')
+  }
+  if (new Set(segmentIds).size !== segmentIds.length) {
+    throw new DomainError('A fallback grant selection cannot contain the same segment twice')
+  }
+  const onOffer = new Map(offerable.map((subject) => [subject.segment.id, subject]))
+  const notOnOffer = segmentIds.filter((segmentId) => !onOffer.has(segmentId))
+  if (notOnOffer.length > 0) {
+    throw new DomainError(
+      `Fallback segment ${notOnOffer.join(', ')} is not awaiting a decision in the current review queue; the queue changed since it was read, so nothing was approved. Re-read the queue and decide again`,
+    )
+  }
+  return segmentIds.map((segmentId) => {
+    const subject = onOffer.get(segmentId)
+    if (subject === undefined)
+      throw new DomainError(`Fallback segment ${segmentId} is not on offer`)
+    return subject
+  })
 }
 
 function grantSubjectFrom(subject: FallbackApprovalSubject): BookFallbackGrantSubject {
