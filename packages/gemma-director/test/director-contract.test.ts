@@ -523,6 +523,10 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     expect(exhausted.findings.map((finding) => finding.code)).toEqual(['text_substitution'])
     expect(exhausted.attempts).toHaveLength(3)
     expect(new Set(exhausted.attempts.map((attempt) => attempt.requestSha256)).size).toBe(3)
+    expect(new Set(exhausted.attempts.map((attempt) => attempt.rawOutputSha256)).size).toBe(1)
+    expect(exhausted.message).toContain(
+      '3 distinct sampling parameter set(s) producing 1 distinct output(s)',
+    )
     expect(server.requests).toHaveLength(3)
     expect(progress.events.at(-1)).toMatchObject({
       state: 'failed',

@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { DirectionChunkingSettings } from '../src/chunking.js'
 import { DirectorError } from '../src/errors.js'
+import { DirectorFidelityExhaustedError } from '../src/fidelity-recovery.js'
 import { GemmaDirectorModel } from '../src/gemma-director-model.js'
 import type {
   DirectorProgressEvent,
@@ -300,6 +301,64 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     expect(successfulWindowSizes).toEqual([1, 1, 1, 1])
     expect(progress.events.filter((event) => event.state === 'failed')).toHaveLength(0)
     expect(progress.events.at(-1)).toMatchObject({ state: 'completed' })
+  })
+
+  it('shrinks a fidelity-exhausted window and preserves coverage and identity', async () => {
+    const texts = ['First passage.', 'Second passage.', 'Third passage.', 'Fourth passage.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    // Every sampling profile fails for a wide request; two-passage windows are the recovery floor.
+    server.fidelityFailureAbovePassages = 2
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model, progress } = create({ windowPassageBudget: 8, maxWindowShrinks: 3 })
+
+    const firstDirection = model.directChapter(book, book.chapters[0] as Chapter)
+    await expect(firstDirection).resolves.toMatchObject({ chapterId: 'chapter-01' })
+    const first = await firstDirection
+
+    expect(server.requests.map((request) => request.passages.length)).toEqual([4, 4, 4, 2, 2])
+    // Count only accepted narrow windows: retries intentionally repeat the failed wide range.
+    expect(
+      server.requests
+        .filter((request) => request.passages.length <= 2)
+        .flatMap((request) => request.passages.map((passage) => passage.source_passage_id)),
+    ).toEqual(ids)
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, first.segments),
+    ).not.toThrow()
+    expect(progress.events.filter((event) => event.state === 'failed')).toHaveLength(0)
+
+    // Repeating the same rejected and accepted responses produces stable chapter identities even
+    // though adaptive recovery changed the request windowing from the configured wide plan.
+    server.requests.splice(0)
+    const second = await model.directChapter(book, book.chapters[0] as Chapter)
+    expect(second.requestSha256).toBe(first.requestSha256)
+    expect(second.outputSha256).toBe(first.outputSha256)
+    expect(server.requests.map((request) => request.passages.length)).toEqual([4, 4, 4, 2, 2])
+  })
+
+  it('propagates fidelity exhaustion when the shrink budget is exhausted', async () => {
+    const texts = ['First passage.', 'Second passage.', 'Third passage.', 'Fourth passage.']
+    const ids = texts.map((_, index) => `passage-${String(index + 1).padStart(3, '0')}`)
+    server = new OracleLlamaServer(oracleFor(ids, texts))
+    server.fidelityFailureAbovePassages = 1
+    await server.start()
+    const book = makeChapterBook(texts, ids)
+    const { model, progress } = create({ windowPassageBudget: 8, maxWindowShrinks: 1 })
+
+    const direction = model.directChapter(book, book.chapters[0] as Chapter)
+    await expect(direction).rejects.toBeInstanceOf(DirectorFidelityExhaustedError)
+    const exhausted = (await direction.catch((error: unknown) => error)) as
+      | DirectorFidelityExhaustedError
+      | undefined
+    expect(exhausted?.findings).toHaveLength(1)
+    expect(exhausted?.attempts).toHaveLength(3)
+    expect(server.requests.map((request) => request.passages.length)).toEqual([4, 4, 4, 2, 2, 2])
+    expect(progress.events.at(-1)).toMatchObject({
+      state: 'failed',
+      error: { code: 'fidelity', retryable: false },
+    })
   })
 
   it('gives up with the truncation error after the shrink budget is exhausted', async () => {

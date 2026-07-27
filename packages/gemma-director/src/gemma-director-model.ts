@@ -605,15 +605,16 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
           sentWindows.push(window)
           nextIndex = window.end
         } catch (error: unknown) {
-          // A truncated response on a single-passage window cannot be fixed by shrinking.
+          // A failed single-passage window cannot be fixed by shrinking.
           if (
-            this.isTruncationSignature(error) &&
+            this.isWindowTooLargeSignature(error) &&
             window.end - window.start > 1 &&
             shrinks < this.chunking.maxWindowShrinks
           ) {
-            // The response was cut off (or the prompt overflowed despite the estimate): halve
-            // the window and retry the same chapter position. Shrinks persist for the chapter,
-            // so one oversized window tightens every later window instead of re-failing.
+            // Truncation means the window exceeded a context/output limit. Fidelity exhaustion is
+            // a different failure, but reducing the verbatim echo burden is its remaining recovery
+            // axis after bounded resampling. Halve and retry the same chapter position in either
+            // case. Shrinks persist so later windows do not repeat the same oversized failure.
             shrinks += 1
             const previousEnd = window.end
             let reduced = window
@@ -773,6 +774,14 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
     if (error.code === 'malformed_output') return true
     if (error.code !== 'model' && error.code !== 'http') return false
     return CONTEXT_OVERFLOW_WORDING.test(directorErrorChainText(error))
+  }
+
+  /**
+   * Fidelity exhaustion is not a truncation signature, but both failures can recover by reducing
+   * the amount of source text the model must echo in one response.
+   */
+  private isWindowTooLargeSignature(error: unknown): boolean {
+    return this.isTruncationSignature(error) || error instanceof DirectorFidelityExhaustedError
   }
 
   /**

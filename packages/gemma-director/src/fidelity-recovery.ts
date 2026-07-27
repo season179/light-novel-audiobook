@@ -150,9 +150,10 @@ export class DirectorFidelityExhaustedError extends DirectorFidelityError {
     findings: readonly FidelityFinding[],
     readonly attempts: readonly FidelityRecoveryAttempt[],
   ) {
+    const distinctOutputs = new Set(attempts.map((attempt) => attempt.rawOutputSha256)).size
     super(
       findings,
-      `Gemma Director fidelity recovery exhausted ${attempts.length} distinct sampling attempt(s); rejected source text remains blocked`,
+      `Gemma Director fidelity recovery exhausted ${attempts.length} distinct sampling parameter set(s) producing ${distinctOutputs} distinct output(s); rejected source text remains blocked`,
     )
   }
 }
