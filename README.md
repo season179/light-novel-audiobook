@@ -18,6 +18,32 @@ Architecture foundation and model evaluation. See [`docs/PLAN.md`](docs/PLAN.md)
 - Vitest, Zod, and Biome
 - Direct loopback-only local runtime endpoints
 
+## Using it
+
+Install two Desktop shortcuts once:
+
+```sh
+powershell.exe -ExecutionPolicy Bypass -File "$(wslpath -w scripts/windows/install-desktop-shortcuts.ps1)"
+```
+
+**Light Novel Audiobook** starts the app with real models and opens `http://localhost:3000` once
+the server answers. **Stop Light Novel Audiobook** stops it from outside, for when the launcher
+window was closed with the X button rather than Ctrl-C — Windows does not reliably deliver a
+signal through `wsl.exe`, and an abandoned run keeps roughly 15 GB of the card.
+
+Both are thin wrappers, so the same thing works from a terminal:
+
+```sh
+./scripts/start-web-app.sh          # real models
+./scripts/start-web-app.sh --fake   # same UI, synthetic audio, no GPU
+./scripts/stop-web-app.sh
+```
+
+Stopping means stopping: the server's own release path reaps the owned `llama-server` and drops the
+GPU lease, then anything it started is swept — including the Qwen worker, which is spawned detached
+and so is missed by a process-group signal alone. `scripts/test/lna-process-tree.test.sh` proves
+that against real processes.
+
 ## Development
 
 Development is supported from WSL2 with native Linux Node.js 24 and pnpm 11. Follow the
