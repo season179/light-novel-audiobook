@@ -77,8 +77,6 @@ describe('failure diagnosis after a cold start', () => {
       expect(reloaded?.error).toContain(artifactPath)
 
       const persisted = await readFile(artifactPath as string, 'utf8')
-      expect(persisted).not.toContain(sentinel)
-      expect(persisted).toContain(createHash('sha256').update(sentinel).digest('hex'))
       expect(JSON.parse(persisted)).toMatchObject({
         jobId: job.id,
         error: {
@@ -91,6 +89,8 @@ describe('failure diagnosis after a cold start', () => {
           },
         },
       })
+      expect(persisted).not.toContain(sentinel)
+      expect(persisted).toContain(createHash('sha256').update(sentinel).digest('hex'))
     } finally {
       reopenedDatabase.close()
     }
