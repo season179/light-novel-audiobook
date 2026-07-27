@@ -190,9 +190,7 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     await waitFor(
       () =>
         expect(
-          screen.getByText(
-            'Waiting for fallback voice review. Continuing starts speech rendering.',
-          ),
+          screen.getByText(/Waiting for fallback voice review — \d+ lines need a decision\./),
         ).toBeTruthy(),
       WAIT,
     )

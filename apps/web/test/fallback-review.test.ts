@@ -70,6 +70,32 @@ describe('fallback approvals in the web app (issue #45)', () => {
     expect(stillWaiting.state).toBe('completed')
   })
 
+  it('derives the review status from the live records: an approval flips it with no new snapshot', async () => {
+    const { api, jobId } = await startAndStopForReview('derived-review')
+    const queue = await api.listFallbackReview({ jobId })
+
+    const waiting = await api.getJobState({ jobId })
+    expect(waiting?.state).toBe('awaiting_review')
+    expect(waiting?.review).toEqual({
+      status: 'needs_decisions',
+      blockers: queue.items.length,
+      total: queue.items.length,
+    })
+
+    await api.approveAllFallbacks({ jobId })
+
+    const decided = await api.getJobState({ jobId })
+    expect(decided?.review).toEqual({
+      status: 'ready_to_confirm',
+      blockers: 0,
+      total: queue.items.length,
+    })
+    // The snapshot was never rewritten — same stored message, opposite answer. A projection read
+    // from the message would still report needs_decisions here.
+    expect(decided?.latestMessage).toBe(waiting?.latestMessage)
+    expect(decided?.latestMessage).toContain('Awaiting fallback approval review')
+  })
+
   it('records one attributed decision per unresolved speaker from one book-wide action', async () => {
     const { api, jobId } = await startAndStopForReview('approve-all')
     const before = await api.listFallbackReview({ jobId })

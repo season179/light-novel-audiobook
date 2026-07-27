@@ -63,6 +63,7 @@ const view = (overrides: Partial<JobStateView>): JobStateView => {
     error: null,
     active: true,
     finished: false,
+    review: null,
     warnings: [],
     output: null,
     ...overrides,
@@ -344,6 +345,7 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
         percentComplete: null,
         active: false,
         latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'needs_decisions', blockers: 2, total: 2 },
       }),
     }))
     const listFallbackReview = vi.fn(async () => ({ ok: true as const, value: reviewView() }))
@@ -379,11 +381,15 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
 
     expect(
       await screen.findByText(
-        'Waiting for fallback voice review. Continuing starts speech rendering.',
+        'Waiting for fallback voice review — 2 lines need a decision.',
         undefined,
         WAIT,
       ),
     ).toBeDefined()
+    // The status block stays amber awaiting_review; the sub-situation rides on data-review.
+    const statusBlock = screen.getByRole('status')
+    expect(statusBlock.getAttribute('data-state')).toBe('awaiting_review')
+    expect(statusBlock.getAttribute('data-review')).toBe('needs_decisions')
     expect(
       await screen.findByRole(
         'heading',
@@ -411,6 +417,113 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
     ).toBe(false)
 
     await user.click(screen.getByRole('button', { name: 'Render approved script' }))
+    expect(renderApprovedScript).toHaveBeenCalledWith({ jobId: JOB_ID })
+  })
+
+  it('shows an empty review queue as nothing blocking, with the render action on offer', async () => {
+    // Issue #96: zero fallback warnings used to vanish the whole panel, leaving nothing to look
+    // at and nothing to click. An empty queue is a good state and must say so.
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'awaiting_review',
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+        active: false,
+        latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'ready_to_confirm', blockers: 0, total: 0 },
+      }),
+    }))
+    const listFallbackReview = vi.fn(async () => ({
+      ok: true as const,
+      value: reviewView({ pendingCount: 0, items: [] }),
+    }))
+    const renderApprovedScript = vi.fn(async () => ({
+      ok: true as const,
+      value: { jobId: JOB_ID, job: view({}) },
+    }))
+
+    const user = userEvent.setup()
+    renderPanel(stubClient({ getJobState, listFallbackReview, renderApprovedScript }))
+
+    // Same amber job state, different sub-situation — carried in the DOM, never colour alone.
+    const statusBlock = await screen.findByRole('status', undefined, WAIT)
+    await waitFor(
+      () => expect(statusBlock.getAttribute('data-review')).toBe('ready_to_confirm'),
+      WAIT,
+    )
+    expect(statusBlock.getAttribute('data-state')).toBe('awaiting_review')
+    expect(
+      screen.getByText(
+        'Direction finished and nothing needs a decision. Confirming starts speech rendering.',
+      ),
+    ).toBeDefined()
+
+    // The panel renders instead of vanishing, and the render action is available immediately.
+    expect(
+      await screen.findByRole('heading', { name: 'Nothing needs your decision' }, WAIT),
+    ).toBeDefined()
+    expect(screen.getByText(/nothing is blocking/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: /Use the fallback voice/ })).toBeNull()
+    const renderButton = screen.getByRole('button', { name: 'Render approved script' })
+    expect((renderButton as HTMLButtonElement).disabled).toBe(false)
+
+    await user.click(renderButton)
+    expect(renderApprovedScript).toHaveBeenCalledWith({ jobId: JOB_ID })
+  })
+
+  it('shows ready_to_confirm once every queued line carries a decision', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'awaiting_review',
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+        active: false,
+        latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'ready_to_confirm', blockers: 0, total: 2 },
+      }),
+    }))
+    const allApproved = reviewView({
+      grantedBy: 'ui-test-reviewer',
+      pendingCount: 0,
+      items: reviewView().items.map((item) => ({
+        ...item,
+        decision: 'approved' as const,
+        decidedBy: 'ui-test-reviewer',
+        approvalId: `approval-${item.segmentId}`,
+      })),
+    })
+    const listFallbackReview = vi.fn(async () => ({ ok: true as const, value: allApproved }))
+    const renderApprovedScript = vi.fn(async () => ({
+      ok: true as const,
+      value: { jobId: JOB_ID, job: view({}) },
+    }))
+
+    const user = userEvent.setup()
+    renderPanel(stubClient({ getJobState, listFallbackReview, renderApprovedScript }))
+
+    await waitFor(
+      () => expect(screen.getByRole('status').getAttribute('data-review')).toBe('ready_to_confirm'),
+      WAIT,
+    )
+    expect(
+      await screen.findByText(
+        'Every unresolved speaker has a decision. Render the approved script to continue.',
+        undefined,
+        WAIT,
+      ),
+    ).toBeDefined()
+    const renderButton = screen.getByRole('button', { name: 'Render approved script' })
+    expect((renderButton as HTMLButtonElement).disabled).toBe(false)
+
+    await user.click(renderButton)
     expect(renderApprovedScript).toHaveBeenCalledWith({ jobId: JOB_ID })
   })
 

@@ -19,6 +19,9 @@ export interface FallbackReviewPanelProps {
  *
  * The excerpt shown for each line is story text. It is here because nobody can approve a voice for a
  * line they cannot read; it must not be logged or persisted into job state.
+ *
+ * An empty queue is a good state, not a missing one (issue #96): direction finished and nothing is
+ * blocking, so the panel says so and offers the render action instead of vanishing.
  */
 export function FallbackReviewPanel({
   review,
@@ -29,10 +32,27 @@ export function FallbackReviewPanel({
   onRender,
 }: FallbackReviewPanelProps) {
   const [expanded, setExpanded] = useState(false)
-  if (!review.awaitingReview || review.items.length === 0) return null
+  if (!review.awaitingReview) return null
 
   const approved = review.items.filter((item) => item.decision === 'approved')
   const undecided = review.items.length - approved.length
+
+  if (review.items.length === 0) {
+    return (
+      <section className="stack bordered" aria-labelledby="review-heading">
+        <h3 id="review-heading">Nothing needs your decision</h3>
+        <p className="hint">
+          Direction finished and every line has a cast voice, so nothing is blocking. Render the
+          approved script when you are ready.
+        </p>
+        <div className="row">
+          <button type="button" onClick={onRender} disabled={busy}>
+            Render approved script
+          </button>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="stack bordered" aria-labelledby="review-heading">

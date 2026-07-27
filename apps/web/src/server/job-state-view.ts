@@ -46,6 +46,31 @@ export interface PipelineStageView {
   readonly summary: string | null
 }
 
+/**
+ * The two resting situations inside `awaiting_review` (issue #96). The job state stays
+ * `awaiting_review` for both — this distinction is derived at read time, never stored, because a
+ * stored copy goes stale the moment an approval changes.
+ */
+export type ReviewStatus =
+  /** At least one blocking decision is missing or no longer valid. */
+  | 'needs_decisions'
+  /** Nothing is blocking; the script is waiting on the user's go-ahead. */
+  | 'ready_to_confirm'
+
+/** The review surface of an `awaiting_review` job: which situation it is in, and what blocks it. */
+export interface JobReviewView {
+  readonly status: ReviewStatus
+  /** Fallback subjects without a live approval. Each one blocks rendering. */
+  readonly blockers: number
+  /** Every fallback subject in the directed script, decided or not. Zero is a good state. */
+  readonly total: number
+}
+
+/** The one field of a live review record the projection reads. */
+export interface ReviewQueueEntry {
+  readonly decision: 'approved' | 'pending' | 'excluded'
+}
+
 export interface JobStateView {
   readonly jobId: string
   readonly state: AudiobookJobState
@@ -70,6 +95,7 @@ export interface JobStateView {
   readonly failureDiagnosticPath: string | null
   readonly active: boolean
   readonly finished: boolean
+  readonly review: JobReviewView | null
   readonly warnings: readonly JobWarningView[]
   readonly output: AudiobookOutputView | null
 }
@@ -83,6 +109,27 @@ export const STAGE_LABELS: Readonly<Record<AudiobookJobStage, string>> = {
 }
 
 export const PIPELINE_STAGES = ['extracting', 'directing', 'rendering', 'assembling'] as const
+
+/**
+ * Which of the two `awaiting_review` situations a job is in, and how many lines block it.
+ *
+ * Derived from the live review records (`ReviewFallbackApprovals.list`), never from the job's
+ * stored message or the snapshot: a job whose approvals changed after its snapshot was written
+ * must show the answer the records give now. `null` outside `awaiting_review`, where there is no
+ * review surface at all. An empty queue is a good state — nothing is blocking — not a missing one.
+ */
+export const deriveJobReview = (
+  state: AudiobookJobState,
+  items: readonly ReviewQueueEntry[],
+): JobReviewView | null => {
+  if (state !== 'awaiting_review') return null
+  const blockers = items.filter((item) => item.decision !== 'approved').length
+  return {
+    status: blockers === 0 ? 'ready_to_confirm' : 'needs_decisions',
+    blockers,
+    total: items.length,
+  }
+}
 
 const buildPipelineStages = (
   snapshot: AudiobookJobSnapshot,
@@ -163,6 +210,7 @@ export const buildJobStateView = (
   snapshot: AudiobookJobSnapshot,
   book: BookReadModel | undefined,
   authorizedOutput?: AudiobookOutput | undefined,
+  reviewItems: readonly ReviewQueueEntry[] = [],
 ): JobStateView => {
   const { progress } = snapshot
   const chapterTitles = new Map(
@@ -223,6 +271,7 @@ export const buildJobStateView = (
     failureDiagnosticPath: snapshot.failureDiagnosticPath,
     active: snapshot.state === 'running' || snapshot.state === 'pending',
     finished: snapshot.state === 'completed',
+    review: deriveJobReview(snapshot.state, reviewItems),
     warnings: snapshot.warnings.map((warning) => ({
       segmentId: warning.segmentId,
       chapterLabel: deriveChapterLabel(warning.segmentId),
