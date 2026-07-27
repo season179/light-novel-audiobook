@@ -89,6 +89,8 @@ const COPYABLE_COVER_CODECS = new Set(['mjpeg', 'png'])
  */
 const MAX_TOTAL_DURATION_DRIFT_MS = 50
 
+const stopped = (signal?: AbortSignal): boolean => signal?.aborted === true
+
 /**
  * FFmpeg/FFprobe implementation of the application's `AudioAssembler` port.
  *
@@ -135,6 +137,7 @@ export class FfmpegAudioAssembler implements AudioAssembler {
   }
 
   async assemble(request: AssembleAudiobookRequest): Promise<AudiobookAssemblyResult> {
+    if (stopped(request.signal)) throw new AudioAssemblyError('Audio assembly was stopped')
     const plan = planAssembly(request, this.settings)
     const warnings: string[] = []
 
@@ -158,10 +161,10 @@ export class FfmpegAudioAssembler implements AudioAssembler {
     try {
       const rawChapters: string[] = []
       for (const chapter of plan.chapters) {
-        rawChapters.push(await this.buildRawChapter(chapter, stagingRoot))
+        rawChapters.push(await this.buildRawChapter(chapter, stagingRoot, request.signal))
       }
 
-      const measurement = await this.measureBookLoudness(rawChapters)
+      const measurement = await this.measureBookLoudness(rawChapters, request.signal)
       const gain = computeLoudnessGainDb({
         measurement,
         targetLoudnessLufs: this.settings.targetLoudnessLufs,
@@ -189,9 +192,10 @@ export class FfmpegAudioAssembler implements AudioAssembler {
             settings: this.settings,
           }),
           `Chapter master for ${chapter.chapterId}`,
+          request.signal,
         )
         await assertOutputPresent(stagedPath, `Chapter master for ${chapter.chapterId}`)
-        const probe = await this.probe(stagedPath)
+        const probe = await this.probe(stagedPath, request.signal)
         this.assertChapterFormat(chapter, probe)
         const durationMs = probedDurationMs(probe)
         staged.push({
@@ -219,7 +223,7 @@ export class FfmpegAudioAssembler implements AudioAssembler {
         'utf8',
       )
 
-      const cover = await this.resolveCover(plan, warnings)
+      const cover = await this.resolveCover(plan, warnings, request.signal)
       const stagedM4b = join(stagingRoot, 'audiobook.m4b')
       await this.runFfmpeg(
         buildAudiobookArgs({
@@ -230,9 +234,10 @@ export class FfmpegAudioAssembler implements AudioAssembler {
           settings: this.settings,
         }),
         'Audiobook export',
+        request.signal,
       )
       await assertOutputPresent(stagedM4b, 'Audiobook export')
-      const bookProbe = await this.probe(stagedM4b)
+      const bookProbe = await this.probe(stagedM4b, request.signal)
       this.assertAudiobook(plan, staged, bookProbe)
 
       const manifest = this.buildManifest({ plan, staged, measurement, gain, cover, warnings })
@@ -247,6 +252,9 @@ export class FfmpegAudioAssembler implements AudioAssembler {
       const claimed: string[] = []
       try {
         for (const [source, destination] of claims) {
+          if (stopped(request.signal)) {
+            throw new AudioAssemblyError('Audio assembly was stopped')
+          }
           await claimOutputPath(source, destination)
           claimed.push(destination)
         }
@@ -290,7 +298,11 @@ export class FfmpegAudioAssembler implements AudioAssembler {
   }
 
   /** Concatenates a chapter in ordered batches so a very long chapter cannot exhaust input slots. */
-  private async buildRawChapter(chapter: PlannedChapter, stagingRoot: string): Promise<string> {
+  private async buildRawChapter(
+    chapter: PlannedChapter,
+    stagingRoot: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const partPaths: string[] = []
     for (const [passIndex, pass] of chapter.passes.entries()) {
       const partPath = join(
@@ -304,6 +316,7 @@ export class FfmpegAudioAssembler implements AudioAssembler {
           settings: this.settings,
         }),
         `Segment concatenation for ${chapter.chapterId} pass ${passIndex + 1}`,
+        signal,
       )
       await assertOutputPresent(partPath, `Segment concatenation for ${chapter.chapterId}`)
       partPaths.push(partPath)
@@ -323,17 +336,19 @@ export class FfmpegAudioAssembler implements AudioAssembler {
         settings: this.settings,
       }),
       `Chapter join for ${chapter.chapterId}`,
+      signal,
     )
     await assertOutputPresent(joinedPath, `Chapter join for ${chapter.chapterId}`)
     return joinedPath
   }
 
-  private async measureBookLoudness(chapterPaths: readonly string[]) {
+  private async measureBookLoudness(chapterPaths: readonly string[], signal?: AbortSignal) {
     const result = await runChecked(
       this.runner,
       this.toolchain.ffmpegPath,
       buildLoudnessAnalysisArgs({ inputPaths: chapterPaths, settings: this.settings }),
       'Book loudness analysis',
+      signal,
     )
     return parseLoudnormMeasurement(result.stderr)
   }
@@ -341,6 +356,7 @@ export class FfmpegAudioAssembler implements AudioAssembler {
   private async resolveCover(
     plan: AssemblyPlan,
     warnings: string[],
+    signal?: AbortSignal,
   ): Promise<{ readonly path: string; readonly handling: CoverArtHandling } | null> {
     if (plan.coverPath === null) return null
     if (!(await pathExists(plan.coverPath))) {
@@ -350,6 +366,7 @@ export class FfmpegAudioAssembler implements AudioAssembler {
     const result = await this.runner.run(
       this.toolchain.ffprobePath,
       buildCoverProbeArgs(plan.coverPath),
+      signal,
     )
     if (result.exitCode !== 0) {
       warnings.push(`Cover art could not be read and was not embedded: ${plan.coverPath}`)
@@ -494,16 +511,21 @@ export class FfmpegAudioAssembler implements AudioAssembler {
     }
   }
 
-  private async runFfmpeg(args: readonly string[], description: string): Promise<void> {
-    await runChecked(this.runner, this.toolchain.ffmpegPath, args, description)
+  private async runFfmpeg(
+    args: readonly string[],
+    description: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await runChecked(this.runner, this.toolchain.ffmpegPath, args, description, signal)
   }
 
-  private async probe(path: string): Promise<ProbeResult> {
+  private async probe(path: string, signal?: AbortSignal): Promise<ProbeResult> {
     const result = await runChecked(
       this.runner,
       this.toolchain.ffprobePath,
       buildProbeArgs(path),
       `Probe of ${path}`,
+      signal,
     )
     return parseProbeJson(result.stdout)
   }

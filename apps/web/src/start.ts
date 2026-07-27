@@ -1,9 +1,33 @@
-import { createCsrfMiddleware, createMiddleware, createStart } from '@tanstack/react-start'
+import {
+  createCsrfMiddleware,
+  createMiddleware,
+  createStart,
+  isCsrfRequestAllowed,
+} from '@tanstack/react-start'
 import { createRequestOriginPolicy } from './server/request-origin-policy.js'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const originPolicy = createRequestOriginPolicy()
+export const requestNeedsCsrf = (request: Pick<Request, 'method'>): boolean =>
+  !SAFE_METHODS.has(request.method.toUpperCase())
+
+export const originPolicy = createRequestOriginPolicy()
+
+export const originRejection = (request: Request): Response | null =>
+  originPolicy.isAllowed(request)
+    ? null
+    : new Response('Forbidden', {
+        status: 403,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+      })
+
+/** Testable projection of the same TanStack anti-CSRF validator installed below. */
+export const csrfAllows = async (request: Request): Promise<boolean> => {
+  if (!requestNeedsCsrf(request)) return true
+  return isCsrfRequestAllowed({ origin: [...originPolicy.allowedOrigins] }, {
+    request,
+  } as Parameters<typeof isCsrfRequestAllowed>[1])
+}
 
 /**
  * Exact Host/Origin allowlist, enforced before CSRF validation and on every method. This is the DNS
@@ -11,15 +35,7 @@ const originPolicy = createRequestOriginPolicy()
  * rebound `evil.example` satisfies it, so the configured Host is what actually has to match.
  */
 const originAllowlistMiddleware = createMiddleware({ type: 'request' }).server(
-  ({ request, next }) => {
-    if (!originPolicy.isAllowed(request)) {
-      return new Response('Forbidden', {
-        status: 403,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-      })
-    }
-    return next()
-  },
+  ({ request, next }) => originRejection(request) ?? next(),
 )
 
 /**
@@ -32,7 +48,7 @@ export const startInstance = createStart(() => ({
   requestMiddleware: [
     originAllowlistMiddleware,
     createCsrfMiddleware({
-      filter: ({ request }) => !SAFE_METHODS.has(request.method.toUpperCase()),
+      filter: ({ request }) => requestNeedsCsrf(request),
       origin: [...originPolicy.allowedOrigins],
     }),
   ],

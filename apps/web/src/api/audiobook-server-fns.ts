@@ -6,6 +6,7 @@ import type {
   EpubUploadView,
   FallbackReviewView,
   StartedGeneration,
+  StopPreview,
 } from '../server/audiobook-web-api.js'
 import { requireIdInput, toWebApiResult, WebApiError, type WebApiResult } from '../server/errors.js'
 import type { JobStateView } from '../server/job-state-view.js'
@@ -21,6 +22,12 @@ import type { ScriptChapterListView, ScriptChapterView } from '../server/script-
  * dynamically so nothing server-only can reach the client bundle.
  */
 const api = async () => (await import('../server/composition-root.js')).getAudiobookWebApi()
+
+/** Safe read used before the destructive confirmation; the actual stop remains POST-only. */
+export const getStopPreviewFn = createServerFn({ method: 'GET' }).handler(
+  async (): Promise<WebApiResult<StopPreview>> =>
+    toWebApiResult('getStopPreview', async () => (await api()).getStopPreview()),
+)
 
 export const uploadEpubFn = createServerFn({ method: 'POST' })
   .validator((data: FormData) => data)

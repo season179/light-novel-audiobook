@@ -12,7 +12,7 @@ export interface CommandResult {
 }
 
 export interface CommandRunner {
-  run(executable: string, args: readonly string[]): Promise<CommandResult>
+  run(executable: string, args: readonly string[], signal?: AbortSignal): Promise<CommandResult>
 }
 
 const keepTail = (chunks: readonly string[], limit: number): string => {
@@ -25,12 +25,18 @@ const keepTail = (chunks: readonly string[], limit: number): string => {
  * quoting, `$`, backticks, and newlines in book metadata have no interpreter that could act on them.
  */
 export class SpawnCommandRunner implements CommandRunner {
-  async run(executable: string, args: readonly string[]): Promise<CommandResult> {
+  async run(
+    executable: string,
+    args: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<CommandResult> {
     for (const [index, arg] of args.entries()) {
       if (typeof arg !== 'string' || arg.includes(NUL_BYTE)) {
         throw new AudioAssemblyError(`Command argument ${index} is not a NUL-free string`)
       }
     }
+
+    if (signal?.aborted === true) throw new AudioAssemblyError('Audio assembly was stopped')
 
     return await new Promise<CommandResult>((resolve, reject) => {
       const child = spawn(executable, [...args], {
@@ -44,15 +50,24 @@ export class SpawnCommandRunner implements CommandRunner {
       child.stderr.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => stdout.push(chunk))
       child.stderr.on('data', (chunk: string) => stderr.push(chunk))
+      const stop = () => child.kill('SIGTERM')
+      signal?.addEventListener('abort', stop, { once: true })
+      if (signal?.aborted === true) stop()
       child.once('error', (error) => {
+        signal?.removeEventListener('abort', stop)
         reject(
           new AudioAssemblyError(`Failed to run ${executable}: ${error.message}`, { cause: error }),
         )
       })
-      child.once('close', (exitCode, signal) => {
+      child.once('close', (exitCode, exitSignal) => {
+        signal?.removeEventListener('abort', stop)
+        if (signal?.aborted === true) {
+          reject(new AudioAssemblyError('Audio assembly was stopped'))
+          return
+        }
         resolve({
           exitCode,
-          signal,
+          signal: exitSignal,
           stdout: keepTail(stdout, MAX_CAPTURED_STDERR),
           stderr: keepTail(stderr, MAX_CAPTURED_STDERR),
         })
@@ -67,8 +82,9 @@ export const runChecked = async (
   executable: string,
   args: readonly string[],
   description: string,
+  signal?: AbortSignal,
 ): Promise<CommandResult> => {
-  const result = await runner.run(executable, args)
+  const result = await runner.run(executable, args, signal)
   if (result.exitCode !== 0 || result.signal !== null) {
     throw new FfmpegProcessError({
       message: `${description} failed (exit ${String(result.exitCode)}${

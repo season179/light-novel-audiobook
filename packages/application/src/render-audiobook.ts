@@ -31,6 +31,8 @@ import { createRenderInputIdentity } from './render-input-identity.js'
 export interface RenderAudiobookCommand {
   readonly jobId: string
   readonly voices: VoiceCast
+  /** Process-lifetime cancellation. It changes lifecycle only, never render identity. */
+  readonly signal?: AbortSignal | undefined
   /** Explicitly takes over a job whose previous worker no longer owns its interrupted stage. */
   readonly recoverAbandoned?: boolean | undefined
 }
@@ -313,6 +315,7 @@ export class RenderAudiobook {
         book: gate.book,
         chapters: rendered.chapters,
         reservation,
+        ...(command.signal === undefined ? {} : { signal: command.signal }),
       })
       this.validateOutput(output, reservation)
 
@@ -326,7 +329,14 @@ export class RenderAudiobook {
         reusedSegments: rendered.reusedSegments,
       }
     } catch (error) {
-      if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
+      if (job.state === 'running') {
+        if (command.signal?.aborted === true) {
+          job.markAbandoned()
+          await this.jobs.saveJob(job)
+        } else {
+          await persistJobFailure(this.jobs, job, error)
+        }
+      }
       throw error
     }
   }

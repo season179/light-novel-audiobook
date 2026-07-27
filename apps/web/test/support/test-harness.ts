@@ -133,6 +133,7 @@ export const createInProcessClient = (composition: {
 }): AudiobookClient => {
   const { api } = composition
   return {
+    getStopPreview: () => toWebApiResult('getStopPreview', () => api.getStopPreview()),
     uploadEpub: ({ file }) =>
       toWebApiResult('uploadEpub', async () =>
         api.uploadEpub({ fileName: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }),

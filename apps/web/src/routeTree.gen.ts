@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiStopRouteImport } from './routes/api.stop'
 import { Route as JobsJobIdRouteImport } from './routes/jobs.$jobId'
 import { Route as ApiJobsJobIdDownloadRouteImport } from './routes/api.jobs.$jobId.download'
 import { Route as ApiJobsJobIdAudioChapterIdRouteImport } from './routes/api.jobs.$jobId.audio.$chapterId'
@@ -17,6 +18,11 @@ import { Route as ApiJobsJobIdAudioChapterIdRouteImport } from './routes/api.job
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStopRoute = ApiStopRouteImport.update({
+  id: '/api/stop',
+  path: '/api/stop',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JobsJobIdRoute = JobsJobIdRouteImport.update({
@@ -38,12 +44,14 @@ const ApiJobsJobIdAudioChapterIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/stop': typeof ApiStopRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/api/jobs/$jobId/download': typeof ApiJobsJobIdDownloadRoute
   '/api/jobs/$jobId/audio/$chapterId': typeof ApiJobsJobIdAudioChapterIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/stop': typeof ApiStopRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/api/jobs/$jobId/download': typeof ApiJobsJobIdDownloadRoute
   '/api/jobs/$jobId/audio/$chapterId': typeof ApiJobsJobIdAudioChapterIdRoute
@@ -51,6 +59,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/stop': typeof ApiStopRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/api/jobs/$jobId/download': typeof ApiJobsJobIdDownloadRoute
   '/api/jobs/$jobId/audio/$chapterId': typeof ApiJobsJobIdAudioChapterIdRoute
@@ -59,18 +68,21 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/api/stop'
     | '/jobs/$jobId'
     | '/api/jobs/$jobId/download'
     | '/api/jobs/$jobId/audio/$chapterId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/api/stop'
     | '/jobs/$jobId'
     | '/api/jobs/$jobId/download'
     | '/api/jobs/$jobId/audio/$chapterId'
   id:
     | '__root__'
     | '/'
+    | '/api/stop'
     | '/jobs/$jobId'
     | '/api/jobs/$jobId/download'
     | '/api/jobs/$jobId/audio/$chapterId'
@@ -78,6 +90,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiStopRoute: typeof ApiStopRoute
   JobsJobIdRoute: typeof JobsJobIdRoute
   ApiJobsJobIdDownloadRoute: typeof ApiJobsJobIdDownloadRoute
   ApiJobsJobIdAudioChapterIdRoute: typeof ApiJobsJobIdAudioChapterIdRoute
@@ -90,6 +103,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/stop': {
+      id: '/api/stop'
+      path: '/api/stop'
+      fullPath: '/api/stop'
+      preLoaderRoute: typeof ApiStopRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jobs/$jobId': {
@@ -118,6 +138,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiStopRoute: ApiStopRoute,
   JobsJobIdRoute: JobsJobIdRoute,
   ApiJobsJobIdDownloadRoute: ApiJobsJobIdDownloadRoute,
   ApiJobsJobIdAudioChapterIdRoute: ApiJobsJobIdAudioChapterIdRoute,

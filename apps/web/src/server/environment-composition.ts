@@ -103,16 +103,27 @@ export const resolveEnvironmentCompositionOptions = async (
   }
   const workspace = await createWorkspace(resolveWorkspaceRoot(env[WORKSPACE_ENV_VAR]))
   const voices = createM1VoiceCast(await loadPinnedQwenConfig(env[QWEN_PRODUCTION_CONFIG_ENV_VAR]))
+  const shutdownController = new AbortController()
   const transports = await createRealTransports(
     await resolveRealTransportConfig(env, repositoryRoot, workspace.root),
   )
-  const { factories } = await createRealAdapterFactories({
+  const realAdapters = await createRealAdapterFactories({
     workspace,
     repositoryRoot,
     transports,
     characterSpeakerIds: M1_CHARACTER_SPEAKER_IDS,
     narratorProfileId: voices.narrator.id,
     fallbackProfileId: voices.fallback.id,
+    shutdownSignal: shutdownController.signal,
   })
-  return { workspace, voices, ...factories }
+  return {
+    workspace,
+    voices,
+    ...realAdapters.factories,
+    runtimeShutdown: {
+      controller: shutdownController,
+      releaseOwnedResources: transports.close,
+      closeResources: realAdapters.close,
+    },
+  }
 }

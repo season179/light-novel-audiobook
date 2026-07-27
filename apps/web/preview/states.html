@@ -70,6 +70,8 @@
           <li><a href="#awaiting-review-select">Awaiting review — exact-set selection</a></li>
           <li><a href="#awaiting-review-ready">Awaiting review — ready to confirm</a></li>
           <li><a href="#script-review">Script review — reading the directed script</a></li>
+          <li><a href="#stop-confirmation">Stop confirmation</a></li>
+          <li><a href="#server-stopped">Server stopped</a></li>
           <li><a href="#abandoned">Abandoned</a></li>
           <li><a href="#failed">Failed</a></li>
           <li><a href="#completed">Completed</a></li>
@@ -621,7 +623,56 @@
       </main>
     </section>
 
-    <!-- 8. Abandoned: dashed border, stopped glyph. -->
+    <!-- 8. Stop confirmation: destructive in glyph, words, edge, and colour. -->
+    <section class="preview" id="stop-confirmation" aria-labelledby="preview-stop-confirmation">
+      <h2 class="preview-label" id="preview-stop-confirmation">
+        Stop confirmation — names the in-flight operation and its resume checkpoint
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="stop-preview-job">
+          <h2 id="stop-preview-job">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="running" role="status">
+            <p class="stage">Rendering speech · running</p>
+            <p class="latest">Completed segment 13</p>
+          </div>
+          <div class="stop-confirmation" role="dialog" aria-modal="true" aria-labelledby="stop-preview-heading">
+            <h2 id="stop-preview-heading">Stop the local server now?</h2>
+            <p>
+              <strong>Rendering speech for Chapter 2 — A Lantern Over the Lock</strong> is in
+              flight. Stop now interrupts it at its saved checkpoint. Resume verifies saved segment
+              audio and renders only what is missing.
+            </p>
+            <p>
+              The app will stop its model workers, release the GPU through their normal cleanup
+              path, and then close the launcher window.
+            </p>
+            <div class="actions">
+              <button class="destructive" type="button">Stop now and free the GPU</button>
+              <button type="button">Keep running</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+
+    <!-- 9. Browser terminal state after the clean-stop acknowledgement. -->
+    <section class="preview" id="server-stopped" aria-labelledby="preview-server-stopped">
+      <h2 class="preview-label" id="preview-server-stopped">
+        Server stopped — acknowledgement, not a failed request
+      </h2>
+      <main class="shell stack">
+        <section class="status-block" data-state="stopped" role="status" aria-live="polite">
+          <p class="stage">Server stopped</p>
+          <h1>The local server has stopped</h1>
+          <p class="latest">
+            Model processes and GPU resources were released. You can close this page. Use the
+            desktop shortcut to start the app again.
+          </p>
+        </section>
+      </main>
+    </section>
+
+    <!-- 10. Abandoned: dashed border, stopped glyph. -->
     <section class="preview" id="abandoned" aria-labelledby="preview-abandoned">
       <h2 class="preview-label" id="preview-abandoned">Abandoned — worker stopped mid-render</h2>
       <main class="shell stack">

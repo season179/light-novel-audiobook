@@ -86,6 +86,12 @@ detail never reaches the browser.
 | `listUploadsFn` | GET | — | `EpubUploadView[]` |
 | `listFallbackReviewFn` | GET | `{ jobId }` | `FallbackReviewView` |
 | `renderApprovedScriptFn` | POST | `{ jobId }` | `{ jobId, job }` |
+| `getStopPreviewFn` | GET | — | the operation and checkpoint a stop would interrupt |
+
+Process route: `POST /api/stop`. It cancels active work into an abandoned, resumable state, calls the
+real transport set's existing `close()` path (owned llama-server reap and Qwen cancellation/lease
+release), closes persistence, acknowledges the browser, and only then schedules process exit. Fake
+mode follows the same request path with no model process or GPU resource to acquire or release.
 
 Binary routes: `GET /api/jobs/$jobId/audio/$chapterId` (inline chapter audio) and
 `GET /api/jobs/$jobId/download` (the M4B as an attachment). Both resolve paths from persisted job
@@ -226,7 +232,9 @@ start and names the missing variable, rather than starting on half-real adapters
 refused on every method, which is what stops DNS rebinding — `Sec-Fetch-Site: same-origin` is
 browser-relative and a rebound host satisfies it. Anti-CSRF additionally covers every state-changing
 request; safe methods are exempt from *CSRF only*, because a top-level navigation legitimately
-arrives with `Sec-Fetch-Site: none`.
+arrives with `Sec-Fetch-Site: none`. The unauthenticated shutdown route is deliberately POST-only, so
+it is subject to both checks: an unlisted `Host` is refused before routing, and a cross-site form or
+top-level navigation cannot satisfy the state-changing anti-CSRF check.
 
 ## Refresh safety
 

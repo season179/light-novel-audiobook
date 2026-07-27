@@ -33,6 +33,7 @@ export class FakeAudioAssembler implements AudioAssembler {
   readonly identity = 'fake-assembler/2'
 
   async assemble(request: AssembleAudiobookRequest): Promise<AudiobookOutput> {
+    if (request.signal?.aborted === true) throw new Error('Fake audio assembly was stopped')
     const { book, reservation } = request
     this.assertReservationShape(request)
 

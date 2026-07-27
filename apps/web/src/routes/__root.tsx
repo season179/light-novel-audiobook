@@ -7,6 +7,8 @@ import {
   Scripts,
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import { serverFnAudiobookClient } from '../client/server-fn-audiobook-client.js'
+import { StopAppControl } from '../components/stop-app-control.js'
 import appCss from '../styles/app.css?url'
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -33,6 +35,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <Outlet />
+      <StopAppControl client={serverFnAudiobookClient} />
     </QueryClientProvider>
   )
 }

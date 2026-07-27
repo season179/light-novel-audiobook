@@ -104,6 +104,16 @@ export interface AudiobookWebApiDependencies {
   readonly completedOutputs: CompletedOutputAuthority
   /** Operational direction controls forwarded to each generation command; never persisted. */
   readonly directorOptions?: DirectChapterOptions | undefined
+  /** Shared process-stop signal, forwarded to the owned Qwen worker. */
+  readonly shutdownSignal: AbortSignal
+}
+
+export interface StopPreview {
+  readonly inFlight: null | {
+    readonly jobId: string
+    readonly operation: string
+    readonly checkpoint: string
+  }
 }
 
 /** The review queue for one job, plus whether a book-wide decision has already been made. */
@@ -163,6 +173,7 @@ export class AudiobookWebApi {
   private readonly reviewer: ReviewerIdentity
   private readonly completedOutputs: CompletedOutputAuthority
   private readonly directorOptions: DirectChapterOptions | undefined
+  private readonly shutdownSignal: AbortSignal
 
   constructor(dependencies: AudiobookWebApiDependencies) {
     this.workspace = dependencies.workspace
@@ -176,6 +187,48 @@ export class AudiobookWebApi {
     this.reviewer = dependencies.reviewer
     this.completedOutputs = dependencies.completedOutputs
     this.directorOptions = dependencies.directorOptions
+    this.shutdownSignal = dependencies.shutdownSignal
+  }
+
+  /** Names the operation the destructive Stop confirmation would interrupt. */
+  async getStopPreview(): Promise<StopPreview> {
+    const jobId = this.runner.activeJobIds()[0]
+    if (jobId === undefined) return { inFlight: null }
+    const job = await this.getJobState({ jobId })
+    if (job === null) {
+      return {
+        inFlight: {
+          jobId,
+          operation: 'Starting generation',
+          checkpoint: 'The queued start can be requested again after restarting the server.',
+        },
+      }
+    }
+    const chapter =
+      job.currentChapterLabel === null
+        ? ''
+        : ` for ${job.currentChapterLabel}${job.currentChapterTitle === null ? '' : ` — ${job.currentChapterTitle}`}`
+    const checkpoint = (() => {
+      switch (job.stage) {
+        case 'extracting':
+          return 'Resume restarts deterministic EPUB extraction.'
+        case 'directing':
+          return 'Resume keeps every completed directed chapter and continues with the next one.'
+        case 'rendering':
+          return 'Resume verifies saved segment audio and renders only what is missing.'
+        case 'assembling':
+          return 'Resume rebuilds from completed audio without running speech generation again.'
+        case 'completed':
+          return 'The completed audiobook stays saved.'
+      }
+    })()
+    return {
+      inFlight: {
+        jobId,
+        operation: `${job.stageLabel}${chapter}`,
+        checkpoint,
+      },
+    }
   }
 
   /**
@@ -327,7 +380,11 @@ export class AudiobookWebApi {
     }
     if (!this.runner.isActive(input.jobId)) {
       await this.directionReview.confirm({ jobId: input.jobId, decidedBy: this.reviewer })
-      this.runner.startRendering({ jobId: input.jobId, voices: this.voices })
+      this.runner.startRendering({
+        jobId: input.jobId,
+        voices: this.voices,
+        signal: this.shutdownSignal,
+      })
     }
     return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
   }
@@ -446,6 +503,7 @@ export class AudiobookWebApi {
       this.runner.startRendering({
         jobId: input.jobId,
         voices: this.voices,
+        signal: this.shutdownSignal,
         recoverAbandoned: true,
       })
     } else {
