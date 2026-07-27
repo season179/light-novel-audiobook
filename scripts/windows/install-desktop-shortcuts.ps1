@@ -12,6 +12,13 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shell = New-Object -ComObject WScript.Shell
 
+# The launchers are copied to a Windows-side directory rather than pointed at in place. A shortcut
+# to \\wsl.localhost\... makes cmd.exe print "UNC paths are not supported" on every single launch,
+# because it cannot use a UNC path as a working directory. The copies call wsl.exe with absolute
+# Linux paths, so where they sit does not matter. Re-run this after editing a .bat.
+$installDir = Join-Path $env:LOCALAPPDATA 'LightNovelAudiobook'
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
 # Two shortcuts: one that runs the app, one that stops it from outside. The second exists because
 # closing the launcher window with the X button does not reliably deliver a signal through wsl.exe,
 # and an abandoned run keeps roughly 15 GB of the card.
@@ -21,13 +28,15 @@ $shortcuts = @(
 )
 
 foreach ($entry in $shortcuts) {
-    $target = Join-Path $scriptDir $entry.Target
-    if (-not (Test-Path $target)) { throw "missing launcher: $target" }
+    $source = Join-Path $scriptDir $entry.Target
+    if (-not (Test-Path $source)) { throw "missing launcher: $source" }
+    $target = Join-Path $installDir $entry.Target
+    Copy-Item -Path $source -Destination $target -Force
 
     $linkPath = Join-Path $desktop ($entry.Name + '.lnk')
     $link = $shell.CreateShortcut($linkPath)
     $link.TargetPath = $target
-    $link.WorkingDirectory = $scriptDir
+    $link.WorkingDirectory = $installDir
     $link.Description = $entry.Description
     $link.IconLocation = Join-Path $env:SystemRoot ('System32\' + $entry.Icon)
     $link.Save()
