@@ -1427,6 +1427,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       command.jobId,
       AudiobookJob.reconstitute(legacySnapshot as unknown as AudiobookJobSnapshot),
     )
+    const loadedLegacy = await app.repository.findJob(command.jobId)
+    expect(loadedLegacy?.stage).toBe('directing')
+    expect(loadedLegacy?.progress.direction).toBeNull()
 
     const resumed = await app.useCase.execute(command)
 
