@@ -22,7 +22,7 @@ const ignoreSigterm = process.argv.includes('--ignore-sigterm')
 // has a real child to reap.
 const unreadyFlag = process.argv.find((argument) => argument.startsWith(UNREADY_FLAG))
 const unreadyMs = unreadyFlag === undefined ? 0 : Number(unreadyFlag.slice(UNREADY_FLAG.length))
-const readyAt = Date.now() + (Number.isFinite(unreadyMs) ? unreadyMs : 0)
+const readyAt = performance.now() + (Number.isFinite(unreadyMs) ? unreadyMs : 0)
 
 if (!Number.isSafeInteger(port) || port < 1) {
   process.stderr.write('stub-llama-server: a positive integer port is required\n')
@@ -34,7 +34,7 @@ if (ignoreSigterm) process.on('SIGTERM', () => {})
 
 const server = createServer((incoming, outgoing) => {
   if (incoming.method === 'GET' && incoming.url === '/health') {
-    if (Date.now() < readyAt) {
+    if (performance.now() < readyAt) {
       outgoing.writeHead(503, { 'content-type': 'application/json' })
       outgoing.end(JSON.stringify({ error: { message: 'Loading model' } }))
       return

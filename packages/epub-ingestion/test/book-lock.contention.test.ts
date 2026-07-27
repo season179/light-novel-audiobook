@@ -195,10 +195,10 @@ async function waitUntil(
   budgetMs: number,
   describeFailure: string,
 ): Promise<void> {
-  const deadline = Date.now() + budgetMs
+  const deadline = performance.now() + budgetMs
   for (;;) {
     if (await predicate()) return
-    if (Date.now() >= deadline) throw new Error(`${describeFailure} within ${budgetMs} ms`)
+    if (performance.now() >= deadline) throw new Error(`${describeFailure} within ${budgetMs} ms`)
     await delay(25)
   }
 }
@@ -532,8 +532,8 @@ describe('book lock ownership accuracy', () => {
       // Block the event loop so Node cannot deliver the direct child's `exit` event or reap it. Any
       // check reading cached exit state still believes the lock is held for this entire window, and
       // the window is as long as the loop stays busy.
-      const blockUntil = Date.now() + 750
-      while (Date.now() < blockUntil) {
+      const blockUntil = performance.now() + 750
+      while (performance.now() < blockUntil) {
         // deliberately synchronous
       }
 

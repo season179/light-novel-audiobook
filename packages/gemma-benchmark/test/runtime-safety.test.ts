@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile as execFileCallback, spawn } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -154,6 +155,42 @@ describe('owned runtime cleanup', () => {
         killTimeoutMs: 1,
       }),
     ).rejects.toThrow('did not exit')
+  })
+
+  it('bounds port-release polling with a monotonic deadline', async () => {
+    const server = createServer()
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
+    try {
+      const address = server.address()
+      if (address === null || typeof address === 'string')
+        throw new Error('Expected a TCP listener')
+
+      const originalNow = Date.now
+      let wallClock = originalNow()
+      Date.now = () => (wallClock -= 1_000)
+      const started = performance.now()
+      const release = waitForPortRelease(address.port, 40)
+      let settledWithinBound: boolean
+      try {
+        settledWithinBound = await Promise.race([
+          release.then(
+            () => true,
+            () => true,
+          ),
+          new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 250)),
+        ])
+      } finally {
+        Date.now = originalNow
+      }
+
+      await expect(release).rejects.toThrow('Benchmark port was not released')
+      expect(settledWithinBound).toBe(true)
+      expect(performance.now() - started).toBeGreaterThanOrEqual(20)
+    } finally {
+      await new Promise<void>((resolveClose, rejectClose) =>
+        server.close((error) => (error === undefined ? resolveClose() : rejectClose(error))),
+      )
+    }
   })
 
   it('awaits a real child exit and verifies its listener port is released', async () => {

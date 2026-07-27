@@ -11,9 +11,9 @@ if (root === undefined || barrier === undefined) {
 }
 
 try {
-  const deadline = Date.now() + 10_000
+  const deadline = performance.now() + 10_000
   while (!existsSync(barrier)) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error(`Timed out waiting for the migration race barrier: ${barrier}`)
     }
     await delay(10)

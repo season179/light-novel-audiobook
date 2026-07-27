@@ -69,8 +69,8 @@ async function requireFreePort(port: number): Promise<void> {
 }
 
 export async function waitForPortRelease(port: number, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs
+  while (performance.now() < deadline) {
     if (await portIsFree(port)) return
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
   }
@@ -157,8 +157,8 @@ async function waitForHealth(
   child: ChildProcess,
   childError: () => Error | undefined,
 ): Promise<void> {
-  const deadline = Date.now() + 10 * 60_000
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + 10 * 60_000
+  while (performance.now() < deadline) {
     const emittedError = childError()
     if (emittedError) throw new Error('llama.cpp failed to spawn', { cause: emittedError })
     if (readChildExitEvidence(child).observed_exited)

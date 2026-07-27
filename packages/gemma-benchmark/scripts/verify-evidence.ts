@@ -108,7 +108,12 @@ interface EvidenceGuard {
 function parseEvidenceGuard(value: unknown): EvidenceGuard {
   const guard = value as Partial<EvidenceGuard>
   const patches = guard.authorizedMigrationPatches
-  const expectedPaths = [issue6VerifierPath, ...issue6PackagingPaths].sort()
+  const expectedPaths = [
+    issue6VerifierPath,
+    ...issue6PackagingPaths,
+    `${benchmarkRoot}/src/runtime.ts`,
+    `${benchmarkRoot}/test/runtime-safety.test.ts`,
+  ].sort()
   if (
     typeof guard !== 'object' ||
     guard === null ||

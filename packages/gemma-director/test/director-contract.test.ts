@@ -277,9 +277,9 @@ function validWireOutput(): { segments: Array<Record<string, unknown>> } {
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('Timed out waiting for fake endpoint state')
+    if (performance.now() >= deadline) throw new Error('Timed out waiting for fake endpoint state')
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }

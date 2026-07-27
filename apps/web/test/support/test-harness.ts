@@ -151,10 +151,10 @@ export const waitForJobState = async (
   predicate: (job: JobStateView) => boolean,
   timeoutMs = 10_000,
 ): Promise<JobStateView> => {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   let latest: JobStateView | null = null
   let decided = false
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     latest = await api.getJobState({ jobId })
     if (latest !== null && predicate(latest)) return latest
     if (latest?.state === 'awaiting_review' && !decided) {

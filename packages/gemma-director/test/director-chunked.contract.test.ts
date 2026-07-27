@@ -77,6 +77,17 @@ function makeChapterBook(
   })
 }
 
+async function withBackwardWallClock<T>(work: () => Promise<T>): Promise<T> {
+  const originalNow = Date.now
+  let wallClock = originalNow()
+  Date.now = () => (wallClock -= 1_000)
+  try {
+    return await work()
+  } finally {
+    Date.now = originalNow
+  }
+}
+
 /** One narration fragment covering the whole passage; splits alternate narration/dialogue. */
 function oracleFor(ids: readonly string[], texts: readonly string[], splitEvery = 0): Oracle {
   const oracle = new Map<string, readonly OracleFragment[]>()
@@ -514,17 +525,21 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     })
     models.push(model)
 
-    const started = Date.now()
-    try {
-      // A 400 ms chapter budget must fire DURING the 900 ms startup, not after it.
-      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
-      throw new Error('Expected the chapter deadline to fire during runtime startup')
-    } catch (error) {
-      expect(error).toBeInstanceOf(DirectorError)
-      expect((error as DirectorError).code).toBe('timeout')
-      expect((error as DirectorError).message).toContain('runtime startup')
-    }
-    expect(Date.now() - started).toBeLessThan(900)
+    await withBackwardWallClock(async () => {
+      const started = performance.now()
+      try {
+        // A 400 ms chapter budget must fire DURING the 900 ms startup, not after it.
+        await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
+        throw new Error('Expected the chapter deadline to fire during runtime startup')
+      } catch (error) {
+        expect(error).toBeInstanceOf(DirectorError)
+        expect((error as DirectorError).code).toBe('timeout')
+        expect((error as DirectorError).message).toContain('runtime startup')
+      }
+      const elapsedMs = performance.now() - started
+      expect(elapsedMs).toBeGreaterThanOrEqual(0)
+      expect(elapsedMs).toBeLessThan(900)
+    })
     expect(server.requests).toHaveLength(0)
   })
 
@@ -647,16 +662,20 @@ describe('GemmaDirectorModel passage-window chunking (issue #53)', () => {
     })
     models.push(model)
 
-    const started = Date.now()
-    try {
-      await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
-      throw new Error('Expected the chapter deadline to fire during context loading')
-    } catch (error) {
-      expect(error).toBeInstanceOf(DirectorError)
-      expect((error as DirectorError).code).toBe('timeout')
-      expect((error as DirectorError).message).toContain('context loading')
-    }
-    expect(Date.now() - started).toBeLessThan(900)
+    await withBackwardWallClock(async () => {
+      const started = performance.now()
+      try {
+        await model.directChapter(book, book.chapters[0] as Chapter, { timeoutMs: 400 })
+        throw new Error('Expected the chapter deadline to fire during context loading')
+      } catch (error) {
+        expect(error).toBeInstanceOf(DirectorError)
+        expect((error as DirectorError).code).toBe('timeout')
+        expect((error as DirectorError).message).toContain('context loading')
+      }
+      const elapsedMs = performance.now() - started
+      expect(elapsedMs).toBeGreaterThanOrEqual(0)
+      expect(elapsedMs).toBeLessThan(900)
+    })
     expect(server.requests).toHaveLength(0)
   })
 

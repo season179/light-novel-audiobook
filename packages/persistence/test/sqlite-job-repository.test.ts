@@ -238,9 +238,9 @@ const delay = (ms: number): Promise<void> =>
   })
 
 const waitForFile = async (path: string, timeoutMs: number): Promise<void> => {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!existsSync(path)) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for file: ${path}`)
+    if (performance.now() >= deadline) throw new Error(`Timed out waiting for file: ${path}`)
     await delay(10)
   }
 }

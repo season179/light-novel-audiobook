@@ -174,9 +174,9 @@ describe('asynchronous adapter failures are sanitized too', () => {
     })
     const started = await api.startGeneration({ uploadId: upload.uploadId })
 
-    const deadline = Date.now() + 10_000
+    const deadline = performance.now() + 10_000
     let job = started.job
-    while (Date.now() < deadline) {
+    while (performance.now() < deadline) {
       const latest = await api.getJobState({ jobId: started.jobId })
       if (latest !== null) job = latest
       if (!job.active) break
