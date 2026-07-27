@@ -9,6 +9,7 @@ import type {
   VoiceProfile,
 } from '@light-novel-audiobook/domain'
 import type { PersistedCastApproval } from './cast-approval.js'
+import type { DirectionApprovalQuery, PersistedDirectionApproval } from './direction-approval.js'
 import type {
   BookFallbackGrant,
   FallbackApprovalCatalog,
@@ -162,6 +163,17 @@ export interface CastApprovalRepository {
   findCastApproval(epubSha256: string): Promise<PersistedCastApproval | undefined>
   /** Replaces the active decision while preserving its content-addressed approval identity. */
   saveCastApproval(approval: PersistedCastApproval): Promise<void>
+}
+
+/**
+ * Whole-script confirmations have an independent lifecycle from jobs. Saving a job must never
+ * overwrite or erase a human review decision, and old confirmations remain as history.
+ */
+export interface DirectionApprovalRepository {
+  findDirectionApproval(
+    query: DirectionApprovalQuery,
+  ): Promise<PersistedDirectionApproval | undefined>
+  saveDirectionApproval(approval: PersistedDirectionApproval): Promise<void>
 }
 
 export interface FallbackApprovalRepository {

@@ -3,7 +3,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withTransaction } from './transaction.js'
 
-export const SCHEMA_VERSION = 5 satisfies number
+export const SCHEMA_VERSION = 6 satisfies number
 
 const migrations = new Map<number, string>()
 
@@ -236,8 +236,30 @@ migrations.set(
 `,
 )
 
+migrations.set(
+  6,
+  `
+  -- Issue #96 step 2. Append-only whole-script confirmations live outside jobs so an ordinary job
+  -- save cannot overwrite a human decision. There is deliberately no foreign key: old decisions
+  -- remain as history, while lookup by the exact script hash makes changed scripts self-invalidating.
+  -- Only IDs, hashes, actor and time are stored here; no story or review-display text enters it.
+  CREATE TABLE direction_approvals (
+    approval_id TEXT PRIMARY KEY NOT NULL,
+    job_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    script_sha256 TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL
+  );
+
+  CREATE INDEX direction_approvals_lookup
+    ON direction_approvals(job_id, book_id, script_sha256);
+`,
+)
+
 /**
- * Execute migrations up to SCHEMA_VERSION on the given database.
+ * Execute migrations up to SCHEMA_VERSION on the given database. The optional target exists so
+ * migration compatibility tests can build an old database through the real registered path.
  *
  * The tracking table, the current-version read, every migration body and its version stamp all
  * run inside ONE transaction. Without it, two processes opening a fresh workspace both read
@@ -248,11 +270,14 @@ migrations.set(
  * The caller must have set `busy_timeout` first, so the loser of the race waits rather than
  * failing; `withTransaction` opens with BEGIN IMMEDIATE, which is what lets that timeout apply.
  */
-export function migrateSchema(db: DatabaseSync): void {
+export function migrateSchema(db: DatabaseSync, targetVersion = SCHEMA_VERSION): void {
+  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0 || targetVersion > SCHEMA_VERSION) {
+    throw new Error(`Unsupported database schema target ${targetVersion}`)
+  }
   // Read-only fast path. An already-migrated workspace is the overwhelmingly common case, and it
   // must not take the write lock: otherwise merely *opening* a workspace fails whenever another
   // process is mid-write for longer than busy_timeout.
-  if (schemaVersionOf(db) === SCHEMA_VERSION) return
+  if (schemaVersionOf(db) === targetVersion) return
 
   withTransaction(db, () => {
     db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)')
@@ -260,13 +285,13 @@ export function migrateSchema(db: DatabaseSync): void {
     // Re-read inside the transaction. The fast path above is advisory only -- another process may
     // have migrated in the meantime, and this is the read that the write is serialized against.
     const current = schemaVersionOf(db)
-    if (current > SCHEMA_VERSION) {
+    if (current > targetVersion) {
       throw new Error(
-        `Database schema version ${current} exceeds supported version ${SCHEMA_VERSION}`,
+        `Database schema version ${current} exceeds requested version ${targetVersion}`,
       )
     }
 
-    for (let v = current + 1; v <= SCHEMA_VERSION; v += 1) {
+    for (let v = current + 1; v <= targetVersion; v += 1) {
       const sql = migrations.get(v)
       if (!sql) {
         throw new Error(`Missing migration for version ${v}`)

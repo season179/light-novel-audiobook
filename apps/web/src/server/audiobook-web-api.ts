@@ -4,6 +4,8 @@ import type {
   DirectChapterOptions,
   JobRepository,
   PendingFallbackApproval,
+  PersistedDirectionApproval,
+  ReviewDirection,
   ReviewerIdentity,
   ReviewFallbackApprovals,
 } from '@light-novel-audiobook/application'
@@ -86,6 +88,7 @@ export interface AudiobookWebApiDependencies {
   readonly runner: GenerationRunner
   readonly voices: VoiceCast
   readonly review: ReviewFallbackApprovals
+  readonly directionReview: ReviewDirection
   /**
    * Who this server records as the human behind a fallback decision. Required, and never taken from a
    * request: see `resolveReviewerIdentity`. Branded so only the canonical resolver can produce it.
@@ -150,6 +153,7 @@ export class AudiobookWebApi {
   private readonly runner: GenerationRunner
   private readonly voices: VoiceCast
   private readonly review: ReviewFallbackApprovals
+  private readonly directionReview: ReviewDirection
   private readonly reviewer: ReviewerIdentity
   private readonly completedOutputs: CompletedOutputAuthority
   private readonly directorOptions: DirectChapterOptions | undefined
@@ -162,6 +166,7 @@ export class AudiobookWebApi {
     this.runner = dependencies.runner
     this.voices = dependencies.voices
     this.review = dependencies.review
+    this.directionReview = dependencies.directionReview
     this.reviewer = dependencies.reviewer
     this.completedOutputs = dependencies.completedOutputs
     this.directorOptions = dependencies.directorOptions
@@ -235,6 +240,11 @@ export class AudiobookWebApi {
       }),
     )
     return this.listFallbackReview({ jobId: input.jobId })
+  }
+
+  /** Records confirmation of the exact currently persisted script; rendering is not gated yet. */
+  async confirmDirection(input: { readonly jobId: string }): Promise<PersistedDirectionApproval> {
+    return this.directionReview.confirm({ jobId: input.jobId, decidedBy: this.reviewer })
   }
 
   /**

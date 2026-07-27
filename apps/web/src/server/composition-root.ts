@@ -3,11 +3,13 @@ import {
   type AudioAssembler,
   CompletedOutputAuthority,
   type DirectChapterOptions,
+  type DirectionApprovalRepository,
   type DirectorModel,
   type EpubExtractor,
   type FallbackApprovalRepository,
   GenerateAudiobook,
   type JobRepository,
+  ReviewDirection,
   ReviewFallbackApprovals,
   type SpeechEngineFactory,
 } from '@light-novel-audiobook/application'
@@ -22,6 +24,7 @@ import { FakeAudioAssembler } from './fakes/fake-audio-assembler.js'
 import { FAKE_DIRECTOR_IDENTITY, FakeDirectorModel } from './fakes/fake-director-model.js'
 import { FakeEpubExtractor } from './fakes/fake-epub-extractor.js'
 import { createFakeSpeechEngineFactory } from './fakes/fake-speech-engine.js'
+import { InMemoryDirectionApprovalRepository } from './fakes/in-memory-direction-approvals.js'
 import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-approvals.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
 import { GenerationRunner } from './generation-runner.js'
@@ -84,6 +87,8 @@ export interface AudiobookAdapterFactories {
    * whole process, like `jobs`. `#21` supplies `new SqliteFallbackApprovalRepository(db)`.
    */
   readonly approvals?: FallbackApprovalRepository | undefined
+  /** Separate whole-script confirmation history; a job save must never overwrite it. */
+  readonly directionApprovals?: DirectionApprovalRepository | undefined
   /** Stateless in practice; a shared instance is fine. */
   readonly createAudioAssembler?: (() => AudioAssembler | Promise<AudioAssembler>) | undefined
   /**
@@ -148,6 +153,7 @@ export const createAudiobookWebApi = async (
   const approvals = withSanitizedFailures.approvals(
     options.approvals ?? new InMemoryFallbackApprovalRepository(),
   )
+  const directionApprovals = options.directionApprovals ?? new InMemoryDirectionApprovalRepository()
   // One coordinator per process and catalog. Completed-output consumers hold it only through their
   // final catalog check and, for files, descriptor acquisition; review mutations hold it through the
   // catalog commit. Streams themselves never hold it.
@@ -199,6 +205,7 @@ export const createAudiobookWebApi = async (
     runner,
     voices,
     review: new ReviewFallbackApprovals({ jobs, approvals, catalogAccess }),
+    directionReview: new ReviewDirection({ jobs, approvals: directionApprovals }),
     completedOutputs,
     reviewer: options.reviewer ?? resolveReviewerIdentity(),
     ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
