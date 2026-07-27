@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
+import { GenerationRunner } from '../src/server/generation-runner.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 import {
   createTestHarness,
@@ -311,9 +312,19 @@ describe('AudiobookWebApi', () => {
     expect(failed.resumeDescription).toBe(
       'Recheck saved segment audio and render only the missing segments.',
     )
-    await expect(harness.api.startGeneration({ uploadId: stored.uploadId })).rejects.toThrow(
-      'Open the job to review what survived',
-    )
+    const startDirection = vi.spyOn(GenerationRunner.prototype, 'startDirection')
+    const startRendering = vi.spyOn(GenerationRunner.prototype, 'startRendering')
+    const directorsBeforeOpen = harness.directors.length
+    const speechBeforeOpen = harness.speechEngine.rendered
+    const reopened = await harness.api.startGeneration({ uploadId: stored.uploadId })
+    expect(reopened.jobId).toBe(first.jobId)
+    expect(reopened.job.state).toBe('failed')
+    expect(reopened.job).toEqual(failed)
+    expect(startDirection).not.toHaveBeenCalled()
+    expect(startRendering).not.toHaveBeenCalled()
+    expect(harness.directors).toHaveLength(directorsBeforeOpen)
+    expect(harness.speechEngine.rendered).toBe(speechBeforeOpen)
+
     const second = await harness.api.resumeGeneration({ jobId: first.jobId })
     const failedAgain = await waitForJobState(
       harness.api,

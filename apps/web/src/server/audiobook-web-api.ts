@@ -339,17 +339,10 @@ export class AudiobookWebApi {
         'This audiobook is already generating. Refresh to see its progress.',
       )
     }
-    if (existing?.state === 'abandoned') {
-      throw new WebApiError(
-        'generation_rejected',
-        'This job stopped unexpectedly. Open the job and choose Resume to continue its interrupted stage.',
-      )
-    }
-    if (existing?.state === 'failed') {
-      throw new WebApiError(
-        'generation_rejected',
-        'This job failed. Open the job to review what survived and resume its interrupted stage.',
-      )
+    if (existing?.state === 'failed' || existing?.state === 'abandoned') {
+      // Opening an interrupted job is not resuming it. Return the persisted resting state so the
+      // browser can navigate to its explicit Resume control without enqueuing any operation.
+      return { jobId, job: await this.requireJobState({ jobId }) }
     }
 
     this.runner.startDirection({

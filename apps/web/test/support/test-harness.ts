@@ -8,6 +8,7 @@ import { createAudiobookComposition } from '../../src/server/composition-root.js
 import { toWebApiResult } from '../../src/server/errors.js'
 import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
+import { InMemoryJobRepository } from '../../src/server/fakes/in-memory-job-repository.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
 import {
   createM1VoiceCast,
@@ -49,6 +50,8 @@ export class RenderGate {
 export interface TestHarness {
   readonly api: AudiobookWebApi
   readonly workspace: LocalWorkspace
+  /** Raw persistence adapter for restart-state fixtures; production calls still use the real API. */
+  readonly jobs: InMemoryJobRepository
   /** The shared fake engine, so a test can count renders across runs. */
   readonly speechEngine: FakeSpeechEngine
   /** Every director the composition root built, newest last. One per generation run. */
@@ -78,9 +81,11 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
     pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
   })
   const directors: FakeDirectorModel[] = []
+  const jobs = new InMemoryJobRepository(workspace)
 
   const composition = await createAudiobookComposition({
     workspace,
+    jobs,
     voices,
     // Supplied through the canonical resolver (explicit configuration, never the OS account), so a
     // test does not depend on the account running it and the branded value still only originates
@@ -105,6 +110,7 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
   return {
     api: composition.api,
     workspace,
+    jobs,
     speechEngine,
     directors,
     client: createInProcessClient(composition),

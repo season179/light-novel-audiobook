@@ -40,9 +40,6 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
   const [file, setFile] = useState<File | null>(null)
   const [upload, setUpload] = useState<EpubUploadView | null>(null)
   const [failure, setFailure] = useState<WebApiFailure | null>(null)
-  // Keep the complete rejected command. A bounded recovery is the same job only if it retains the
-  // original slice, so remembering an upload ID alone is not enough.
-  const [recoverable, setRecoverable] = useState<StartGenerationCommand | null>(null)
   const [firstChapter, setFirstChapter] = useState('')
   const [maxChapters, setMaxChapters] = useState('')
   const [maxPassages, setMaxPassages] = useState('')
@@ -66,7 +63,6 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
         return
       }
       setFailure(null)
-      setRecoverable(null)
       setUpload(result.value)
       await queryClient.invalidateQueries({ queryKey: ['epub-uploads'] })
     },
@@ -74,14 +70,12 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
 
   const startMutation = useMutation({
     mutationFn: async (command: StartGenerationCommand) => client.startGeneration(command),
-    onSuccess: (result, command) => {
+    onSuccess: (result) => {
       if (!result.ok) {
         setFailure(result.error)
-        setRecoverable(result.error.code === 'generation_rejected' ? command : null)
         return
       }
       setFailure(null)
-      setRecoverable(null)
       onStarted(result.value.jobId)
     },
   })
@@ -156,14 +150,6 @@ export function EpubUploadPanel({ client, onStarted }: EpubUploadPanelProps) {
           <button type="submit" disabled={uploadMutation.isPending}>
             {uploadMutation.isPending ? 'Uploading…' : 'Upload EPUB'}
           </button>
-          {recoverable !== null && (
-            <button
-              type="button"
-              onClick={() => startMutation.mutate({ ...recoverable, recoverAbandoned: true })}
-            >
-              Recover and continue
-            </button>
-          )}
         </div>
       </form>
 
