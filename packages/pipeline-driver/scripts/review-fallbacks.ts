@@ -5,10 +5,12 @@
  *   pnpm pipeline:review -- list --workspace <path> --job-id <id>
  *   LNA_REVIEWER="Name" pnpm pipeline:review -- approve --workspace <path> --job-id <id>
  *   LNA_REVIEWER="Name" pnpm pipeline:review -- approve --workspace <path> --job-id <id> --segment-id <id>
+ *   LNA_REVIEWER="Name" pnpm pipeline:review -- approve --workspace <path> --job-id <id> --segment-ids <id,id,...>
  *
- * `approve` is deliberately a separate invocation from rendering. Without `--segment-id` it records
- * a book-wide grant for one homogeneous decision group. With that flag it makes one segment decision
- * and clears any earlier withdrawal.
+ * `approve` is deliberately a separate invocation from rendering. Without a segment flag it records
+ * a book-wide grant for one homogeneous decision group. With `--segment-id` it makes one segment
+ * decision and clears any earlier withdrawal. With `--segment-ids` it makes one exact-set decision
+ * over the listed pending segments, rejecting the whole set if any ID is no longer pending.
  */
 import path from 'node:path'
 import {
@@ -53,7 +55,15 @@ const report = await runFallbackReviewCommand({
   action,
   workspaceRoot: path.resolve(required('workspace')),
   jobId: required('job-id'),
-  ...(action === 'approve' ? { announceApproval: printNotice, segmentId: flag('segment-id') } : {}),
+  ...(action === 'approve'
+    ? {
+        announceApproval: printNotice,
+        segmentId: flag('segment-id'),
+        ...(flag('segment-ids') === undefined
+          ? {}
+          : { segmentIds: (flag('segment-ids') ?? '').split(',') }),
+      }
+    : {}),
 })
 
 if (report.action === 'list') {

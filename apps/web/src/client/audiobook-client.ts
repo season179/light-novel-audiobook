@@ -43,6 +43,15 @@ export interface AudiobookClient {
     readonly jobId: string
     readonly segmentId: string
   }): Promise<WebApiResult<FallbackReviewView>>
+  /**
+   * One decision over exactly the selected pending lines; the rest keep blocking. The server
+   * rejects the whole set if any line is no longer awaiting a decision, so the answer is always
+   * "exactly what you approved", never a silent subset.
+   */
+  approveSelectedFallbacks(input: {
+    readonly jobId: string
+    readonly segmentIds: readonly string[]
+  }): Promise<WebApiResult<FallbackReviewView>>
   revokeFallback(input: {
     readonly jobId: string
     readonly segmentId: string

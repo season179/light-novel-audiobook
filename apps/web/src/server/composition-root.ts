@@ -27,6 +27,7 @@ import { createFakeSpeechEngineFactory } from './fakes/fake-speech-engine.js'
 import { InMemoryDirectionApprovalRepository } from './fakes/in-memory-direction-approvals.js'
 import { InMemoryFallbackApprovalRepository } from './fakes/in-memory-fallback-approvals.js'
 import { InMemoryJobRepository } from './fakes/in-memory-job-repository.js'
+import { FallbackSelectionReview } from './fallback-selection-review.js'
 import { GenerationRunner } from './generation-runner.js'
 import { sliceLimitsForJobId } from './job-identity.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
@@ -118,9 +119,20 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly directorOptions?: DirectChapterOptions | undefined
 }
 
-export const createAudiobookWebApi = async (
+/**
+ * Everything one process composition builds. The exact-set review decision (#96 step 4) shares the
+ * review service, runner and reviewer with the web API — a second composition would not see an
+ * active render — but is built beside `AudiobookWebApi` because the render-gate half of #96 owns
+ * that file while this step lands.
+ */
+export interface AudiobookComposition {
+  readonly api: AudiobookWebApi
+  readonly fallbackSelection: FallbackSelectionReview
+}
+
+export const createAudiobookComposition = async (
   options: AudiobookWebApiOptions = {},
-): Promise<AudiobookWebApi> => {
+): Promise<AudiobookComposition> => {
   const workspace = options.workspace ?? (await createWorkspace(options.workspaceRoot))
   // The pinned Qwen configuration is the source of truth for which voices are approved, so the
   // default cast is derived from it and the default fake engine is held to the same profiles.
@@ -197,22 +209,33 @@ export const createAudiobookWebApi = async (
     })
   })
 
-  return new AudiobookWebApi({
-    workspace,
-    uploads: new EpubUploadStore(workspace),
-    jobs,
-    books,
-    runner,
-    voices,
-    review: new ReviewFallbackApprovals({ jobs, approvals, catalogAccess }),
-    directionReview: new ReviewDirection({ jobs, approvals: directionApprovals }),
-    completedOutputs,
-    reviewer: options.reviewer ?? resolveReviewerIdentity(),
-    ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
-  })
+  const review = new ReviewFallbackApprovals({ jobs, approvals, catalogAccess })
+  const reviewer = options.reviewer ?? resolveReviewerIdentity()
+  return {
+    api: new AudiobookWebApi({
+      workspace,
+      uploads: new EpubUploadStore(workspace),
+      jobs,
+      books,
+      runner,
+      voices,
+      review,
+      directionReview: new ReviewDirection({ jobs, approvals: directionApprovals }),
+      completedOutputs,
+      reviewer,
+      ...(options.directorOptions === undefined
+        ? {}
+        : { directorOptions: options.directorOptions }),
+    }),
+    fallbackSelection: new FallbackSelectionReview({ review, runner, reviewer }),
+  }
 }
 
-let instance: Promise<AudiobookWebApi> | undefined
+export const createAudiobookWebApi = async (
+  options: AudiobookWebApiOptions = {},
+): Promise<AudiobookWebApi> => (await createAudiobookComposition(options)).api
+
+let instance: Promise<AudiobookComposition> | undefined
 
 /**
  * Lazily built once per server process; never at import time, so builds stay side-effect free.
@@ -220,11 +243,14 @@ let instance: Promise<AudiobookWebApi> | undefined
  * The adapter set comes from explicit environment configuration (`LNA_WEB_TRANSPORTS`, resolved in
  * `environment-composition.ts`): **fakes are the default**, and the real EPUB/Gemma/Qwen/FFmpeg/
  * SQLite adapters exist only when that variable says `real` (#21). Explicit options passed to
- * `createAudiobookWebApi` — every test — are untouched by this.
+ * `createAudiobookComposition` — every test — are untouched by this.
  */
-export const getAudiobookWebApi = (): Promise<AudiobookWebApi> => {
+export const getAudiobookComposition = (): Promise<AudiobookComposition> => {
   instance ??= resolveEnvironmentCompositionOptions().then((options) =>
-    createAudiobookWebApi(options),
+    createAudiobookComposition(options),
   )
   return instance
 }
+
+export const getAudiobookWebApi = async (): Promise<AudiobookWebApi> =>
+  (await getAudiobookComposition()).api

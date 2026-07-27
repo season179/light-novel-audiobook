@@ -133,6 +133,7 @@ const stubClient = (overrides: Partial<AudiobookClient>): AudiobookClient => ({
   })),
   approveAllFallbacks: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
   approveFallback: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
+  approveSelectedFallbacks: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
   revokeFallback: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
   renderApprovedScript: vi.fn(async () => ({
     ok: true as const,
@@ -418,6 +419,163 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
 
     await user.click(screen.getByRole('button', { name: 'Render approved script' }))
     expect(renderApprovedScript).toHaveBeenCalledWith({ jobId: JOB_ID })
+  })
+
+  it('approves exactly the ticked lines and says what stays blocking', async () => {
+    // Issue #96 step 4: the 190-of-200 case. The user ticks the lines they accept and makes one
+    // decision over that exact set; the panel says in words how many are selected and how many
+    // keep blocking, never colour alone.
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'awaiting_review',
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+        active: false,
+        latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'needs_decisions', blockers: 2, total: 2 },
+      }),
+    }))
+    const queue = reviewView()
+    const listFallbackReview = vi.fn(async () => ({ ok: true as const, value: queue }))
+    const approveSelectedFallbacks = vi.fn(async () => ({
+      ok: true as const,
+      value: reviewView(),
+    }))
+    const approveAllFallbacks = vi.fn(async () => ({ ok: true as const, value: reviewView() }))
+
+    const user = userEvent.setup()
+    renderPanel(
+      stubClient({
+        getJobState,
+        listFallbackReview,
+        approveSelectedFallbacks,
+        approveAllFallbacks,
+      }),
+    )
+
+    expect(
+      await screen.findByRole(
+        'heading',
+        { name: 'Unresolved speakers need your decision (2)' },
+        WAIT,
+      ),
+    ).toBeDefined()
+    // Selection lives behind the line list: nobody ticks a line they have not read.
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Show the lines' }))
+
+    const first = queue.items[0]
+    const second = queue.items[1]
+    if (first === undefined || second === undefined) throw new Error('fixture queue is short')
+    const firstBox = screen.getByRole('checkbox', { name: new RegExp(first.chapterTitle) })
+    const secondBox = screen.getByRole('checkbox', { name: new RegExp(second.chapterTitle) })
+    expect((firstBox as HTMLInputElement).checked).toBe(false)
+    expect((secondBox as HTMLInputElement).checked).toBe(false)
+    expect(screen.getByText(/2 lines are waiting\. Tick the ones you accept/)).toBeDefined()
+    const approveSelectedButton = screen.getByRole('button', {
+      name: 'Approve the 0 selected lines',
+    })
+    expect((approveSelectedButton as HTMLButtonElement).disabled).toBe(true)
+
+    // Keyboard-operable: focus and space toggle the box, with the accessible name from its label.
+    firstBox.focus()
+    expect(document.activeElement).toBe(firstBox)
+    await user.keyboard(' ')
+    expect((firstBox as HTMLInputElement).checked).toBe(true)
+    expect(
+      screen.getByText('1 of 2 waiting selected — approving them leaves 1 still blocking.'),
+    ).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Approve the 1 selected line' }))
+    expect(approveSelectedFallbacks).toHaveBeenCalledWith({
+      jobId: JOB_ID,
+      segmentIds: [first.segmentId],
+    })
+    expect(approveAllFallbacks).not.toHaveBeenCalled()
+  })
+
+  it('selects every waiting line at once and clears the selection', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'awaiting_review',
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+        active: false,
+        latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'needs_decisions', blockers: 2, total: 2 },
+      }),
+    }))
+    const listFallbackReview = vi.fn(async () => ({ ok: true as const, value: reviewView() }))
+
+    const user = userEvent.setup()
+    renderPanel(stubClient({ getJobState, listFallbackReview }))
+
+    await user.click(await screen.findByRole('button', { name: 'Show the lines' }, WAIT))
+    await user.click(screen.getByRole('button', { name: 'Select all 2 waiting' }))
+    for (const box of screen.getAllByRole('checkbox')) {
+      expect((box as HTMLInputElement).checked).toBe(true)
+    }
+    expect(
+      screen.getByText('2 of 2 waiting selected — approving them leaves 0 still blocking.'),
+    ).toBeDefined()
+    // Selecting everything again is pointless once everything is selected.
+    expect(
+      (screen.getByRole('button', { name: 'Select all 2 waiting' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Clear selection' }))
+    for (const box of screen.getAllByRole('checkbox')) {
+      expect((box as HTMLInputElement).checked).toBe(false)
+    }
+    expect(screen.getByText(/2 lines are waiting\. Tick the ones you accept/)).toBeDefined()
+  })
+
+  it('shows the whole-set rejection when the queue moved under an open page', async () => {
+    // The stale-set answer: the server rejects the exact set outright, and the refusal reaches the
+    // user as an alert — a silent subset would report success the user never granted.
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'awaiting_review',
+        stage: 'directing',
+        stageLabel: 'Directing chapters',
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+        active: false,
+        latestMessage: 'Awaiting fallback approval review',
+        review: { status: 'needs_decisions', blockers: 2, total: 2 },
+      }),
+    }))
+    const queue = reviewView()
+    const listFallbackReview = vi.fn(async () => ({ ok: true as const, value: queue }))
+    const approveSelectedFallbacks = vi.fn(async () => ({
+      ok: false as const,
+      error: {
+        code: 'generation_rejected' as const,
+        message:
+          'Fallback segment stale-segment-id is not awaiting a decision in the current review queue; the queue changed since it was read, so nothing was approved. Re-read the queue and decide again',
+      },
+    }))
+
+    const user = userEvent.setup()
+    renderPanel(stubClient({ getJobState, listFallbackReview, approveSelectedFallbacks }))
+
+    await user.click(await screen.findByRole('button', { name: 'Show the lines' }, WAIT))
+    await user.click(screen.getByRole('button', { name: 'Select all 2 waiting' }))
+    await user.click(screen.getByRole('button', { name: 'Approve the 2 selected lines' }))
+
+    const alert = await screen.findByRole('alert', undefined, WAIT)
+    expect(alert.textContent).toContain('not awaiting a decision in the current review queue')
+    expect(alert.textContent).toContain('nothing was approved')
   })
 
   it('shows an empty review queue as nothing blocking, with the render action on offer', async () => {

@@ -87,6 +87,11 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     mutationFn: (segmentId: string) => client.approveFallback({ jobId, segmentId }),
     onSuccess: refresh,
   })
+  const approveSelected = useMutation({
+    mutationFn: (segmentIds: readonly string[]) =>
+      client.approveSelectedFallbacks({ jobId, segmentIds }),
+    onSuccess: refresh,
+  })
   const revoke = useMutation({
     mutationFn: (segmentId: string) => client.revokeFallback({ jobId, segmentId }),
     onSuccess: refresh,
@@ -96,10 +101,18 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     onSuccess: refresh,
   })
   const reviewBusy =
-    approveAll.isPending || approveOne.isPending || revoke.isPending || render.isPending
-  const reviewError = [approveAll.data, approveOne.data, revoke.data, render.data].find(
-    (result) => result !== undefined && !result.ok,
-  )
+    approveAll.isPending ||
+    approveOne.isPending ||
+    approveSelected.isPending ||
+    revoke.isPending ||
+    render.isPending
+  const reviewError = [
+    approveAll.data,
+    approveOne.data,
+    approveSelected.data,
+    revoke.data,
+    render.data,
+  ].find((result) => result !== undefined && !result.ok)
 
   if (jobQuery.isPending) {
     return (
@@ -201,6 +214,7 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
           review={reviewQuery.data.value}
           busy={reviewBusy}
           onApproveAll={() => approveAll.mutate()}
+          onApproveSelected={(segmentIds) => approveSelected.mutate(segmentIds)}
           onApprove={(segmentId) => approveOne.mutate(segmentId)}
           onRevoke={(segmentId) => revoke.mutate(segmentId)}
           onRender={() => render.mutate()}
