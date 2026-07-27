@@ -63,6 +63,7 @@ export interface TestHarness {
 export interface TestHarnessOptions {
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
   readonly directorOptions?: DirectChapterOptions | undefined
+  readonly createDirectorModel?: (() => FakeDirectorModel) | undefined
 }
 
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
@@ -97,7 +98,7 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
     },
     directorIdentity: new FakeDirectorModel().identity,
     createDirectorModel: () => {
-      const director = new FakeDirectorModel()
+      const director = options.createDirectorModel?.() ?? new FakeDirectorModel()
       directors.push(director)
       return director
     },
@@ -175,7 +176,8 @@ export const waitForJobState = async (
     if (latest !== null && predicate(latest)) return latest
     if (latest?.state === 'awaiting_review' && !decided) {
       decided = true
-      await api.approveAllFallbacks({ jobId })
+      const review = await api.listFallbackReview({ jobId })
+      if (review.pendingCount > 0) await api.approveAllFallbacks({ jobId })
       await api.renderApprovedScript({ jobId })
     }
     await new Promise((resolve) => setTimeout(resolve, 20))

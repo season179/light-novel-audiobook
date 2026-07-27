@@ -1,9 +1,12 @@
 import {
   AudiobookJob,
+  type AudiobookJobSnapshot,
   type AudiobookOutput,
   Book,
   Chapter,
   type DirectedSegment,
+  DomainError,
+  ExactSourceCoverage,
   OutputVersion,
   Segment,
   SourceCoverageError,
@@ -22,6 +25,8 @@ import {
   createGenerationCommandIdentity,
   type DirectChapterOptions,
   type DirectedChapter,
+  type DirectionApprovalQuery,
+  type DirectionApprovalRepository,
   type DirectorModel,
   type DirectorModelFactory,
   type EpubExtractionRequest,
@@ -30,14 +35,18 @@ import {
   type GenerateAudiobookCommand,
   type JobRepository,
   type OutputReservation,
-  PendingFallbackReviewError,
+  type PersistedDirectionApproval,
   type PersistedFallbackApproval,
+  RenderAudiobook,
   type ReusableSegmentQuery,
+  ReviewDirection,
   ReviewFallbackApprovals,
+  resolveReviewerIdentity,
   type SpeechEngine,
   type SpeechEngineContext,
   type SpeechEngineFactory,
   type SpeechRenderRequest,
+  UnconfirmedDirectionError,
   withDirectorContentIdentity,
 } from '../src/index.js'
 import { splitterIdentity } from '../src/split-directed-segments.js'
@@ -427,6 +436,27 @@ class FakeAssembler implements AudioAssembler {
   }
 }
 
+class InMemoryDirectionApprovals implements DirectionApprovalRepository {
+  readonly records: PersistedDirectionApproval[] = []
+
+  async findDirectionApproval(
+    query: DirectionApprovalQuery,
+  ): Promise<PersistedDirectionApproval | undefined> {
+    return this.records.find(
+      (record) =>
+        record.jobId === query.jobId &&
+        record.bookId === query.bookId &&
+        record.scriptSha256 === query.scriptSha256,
+    )
+  }
+
+  async saveDirectionApproval(record: PersistedDirectionApproval): Promise<void> {
+    if (!this.records.some((candidate) => candidate.approvalId === record.approvalId)) {
+      this.records.push(record)
+    }
+  }
+}
+
 class InMemoryJobRepository implements JobRepository {
   readonly jobs = new Map<string, AudiobookJob>()
   readonly books = new Map<string, Book>()
@@ -435,6 +465,7 @@ class InMemoryJobRepository implements JobRepository {
   readonly reservations: OutputReservation[] = []
   returnInvalidReusableMetadata = false
   reserveDuplicatePaths = false
+  mutateFoundBook: ((book: Book) => void) | undefined
   readonly missingArtifactPaths = new Set<string>()
   readonly corruptArtifactPaths = new Set<string>()
   private readonly versionByBook = new Map<string, number>()
@@ -468,7 +499,10 @@ class InMemoryJobRepository implements JobRepository {
 
   async findBook(bookId: string): Promise<Book | undefined> {
     const stored = this.books.get(bookId)
-    return stored === undefined ? undefined : rebuildApprovedBook(stored)
+    if (stored === undefined) return undefined
+    const rebuilt = rebuildApprovedBook(stored)
+    this.mutateFoundBook?.(rebuilt)
+    return rebuilt
   }
 
   async findReusableSegment(
@@ -528,26 +562,45 @@ interface Harness {
   readonly assembler: FakeAssembler
   readonly repository: InMemoryJobRepository
   readonly approvals: InMemoryFallbackApprovalRepository
+  readonly directionApprovals: InMemoryDirectionApprovals
   readonly review: ReviewFallbackApprovals
+  readonly directionReview: ReviewDirection
+  readonly rendering: RenderAudiobook
   readonly useCase: GenerateAudiobook
 }
 
-const REVIEWER = 'local-reviewer'
+const REVIEWER = resolveReviewerIdentity({ LNA_REVIEWER: 'local-reviewer' })
 
-/**
- * Runs generation the way a user does for a book with unresolved speakers: the first attempt stops
- * for review, the human issues the book-wide fallback decision, and the run continues from the
- * persisted script. Tests whose subject is not the approval gate use this; the gate has its own
- * tests, including that omitting the grant approves nothing.
- */
+/** Test-only composition of the now-separate user actions. Production has no such one-call path. */
 const generate = async (app: Harness, command: GenerateAudiobookCommand) => {
-  try {
-    return await app.useCase.execute(command)
-  } catch (error) {
-    if (!(error instanceof PendingFallbackReviewError)) throw error
-    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
-    return await app.useCase.execute(command)
+  let job = await app.repository.findJob(command.jobId)
+  if (
+    job?.commandIdentity !== null &&
+    job?.commandIdentity !== undefined &&
+    job.commandIdentity !== app.useCase.commandIdentity(command)
+  ) {
+    throw new DomainError('Audiobook job result is stale for the requested generation inputs')
   }
+  let recordedFallbackApprovals = 0
+  if (job?.state !== 'awaiting_review' && job?.state !== 'completed') {
+    const directed = await app.useCase.execute(command)
+    job = directed.job
+    recordedFallbackApprovals += directed.recordedFallbackApprovals.length
+  }
+  if (job === undefined) throw new Error('direction did not persist a job')
+  if (job.state === 'awaiting_review') {
+    const items = await app.review.list(command.jobId)
+    if (items.some((item) => item.decision !== 'approved')) {
+      const reconciled = await app.review.grantBookFallback({
+        jobId: command.jobId,
+        decidedBy: REVIEWER,
+      })
+      recordedFallbackApprovals += reconciled.created.length
+    }
+    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+  }
+  const rendered = await app.rendering.execute({ jobId: command.jobId, voices: command.voices })
+  return { ...rendered, recordedFallbackApprovals }
 }
 
 /** Fixed so a recorded decision time is reproducible and identities are stable across runs. */
@@ -572,6 +625,17 @@ const harness = (
   const assembler = new FakeAssembler(events, options.assemblerIdentity)
   const repository = new InMemoryJobRepository()
   const approvals = new InMemoryFallbackApprovalRepository()
+  const directionApprovals = new InMemoryDirectionApprovals()
+  const review = new ReviewFallbackApprovals({
+    jobs: repository,
+    approvals,
+    now: options.now ?? ((): Date => DECIDED_AT),
+  })
+  const directionReview = new ReviewDirection({
+    jobs: repository,
+    approvals: directionApprovals,
+    now: options.now ?? ((): Date => DECIDED_AT),
+  })
   return {
     events,
     extractor,
@@ -582,10 +646,15 @@ const harness = (
     assembler,
     repository,
     approvals,
-    review: new ReviewFallbackApprovals({
+    directionApprovals,
+    review,
+    directionReview,
+    rendering: new RenderAudiobook({
+      speechEngineFactory: speechFactory,
+      audioAssembler: assembler,
       jobs: repository,
       approvals,
-      now: options.now ?? ((): Date => DECIDED_AT),
+      directionApprovals,
     }),
     useCase: new GenerateAudiobook({
       epubExtractor: extractor,
@@ -655,6 +724,89 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     )
   })
 
+  it('resolving the final fallback decision does not start audio', async () => {
+    const command = {
+      jobId: 'job-last-fallback-still-rests',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    const directed = await app.useCase.execute(command)
+    expect(directed.pendingFallbackApprovals).toHaveLength(1)
+
+    const decided = await app.review.grantBookFallback({
+      jobId: command.jobId,
+      decidedBy: REVIEWER,
+    })
+
+    expect(decided.pending).toEqual([])
+    expect((await app.repository.findJob(command.jobId))?.state).toBe('awaiting_review')
+    expect(app.speech.renderCalls).toHaveLength(0)
+    expect(app.assembler.calls).toHaveLength(0)
+  })
+
+  it('refuses direct application-service rendering without exact-script confirmation', async () => {
+    const command = {
+      jobId: 'job-unconfirmed-application-call',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await app.useCase.execute(command)
+    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
+
+    await expect(
+      app.rendering.execute({ jobId: command.jobId, voices: command.voices }),
+    ).rejects.toThrow(UnconfirmedDirectionError)
+    expect((await app.repository.findJob(command.jobId))?.state).toBe('awaiting_review')
+    expect(app.speech.renderCalls).toHaveLength(0)
+  })
+
+  it('invalidates confirmation when one reviewed segment changes', async () => {
+    const command = {
+      jobId: 'job-stale-direction-confirmation',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await app.useCase.execute(command)
+    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
+    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+    const stored = app.repository.books.get(bookId)
+    const segment = stored?.chapters[0]?.segments[0]
+    if (segment === undefined) throw new Error('fixture segment missing')
+    Object.defineProperty(segment, 'delivery', {
+      value: Object.freeze({ ...segment.delivery, emotion: 'changed-review-direction' }),
+    })
+
+    await expect(
+      app.rendering.execute({ jobId: command.jobId, voices: command.voices }),
+    ).rejects.toThrow(UnconfirmedDirectionError)
+    expect(app.speech.renderCalls).toHaveLength(0)
+  })
+
+  it('never lets a confirmation waive source-fidelity failure', async () => {
+    const command = {
+      jobId: 'job-confirmed-but-not-faithful',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices: makeCast(),
+    }
+    await app.useCase.execute(command)
+    await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
+    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+    app.repository.mutateFoundBook = (book) => {
+      const segment = book.chapters[0]?.segments[0]
+      if (segment === undefined) throw new Error('fixture segment missing')
+      Object.defineProperty(segment, 'sourceText', { value: 'Invented replacement.' })
+    }
+
+    await expect(
+      app.rendering.execute({ jobId: command.jobId, voices: command.voices }),
+    ).rejects.toBeInstanceOf(SourceCoverageError)
+    expect(app.speech.renderCalls).toHaveLength(0)
+  })
+
   it('makes no approval decision but materializes records from an existing human grant', async () => {
     const command: GenerateAudiobookCommand = {
       jobId: 'job-existing-human-grant',
@@ -663,7 +815,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
       voices: makeCast(),
     }
 
-    await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
+    const directed = await app.useCase.execute(command)
+    expect(directed.job.state).toBe('awaiting_review')
+    expect(directed.pendingFallbackApprovals).toHaveLength(1)
     const undecided = await app.approvals.readCatalog(bookId)
     expect(undecided.grant).toBeUndefined()
     expect(undecided.approvals).toEqual([])
@@ -685,8 +839,8 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
         subjects,
       }),
     )
-    const result = await app.useCase.execute(command)
-    expect(result.recordedFallbackApprovals).toBe(1)
+    const result = await app.review.reconcile({ book: storedBook, warnings: directed.job.warnings })
+    expect(result.created).toHaveLength(1)
     const materialized = await app.approvals.readCatalog(bookId)
     expect(materialized.grant?.decidedBy).toBe(REVIEWER)
     expect(materialized.approvals).toHaveLength(1)
@@ -799,15 +953,16 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     const assembliesBeforeRevocation = app.assembler.calls.length
 
     // Construct the durable residue of a catalog commit whose best-effort job reopen did not land.
-    // GenerateAudiobook is itself a public output reader, so it must reject this even when nobody
-    // called RenderAudiobook or a web projection first.
+    // The public render operation must refuse it even when no web projection ran first.
     await app.approvals.revoke(bookId, fallback.segmentId, {
       reason: 'human-withdrawal',
       decidedBy: REVIEWER,
       decidedAt: DECIDED_AT.toISOString(),
     })
 
-    await expect(app.useCase.execute(command)).rejects.toBeInstanceOf(PendingFallbackReviewError)
+    await expect(
+      app.rendering.execute({ jobId: command.jobId, voices: command.voices }),
+    ).rejects.toThrow('no persisted fallback approval')
     const reopened = await app.repository.findJob(command.jobId)
     expect(reopened?.state).toBe('awaiting_review')
     expect(reopened?.catalogRevision).toBeNull()
@@ -1060,19 +1215,25 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     }
     const firstDirector = wrapped('gemma-self-hash:http://gpu-box:8080:/run/lease-a.lock')
     const firstUseCase = makeUseCase(firstDirector)
-    // The review gate stops the first attempt; the human decision lets the run reach rendering.
-    await expect(firstUseCase.execute(command)).rejects.toThrow(PendingFallbackReviewError)
+    // Direction always stops; the human decisions then let the separate render operation run.
+    const firstDirection = await firstUseCase.execute(command)
+    expect(firstDirection.job.state).toBe('awaiting_review')
     expect(firstDirector.inner.receivedOptions).toHaveLength(2)
     expect(firstDirector.inner.receivedOptions.every((item) => item?.timeoutMs === 42_000)).toBe(
       true,
     )
     await app.review.grantBookFallback({ jobId: command.jobId, decidedBy: REVIEWER })
-    await expect(firstUseCase.execute(command)).rejects.toThrow('synthetic speech failure')
+    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+    await expect(app.rendering.execute({ jobId: command.jobId, voices })).rejects.toThrow(
+      'synthetic speech failure',
+    )
 
     // Same content, different self-reported adapter identity (host/port/lock path moved): resumes.
-    const resumed = await makeUseCase(
+    await makeUseCase(
       wrapped('gemma-self-hash:http://localhost:9999:/var/lock/lease-b.lock'),
     ).execute(command)
+    await app.directionReview.confirm({ jobId: command.jobId, decidedBy: REVIEWER })
+    const resumed = await app.rendering.execute({ jobId: command.jobId, voices })
     expect(resumed.job.state).toBe('completed')
     expect(resumed.reusedSegments).toBe(2)
 
@@ -1151,6 +1312,83 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     expect(app.directorFactory.created).toHaveLength(2)
   })
 
+  it('loads and resumes a hand-built schema-v4 failed-direction checkpoint', async () => {
+    const base = makeBook()
+    const chapters = [...base.chapters]
+    for (const position of [3, 4]) {
+      const chapterId = StableIds.chapter(bookId, position)
+      chapters.push(
+        new Chapter({
+          id: chapterId,
+          bookId,
+          position,
+          title: `Synthetic chapter ${position}`,
+          sourcePassages: [
+            new SourcePassage({
+              id: StableIds.passage(chapterId, 1),
+              chapterId,
+              sourceText: '“Who are you?”',
+            }),
+          ],
+        }),
+      )
+    }
+    const partial = new Book({
+      id: base.id,
+      title: base.title,
+      author: base.author,
+      coverPath: base.coverPath,
+      source: base.source,
+      chapters,
+    })
+    const voices = makeCast()
+    for (const chapter of partial.chapters.slice(0, 3)) {
+      const segments = ExactSourceCoverage.createSegments(chapter, directionFor(chapter))
+      for (const segment of segments) segment.assignVoice(voices.resolve(segment).assignment)
+      chapter.submitForReview(segments)
+      chapter.approve()
+    }
+    await app.repository.saveBook(partial)
+    const command = {
+      jobId: 'job-legacy-v4-partial-direction',
+      epubPath: '/uploads/story.epub',
+      epubSha256: sourceHash,
+      voices,
+    }
+    const legacySnapshot = {
+      schemaVersion: 4,
+      id: command.jobId,
+      state: 'failed',
+      stage: 'directing',
+      commandIdentity: app.useCase.commandIdentity(command),
+      renderContract: null,
+      catalogRevision: null,
+      bookId,
+      progress: {
+        currentChapterId: partial.chapters[3]?.id ?? null,
+        completedSegments: 0,
+        totalSegments: 0,
+        latestMessage: 'Synthetic direction interruption',
+      },
+      warnings: [],
+      error: 'Synthetic direction interruption',
+    } as const
+    app.repository.jobs.set(
+      command.jobId,
+      AudiobookJob.reconstitute(legacySnapshot as unknown as AudiobookJobSnapshot),
+    )
+
+    const resumed = await app.useCase.execute(command)
+
+    expect(resumed.job.state).toBe('awaiting_review')
+    expect(resumed.job.progress.direction?.completedChapters).toBe(4)
+    expect(app.extractor.calls).toHaveLength(0)
+    expect(app.events.filter((event) => event.startsWith('direct:'))).toEqual([
+      `direct:${partial.chapters[3]?.id}`,
+    ])
+    expect(await app.directionReview.findCurrent(command.jobId)).toBeUndefined()
+  })
+
   // Issue #54 item 1 meets the review gate: the resumed direction must still STOP at
   // awaiting_review when decisions are missing — skipping direction is not skipping review.
   it('stops a resumed direction at the review gate when decisions are still missing', async () => {
@@ -1164,9 +1402,9 @@ describe('GenerateAudiobook with in-memory boundary fakes', () => {
     }
     await expect(app.useCase.execute(command)).rejects.toThrow('synthetic direction failure')
 
-    await expect(app.useCase.execute(command)).rejects.toThrow(
-      /awaiting a fallback decision for 1 unresolved speaker segment/,
-    )
+    const stopped = await app.useCase.execute(command)
+    expect(stopped.job.state).toBe('awaiting_review')
+    expect(stopped.pendingFallbackApprovals).toHaveLength(1)
     expect(app.repository.jobs.get(command.jobId)?.state).toBe('awaiting_review')
     // Chapter 1 was directed once, before the crash; the resume directed only chapter 2.
     expect(

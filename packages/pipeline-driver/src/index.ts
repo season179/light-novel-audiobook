@@ -8,7 +8,12 @@ export {
   OwnedLlamaLifecycle,
   type OwnedLlamaLifecycleOptions,
 } from '@light-novel-audiobook/gemma-director'
-export { type RunPipelineOptions, type RunPipelineReport, runPipeline } from './driver.js'
+export {
+  type RunPipelineOptions,
+  type RunPipelineReport,
+  runConfirmedRender,
+  runPipeline,
+} from './driver.js'
 export { NarrationEchoDirectorServer } from './fake-director-server.js'
 export {
   type ApproveFallbackReviewReport,

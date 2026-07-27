@@ -1,46 +1,40 @@
 import type {
-  GenerateAudiobook,
-  GenerateAudiobookCommand,
+  DirectAudiobook,
+  DirectAudiobookCommand,
+  RenderAudiobook,
+  RenderAudiobookCommand,
 } from '@light-novel-audiobook/application'
 import { toPublicFailureMessage } from './errors.js'
 
-/**
- * Builds a use case for exactly one run, with adapters that have not been used yet.
- *
- * This is a factory rather than a retained instance for a concrete reason: `GenerateAudiobook`
- * always calls `DirectorModel.release()` when direction finishes, and a real director's release is
- * terminal — `GemmaDirectorModel.release()` memoises its shutdown and every later `directChapter()`
- * throws `Gemma Director has been released`. A process-wide use case would therefore succeed for the
- * first book and fail every later one before direction even started.
- *
- * It receives the command so per-run inputs that identity depends on can be derived from the one
- * carrier every caller already agrees on: the job ID. The composition root reads the slice bounds
- * out of `command.jobId` and wraps the extractor to match — a run whose extractor ignores the
- * bounds its job ID states is impossible to express.
- */
-export type GenerateAudiobookFactory = (
-  command: GenerateAudiobookCommand,
-) => Promise<GenerateAudiobook>
+/** A fresh Stage-A operation; real directors are terminal after release. */
+export type DirectAudiobookFactory = (command: DirectAudiobookCommand) => Promise<DirectAudiobook>
+
+/** A fresh Stage-B operation, built without an extractor or director. */
+export type RenderAudiobookFactory = (command: RenderAudiobookCommand) => Promise<RenderAudiobook>
+
+export interface GenerationRunnerOperations {
+  readonly createDirection: DirectAudiobookFactory
+  readonly createRendering: RenderAudiobookFactory
+}
 
 export type GenerationRunStatus = 'idle' | 'queued' | 'running'
 
 /**
- * Runs generation outside the request that asked for it, one run at a time.
+ * Serializes explicit direction and rendering operations outside web requests.
  *
- * Serialization is deliberate: with real adapters a run holds a GPU-bound director and speech
- * engine, and two concurrent runs would put two models on one 16 GB card — exactly what
- * `packages/gpu-lease` exists to prevent. Progress is not held here; the use case persists it
- * through `JobRepository` and the read API always answers from that stored state.
+ * Uploads can enqueue only Stage A. Stage B has its own method and therefore cannot happen merely
+ * because direction found no warnings. Both share one queue so Gemma and Qwen never overlap on the
+ * same GPU.
  */
 export class GenerationRunner {
-  private readonly createGenerate: GenerateAudiobookFactory
+  private readonly operations: GenerationRunnerOperations
   private readonly statuses = new Map<string, Exclude<GenerationRunStatus, 'idle'>>()
   private readonly runs = new Map<string, Promise<void>>()
   private readonly failures = new Map<string, string>()
   private tail: Promise<void> = Promise.resolve()
 
-  constructor(createGenerate: GenerateAudiobookFactory) {
-    this.createGenerate = createGenerate
+  constructor(operations: GenerationRunnerOperations) {
+    this.operations = operations
   }
 
   status(jobId: string): GenerationRunStatus {
@@ -51,50 +45,52 @@ export class GenerationRunner {
     return this.statuses.has(jobId)
   }
 
-  /**
-   * The last rejection from a run of this job. A failure the use case could persist is already in
-   * the stored job, so this is only consulted when the repository has no job at all — for example
-   * adapter construction failing, or generation inputs rejected before the job was created.
-   */
   startupFailure(jobId: string): string | undefined {
     return this.failures.get(jobId)
   }
 
-  start(command: GenerateAudiobookCommand): void {
-    if (this.statuses.has(command.jobId)) return
-    this.failures.delete(command.jobId)
-    this.statuses.set(command.jobId, 'queued')
+  startDirection(command: DirectAudiobookCommand): void {
+    this.start(command.jobId, async () => {
+      const direction = await this.operations.createDirection(command)
+      await direction.execute(command)
+    })
+  }
 
-    // Chained onto the tail so runs never overlap, and never rejecting so one failure cannot break
-    // the chain for every job behind it.
+  startRendering(command: RenderAudiobookCommand): void {
+    this.start(command.jobId, async () => {
+      const rendering = await this.operations.createRendering(command)
+      await rendering.execute(command)
+    })
+  }
+
+  private start(jobId: string, execute: () => Promise<void>): void {
+    if (this.statuses.has(jobId)) return
+    this.failures.delete(jobId)
+    this.statuses.set(jobId, 'queued')
+
     const run = this.tail.then(async () => {
-      this.statuses.set(command.jobId, 'running')
+      this.statuses.set(jobId, 'running')
       try {
-        const generate = await this.createGenerate(command)
-        await generate.execute(command)
+        await execute()
       } catch (error: unknown) {
-        // Sanitized: this message is read back by the browser when the run failed before the use
-        // case could persist anything, so a raw factory or adapter message must not survive here.
-        this.failures.set(command.jobId, toPublicFailureMessage(error, 'generationRunner.run'))
+        this.failures.set(jobId, toPublicFailureMessage(error, 'generationRunner.run'))
       } finally {
-        this.statuses.delete(command.jobId)
+        this.statuses.delete(jobId)
       }
     })
     this.tail = run
     this.runs.set(
-      command.jobId,
+      jobId,
       run.finally(() => {
-        this.runs.delete(command.jobId)
+        this.runs.delete(jobId)
       }),
     )
   }
 
-  /** Resolves once this job's run is no longer in flight. */
   async settled(jobId: string): Promise<void> {
     await this.runs.get(jobId)
   }
 
-  /** Resolves once nothing is queued or running. */
   async idle(): Promise<void> {
     await this.tail
   }

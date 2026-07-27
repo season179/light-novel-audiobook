@@ -487,7 +487,14 @@ const fakeForcedStop = async (config, client, jobId, armed, remainingMs) => {
   const upload = uploads.find((candidate) => candidate.jobId === jobId)
   if (upload === undefined) fail('restart: the upload for this job is gone from the workspace')
   await client.call('startGenerationFn', { uploadId: upload.uploadId }, '6-restart')
-  log('[step 6] restarted the failed job over HTTP; polling to completion')
+  await pollJobUntil(
+    client,
+    jobId,
+    (view) => (view.state === 'awaiting_review' && !view.active ? view : undefined),
+    { timeoutMs: remainingMs(), label: 'restarted direction boundary' },
+  )
+  await client.call('renderApprovedScriptFn', { jobId }, '6-render-restart')
+  log('[step 6] restarted direction stopped for confirmation; explicit render resumed')
   const finalView = await pollJobUntil(
     client,
     jobId,
@@ -641,16 +648,28 @@ const realForcedStop = async (config, serverRef, clientRef, jobId, baseUrl, rema
   log('[step 6] recovery started with recoverAbandoned; the director port must stay unbound')
 
   let directorBinds = 0
+  const monitorDirector = async () => {
+    if (!(await portIsFree(config.directorPort))) directorBinds += 1
+  }
+  await pollJobUntil(
+    restarted,
+    jobId,
+    (view) => (view.state === 'awaiting_review' && !view.active ? view : undefined),
+    {
+      timeoutMs: remainingMs(),
+      label: 'recovered direction boundary',
+      onTick: monitorDirector,
+    },
+  )
+  await restarted.call('renderApprovedScriptFn', { jobId }, '6-render-recovered')
   const finalView = await pollJobUntil(
     restarted,
     jobId,
     (view) => (view.state === 'completed' ? view : undefined),
     {
       timeoutMs: remainingMs(),
-      label: 'recovered run',
-      onTick: async () => {
-        if (!(await portIsFree(config.directorPort))) directorBinds += 1
-      },
+      label: 'recovered render',
+      onTick: monitorDirector,
     },
   )
   if (directorBinds > 0) {

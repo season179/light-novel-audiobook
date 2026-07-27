@@ -1,10 +1,11 @@
 /**
- * One command that takes an EPUB through all five real adapters to a real M4B.
+ * Explicit direction or confirmed-render operation over the five real adapters.
  *
  *   pnpm pipeline:demo -- --epub <path> [options]
  *
  * Options:
  *   --epub <path>              EPUB to ingest. Required.
+ *   --operation direction|render  Default: direction. Render confirms, then starts audio.
  *   --workspace <path>         Workspace root. Default: a fresh directory under the OS temp dir.
  *   --job-id <id>              Job ID. Default: pipeline-demo-<timestamp>.
  *   --from-chapter <n>         Start at domain chapter N (1-based). Default: 1.
@@ -40,8 +41,9 @@ import { mkdtemp, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveReviewerIdentity } from '@light-novel-audiobook/application'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
-import { runPipeline } from '../src/driver.js'
+import { runConfirmedRender, runPipeline } from '../src/driver.js'
 import { type FakeDirectorMode, NarrationEchoDirectorServer } from '../src/fake-director-server.js'
 import type { SliceLimits } from '../src/slice.js'
 import {
@@ -74,6 +76,10 @@ function required(name: string): string {
 }
 
 const epubPath = path.resolve(required('epub'))
+const operation = flag('operation') ?? 'direction'
+if (operation !== 'direction' && operation !== 'render') {
+  throw new Error('--operation must be direction or render')
+}
 const mode = flag('transports') ?? 'fake'
 if (mode !== 'fake' && mode !== 'real') throw new Error('--transports must be fake or real')
 const fakeDirectorMode = process.env.LNA_FAKE_DIRECTOR_MODE ?? 'narration'
@@ -136,7 +142,7 @@ const transports =
       })
 
 process.stderr.write(
-  `[driver] mode=${mode} job=${jobId} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
+  `[driver] operation=${operation} mode=${mode} job=${jobId} workspace=${workspaceRoot} from-chapter=${limits.firstChapter ?? 1} chapters<=${limits.maxChapters} passages<=${limits.maxPassagesPerChapter}\n`,
 )
 let directorReceipts: Awaited<ReturnType<typeof open>> | undefined
 try {
@@ -144,7 +150,7 @@ try {
     directorReceiptsPath === undefined
       ? undefined
       : await open(path.resolve(directorReceiptsPath), 'wx', 0o600)
-  const report = await runPipeline({
+  const pipelineOptions = {
     jobId,
     epubPath,
     workspaceRoot,
@@ -154,7 +160,9 @@ try {
     ...(fakeDirectorMode === 'fallback-heterogeneous'
       ? { fakeDirectorSpeakers: [{ id: 'fake-context-speaker', aliases: [] }] }
       : {}),
-    onDirectorProgress: (event) => {
+    onDirectorProgress: (
+      event: Parameters<NonNullable<Parameters<typeof runPipeline>[0]['onDirectorProgress']>>[0],
+    ) => {
       process.stderr.write(
         `[direction] ${event.state} ${event.completedPassages}/${event.totalPassages}\n`,
       )
@@ -162,13 +170,21 @@ try {
     onDirectorRequestReceipt:
       directorReceipts === undefined
         ? undefined
-        : async (receipt) => {
+        : async (
+            receipt: Parameters<
+              NonNullable<Parameters<typeof runPipeline>[0]['onDirectorRequestReceipt']>
+            >[0],
+          ) => {
             if (directorReceipts === undefined) {
               throw new Error('Director receipt file closed before the request settled')
             }
             await directorReceipts.appendFile(`${JSON.stringify(receipt)}\n`)
           },
-  })
+  }
+  const report =
+    operation === 'direction'
+      ? await runPipeline(pipelineOptions)
+      : await runConfirmedRender(pipelineOptions, resolveReviewerIdentity())
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 } catch (error) {
   // Legible failure: the known blockers all surface as a typed error, and which one matters.

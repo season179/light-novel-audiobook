@@ -5,10 +5,11 @@ import type {
   Chapter,
   Segment,
 } from '@light-novel-audiobook/domain'
-import { DomainError, type VoiceCast } from '@light-novel-audiobook/domain'
+import { DomainError, ExactSourceCoverage, type VoiceCast } from '@light-novel-audiobook/domain'
 import { CompletedOutputAuthority } from './completed-output.js'
 import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
 import { persistJobFailure } from './direct-audiobook.js'
+import { createDirectionScriptSha256 } from './direction-approval.js'
 import {
   approvalStillDescribes,
   collectFallbackSubjects,
@@ -18,6 +19,7 @@ import type {
   AssemblyChapter,
   AudioAssembler,
   CompletedSegmentAudio,
+  DirectionApprovalRepository,
   FallbackApprovalRepository,
   JobRepository,
   SpeechEngine,
@@ -43,6 +45,7 @@ export interface RenderAudiobookDependencies {
   readonly audioAssembler: AudioAssembler
   readonly jobs: JobRepository
   readonly approvals: FallbackApprovalRepository
+  readonly directionApprovals: DirectionApprovalRepository
   readonly completedOutputs?: CompletedOutputAuthority | undefined
 }
 
@@ -107,6 +110,22 @@ export class RenderContractMismatchError extends DomainError {
   }
 }
 
+/** Raised when the exact current directed script has not been explicitly confirmed. */
+export class UnconfirmedDirectionError extends DomainError {
+  override readonly name = 'UnconfirmedDirectionError'
+
+  constructor(jobId: string) {
+    super(`Audiobook job ${jobId} has no confirmation for its current directed script`)
+  }
+}
+
+interface RenderGate {
+  readonly book: Book
+  readonly scriptSha256: string
+  readonly revision: number
+  readonly approvals: Map<string, PersistedFallbackApproval>
+}
+
 /**
  * Stage B of PLAN.md's two stages: reviewed script to audiobook.
  *
@@ -123,6 +142,7 @@ export class RenderAudiobook {
   private readonly audioAssembler: AudioAssembler
   private readonly jobs: JobRepository
   private readonly approvals: FallbackApprovalRepository
+  private readonly directionApprovals: DirectionApprovalRepository
   private readonly completedOutputs: CompletedOutputAuthority
 
   constructor(dependencies: RenderAudiobookDependencies) {
@@ -130,6 +150,7 @@ export class RenderAudiobook {
     this.audioAssembler = dependencies.audioAssembler
     this.jobs = dependencies.jobs
     this.approvals = dependencies.approvals
+    this.directionApprovals = dependencies.directionApprovals
     this.completedOutputs =
       dependencies.completedOutputs ??
       new CompletedOutputAuthority(dependencies.approvals, dependencies.jobs)
@@ -167,29 +188,16 @@ export class RenderAudiobook {
     }
     if (job.bookId === null) throw new DomainError('A rendered job must have an attached book')
 
-    // The read path prerequisite 2 exists for. A split render stage cannot reconstruct the approved
-    // script from the job snapshot: it holds no source text and no voice assignment.
-    const book = await this.jobs.findBook(job.bookId)
-    if (book === undefined) {
-      throw new DomainError(`Approved script for book ${job.bookId} is not persisted`)
-    }
-    const unapproved = book.chapters.filter((chapter) => chapter.state !== 'approved')
-    if (unapproved.length > 0) {
-      throw new DomainError(
-        `Persisted script is not approved for chapter(s): ${unapproved.map((chapter) => chapter.id).join(', ')}`,
-      )
-    }
-
-    // Claimed as one atomic read. The revision is re-checked before anything is published, so a
-    // decision that lands mid-render cannot let this render complete under a withdrawn approval.
-    const claimed = await this.resolveApprovals(book)
-    const approvalsBySegment = claimed.approvals
+    // First application-layer check: refuse before constructing an expensive speech engine. This
+    // proves the persisted script is complete and exact, every fallback is still authorized, and a
+    // human confirmed this exact canonical script.
+    const initialGate = await this.readRenderGate(job)
 
     // Constructed here and nowhere earlier: the catalog is only complete once review is done, and an
     // engine built alongside the extractor and director would always carry an empty one.
     const speechEngine = await this.speechEngineFactory.create({
-      bookId: book.id,
-      fallbackApprovals: [...approvalsBySegment.values()],
+      bookId: initialGate.book.id,
+      fallbackApprovals: [...initialGate.approvals.values()],
     })
     if (speechEngine.identity !== this.speechEngineFactory.identity) {
       throw new DomainError(
@@ -206,6 +214,16 @@ export class RenderAudiobook {
     if (job.renderContract !== null && job.renderContract !== contract) {
       throw new RenderContractMismatchError(command.jobId)
     }
+
+    // Re-read every permission immediately before the aggregate leaves its resting state. API
+    // confirmation is not trusted, and a decision or script change during engine construction is
+    // refused rather than carried into `running`.
+    const gate = await this.readRenderGate(job)
+    if (gate.scriptSha256 !== initialGate.scriptSha256 || gate.revision !== initialGate.revision) {
+      throw new DomainError('The reviewed script or fallback decisions changed before rendering')
+    }
+    const { book, approvals: approvalsBySegment } = gate
+    const claimed = { revision: gate.revision }
 
     job.resumeApprovedRender()
     job.bindRenderContract(contract)
@@ -252,6 +270,47 @@ export class RenderAudiobook {
     } catch (error) {
       if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
       throw error
+    }
+  }
+
+  private async readRenderGate(job: AudiobookJob): Promise<RenderGate> {
+    if (job.bookId === null) throw new DomainError('A rendered job must have an attached book')
+    const book = await this.jobs.findBook(job.bookId)
+    if (book === undefined) {
+      throw new DomainError(`Approved script for book ${job.bookId} is not persisted`)
+    }
+
+    const unapproved = book.chapters.filter((chapter) => chapter.state !== 'approved')
+    if (unapproved.length > 0) {
+      throw new DomainError(
+        `Persisted script is not approved for chapter(s): ${unapproved.map((chapter) => chapter.id).join(', ')}`,
+      )
+    }
+    // This exact-coverage proof is deliberately independent of all human decisions: source fidelity
+    // can never be waived by a fallback approval or whole-script confirmation.
+    for (const chapter of book.chapters) {
+      ExactSourceCoverage.assertSegments(chapter, chapter.segments)
+      for (const segment of chapter.segments) {
+        if (segment.voiceAssignment === null) {
+          throw new DomainError(`Directed segment ${segment.id} has no voice assignment`)
+        }
+      }
+    }
+    book.assertGloballyUniqueSegmentIds()
+
+    const claimed = await this.resolveApprovals(book)
+    const scriptSha256 = createDirectionScriptSha256(book)
+    const confirmation = await this.directionApprovals.findDirectionApproval({
+      jobId: job.id,
+      bookId: book.id,
+      scriptSha256,
+    })
+    if (confirmation === undefined) throw new UnconfirmedDirectionError(job.id)
+    return {
+      book,
+      scriptSha256,
+      revision: claimed.revision,
+      approvals: claimed.approvals,
     }
   }
 

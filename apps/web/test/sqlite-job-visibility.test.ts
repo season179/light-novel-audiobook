@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   GenerateAudiobook,
-  PendingFallbackReviewError,
   REVIEWER_ENV_VARIABLE,
   resolveReviewerIdentity,
 } from '@light-novel-audiobook/application'
@@ -88,14 +87,11 @@ describe('a SQLite job written by one side of the workspace', () => {
     await writeFile(epubPath, epubBytes)
     const epubSha256 = createHash('sha256').update(epubBytes).digest('hex')
 
-    // Stopping for review is signalled by throwing: the job is persisted as `awaiting_review`
-    // first, then `PendingFallbackReviewError` carries the pending decisions to the caller.
-    const stopped = await useCase.execute({ jobId: JOB_ID, epubPath, epubSha256, voices }).then(
-      () => undefined,
-      (error: unknown) => error,
-    )
-    expect(stopped).toBeInstanceOf(PendingFallbackReviewError)
-    expect((stopped as PendingFallbackReviewError).pending.length).toBeGreaterThan(0)
+    // Direction reports success while resting at review; pending decisions are returned without
+    // turning this intentional boundary into a failure.
+    const stopped = await useCase.execute({ jobId: JOB_ID, epubPath, epubSha256, voices })
+    expect(stopped.job.state).toBe('awaiting_review')
+    expect(stopped.pendingFallbackApprovals.length).toBeGreaterThan(0)
     const persisted = await writerJobs.findJob(JOB_ID)
     expect(persisted?.state).toBe('awaiting_review')
     const bookId = persisted?.bookId

@@ -21,7 +21,7 @@ import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
 import type { GenerationRunner } from './generation-runner.js'
-import { deriveJobId, parseJobId } from './job-identity.js'
+import { deriveJobId } from './job-identity.js'
 import {
   buildJobStateView,
   type ChapterAudioView,
@@ -139,7 +139,7 @@ const toUploadView = (upload: StoredEpubUpload): EpubUploadView => ({
 
 /**
  * The complete local web API for the M1 flow. It depends only on the application ports and the
- * `GenerateAudiobook` use case, holds no domain rules of its own, and answers every read from
+ * explicit direction and confirmed-render operations, holds no domain rules of its own, and answers every read from
  * persisted job state.
  *
  * Every method either returns a value or throws `WebApiError`. Boundaries (server functions, server
@@ -242,14 +242,14 @@ export class AudiobookWebApi {
     return this.listFallbackReview({ jobId: input.jobId })
   }
 
-  /** Records confirmation of the exact currently persisted script; rendering is not gated yet. */
+  /** Records confirmation of the exact currently persisted script without starting audio. */
   async confirmDirection(input: { readonly jobId: string }): Promise<PersistedDirectionApproval> {
     return this.directionReview.confirm({ jobId: input.jobId, decidedBy: this.reviewer })
   }
 
   /**
-   * Resumes a job that stopped for review. Reuses the same runner and the same command, so rendering
-   * continues from the persisted script without re-extracting or re-directing.
+   * One explicit post-review action: record confirmation of the exact current script, then enqueue
+   * Stage B. `RenderAudiobook` independently rechecks that record immediately before `running`.
    */
   async renderApprovedScript(input: { readonly jobId: string }): Promise<StartedGeneration> {
     const job = await this.jobs.findJob(input.jobId)
@@ -258,30 +258,12 @@ export class AudiobookWebApi {
     if (job.state !== 'awaiting_review') {
       throw new WebApiError(
         'generation_rejected',
-        'This audiobook is not waiting for a fallback-voice decision.',
+        'This audiobook is not waiting for direction confirmation.',
       )
     }
-    // The job ID carries a prefix of the upload digest (plus any slice bounds), so the upload is
-    // found by matching that prefix rather than by storing a reverse mapping that could drift. The
-    // bounds themselves are not needed here: the runner reconstructs them from the job ID.
-    const parsed = parseJobId(input.jobId)
-    const upload =
-      parsed === null
-        ? undefined
-        : (await this.uploads.list()).find((candidate) =>
-            candidate.sha256.startsWith(parsed.uploadSha256Prefix),
-          )
-    if (upload === undefined) {
-      throw new WebApiError('unknown_upload', 'The uploaded EPUB for this job is no longer here.')
-    }
     if (!this.runner.isActive(input.jobId)) {
-      this.runner.start({
-        jobId: input.jobId,
-        epubPath: upload.epubPath,
-        epubSha256: upload.sha256,
-        voices: this.voices,
-        ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
-      })
+      await this.directionReview.confirm({ jobId: input.jobId, decidedBy: this.reviewer })
+      this.runner.startRendering({ jobId: input.jobId, voices: this.voices })
     }
     return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
   }
@@ -349,7 +331,7 @@ export class AudiobookWebApi {
       )
     }
 
-    this.runner.start({
+    this.runner.startDirection({
       jobId,
       epubPath: upload.epubPath,
       epubSha256: upload.sha256,

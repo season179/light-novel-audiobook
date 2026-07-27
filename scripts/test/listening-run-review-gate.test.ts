@@ -234,11 +234,11 @@ const reviewReceipts = (result: ListeningResult): readonly CommandReceipt[] =>
 describe.skipIf(!TOOLCHAIN_PRESENT)(
   'listening-run fallback review gate over fake transports',
   () => {
-    it('observes a genuine stop, records one homogeneous book grant, and resumes', async () => {
+    it('observes a successful direction stop, records one homogeneous book grant, and resumes', async () => {
       const result = await runListening('unresolved-homogeneous')
 
       expect(result.exitCode).toBe(0)
-      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([1, 0])
+      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([0, 0])
       expect(
         reviewReceipts(result).map(({ action, segmentId, exitCode }) => ({
           action,
@@ -266,7 +266,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)(
       const result = await runListening('fallback-heterogeneous')
 
       expect(result.exitCode).toBe(0)
-      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([1, 0])
+      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([0, 0])
       const reviews = reviewReceipts(result)
       expect(reviews).toHaveLength(3)
       expect(reviews[0]).toMatchObject({ action: 'list', segmentId: null, exitCode: 0 })
@@ -296,7 +296,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)(
       expect(result.output).toContain(
         `book-wide review approval failed; see ${result.workspace}/driver.log`,
       )
-      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([1])
+      expect(demoReceipts(result).map((receipt) => receipt.exitCode)).toEqual([0])
       expect(
         reviewReceipts(result).map(({ action, segmentId, exitCode }) => ({
           action,

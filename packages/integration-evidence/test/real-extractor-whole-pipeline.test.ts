@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   GenerateAudiobook,
-  PendingFallbackReviewError,
+  RenderAudiobook,
+  ReviewDirection,
   ReviewFallbackApprovals,
+  resolveReviewerIdentity,
 } from '../../application/src/index.js'
 import { FfmpegAudioAssembler } from '../../audio-assembly/src/index.js'
 import { VoiceCast, VoiceProfile } from '../../domain/src/index.js'
@@ -17,6 +19,7 @@ import { type DirectorProgressStore, GemmaDirectorModel } from '../../gemma-dire
 import {
   layoutFor,
   openWorkspace,
+  SqliteDirectionApprovalRepository,
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '../../persistence/src/index.js'
@@ -256,6 +259,7 @@ describe('whole pipeline with the real extractor cover contract', () => {
       const db = openWorkspace(layout)
       const jobs = new SqliteJobRepository(layout, db)
       const approvals = new SqliteFallbackApprovalRepository(db)
+      const directionApprovals = new SqliteDirectionApprovalRepository(db)
       const brain = new RequestResponsiveLlamaServer()
       await brain.start()
       const gpuLockPath = join(root, 'fake-gpu.lock')
@@ -312,18 +316,13 @@ describe('whole pipeline with the real extractor cover contract', () => {
           epubSha256,
           voices: voices(),
         }
-        // Issue #45's gate, asserted in phases rather than with a conditional catch. Round 3 wrapped
-        // this in `.catch(PendingFallbackReviewError)` without asserting the stop ever happened — and
-        // it never did, because the fake director produced no fallback segments. A conditional with no
-        // assertion that the condition occurred proves nothing.
+        // Issue #45's gate is asserted in phases; direction now reports its intentional stop as
+        // success rather than disguising the phase boundary as an exception.
 
         // Phase 1: the run stops for a human decision.
-        const stopped = await useCase
-          .execute(command)
-          .then(() => undefined)
-          .catch((error: unknown) => error)
-        expect(stopped).toBeInstanceOf(PendingFallbackReviewError)
-        const pending = (stopped as PendingFallbackReviewError).pending
+        const stopped = await useCase.execute(command)
+        expect(stopped.job.state).toBe('awaiting_review')
+        const pending = stopped.pendingFallbackApprovals
         expect(pending.length).toBeGreaterThan(0)
         expect(pending.every((item) => item.decision === 'pending')).toBe(true)
         expect(
@@ -358,8 +357,19 @@ describe('whole pipeline with the real extractor cover contract', () => {
           reconciliation.created.every((r) => r.grantId === reconciliation.grant?.grantId),
         ).toBe(true)
 
-        // Phase 4: rendering resumes from the persisted direction and completes.
-        const result = await useCase.execute(command)
+        // Phase 4: the exact script is confirmed, then rendering resumes separately.
+        const actor = resolveReviewerIdentity({ LNA_REVIEWER: 'integration-evidence' })
+        await new ReviewDirection({ jobs, approvals: directionApprovals }).confirm({
+          jobId: command.jobId,
+          decidedBy: actor,
+        })
+        const result = await new RenderAudiobook({
+          speechEngineFactory: createQwenSpeechEngineFactory(qwen),
+          audioAssembler: await FfmpegAudioAssembler.create(),
+          jobs,
+          approvals,
+          directionApprovals,
+        }).execute({ jobId: command.jobId, voices: command.voices })
 
         // Phase 5: the resume re-used the persisted script — no second extraction, no re-direction.
         expect(extractions.count).toBe(extractionsBefore)

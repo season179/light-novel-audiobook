@@ -27,7 +27,7 @@ import { toPublicFailureMessage } from './errors.js'
 /**
  * Sanitizes adapter failures at the composition boundary.
  *
- * `GenerateAudiobook` persists the message of whatever an adapter threw into the job, and job state
+ * Direction and rendering persist the message of whatever an adapter threw into the job, and job state
  * is read straight back by the browser — so a raw `MODEL_KEY_FAILURE at /home/user/private/model.gguf`
  * would be displayed verbatim. Wrapping every adapter means the raw cause is logged server-side and
  * only an authored message can ever be stored. `WebApiError` and `DomainError` pass through intact,
