@@ -32,6 +32,7 @@ export class GenerationRunner {
   private readonly runs = new Map<string, Promise<void>>()
   private readonly failures = new Map<string, string>()
   private tail: Promise<void> = Promise.resolve()
+  private stopping = false
 
   constructor(operations: GenerationRunnerOperations) {
     this.operations = operations
@@ -49,6 +50,18 @@ export class GenerationRunner {
     return this.failures.get(jobId)
   }
 
+  activeJobIds(): readonly string[] {
+    return [...this.statuses.keys()]
+  }
+
+  /** Refuses new work and drops not-yet-started queue entries during process shutdown. */
+  beginShutdown(): void {
+    this.stopping = true
+    for (const [jobId, status] of this.statuses) {
+      if (status === 'queued') this.statuses.delete(jobId)
+    }
+  }
+
   startDirection(command: DirectAudiobookCommand): void {
     this.start(command.jobId, async () => {
       const direction = await this.operations.createDirection(command)
@@ -64,11 +77,12 @@ export class GenerationRunner {
   }
 
   private start(jobId: string, execute: () => Promise<void>): void {
-    if (this.statuses.has(jobId)) return
+    if (this.stopping || this.statuses.has(jobId)) return
     this.failures.delete(jobId)
     this.statuses.set(jobId, 'queued')
 
     const run = this.tail.then(async () => {
+      if (this.stopping && !this.statuses.has(jobId)) return
       this.statuses.set(jobId, 'running')
       try {
         await execute()

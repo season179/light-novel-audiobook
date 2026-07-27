@@ -208,7 +208,14 @@ export class DirectAudiobook {
       await this.jobs.saveJob(job)
       return { job, book, commandIdentity }
     } catch (error) {
-      if (job.snapshot().state === 'running') await persistJobFailure(this.jobs, job, error)
+      if (job.snapshot().state === 'running') {
+        if (command.directorOptions?.signal?.aborted === true) {
+          job.markAbandoned()
+          await this.jobs.saveJob(job)
+        } else {
+          await persistJobFailure(this.jobs, job, error)
+        }
+      }
       throw error
     }
   }

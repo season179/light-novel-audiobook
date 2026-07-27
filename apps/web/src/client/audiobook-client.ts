@@ -4,6 +4,7 @@ import type {
   EpubUploadView,
   FallbackReviewView,
   StartedGeneration,
+  StopPreview,
 } from '../server/audiobook-web-api.js'
 import type { WebApiResult } from '../server/errors.js'
 import type { JobStateView } from '../server/job-state-view.js'
@@ -27,6 +28,7 @@ export interface StartGenerationCommand {
 
 export interface AudiobookClient {
   uploadEpub(input: { readonly file: File }): Promise<WebApiResult<EpubUploadView>>
+  getStopPreview(): Promise<WebApiResult<StopPreview>>
   startGeneration(input: StartGenerationCommand): Promise<WebApiResult<StartedGeneration>>
   getJobState(input: { readonly jobId: string }): Promise<WebApiResult<JobStateView | null>>
   listChapterAudio(input: { readonly jobId: string }): Promise<WebApiResult<ChapterAudioListing>>
@@ -85,5 +87,6 @@ export type {
   ScriptChapterView,
   SliceLimits,
   StartedGeneration,
+  StopPreview,
   WebApiResult,
 }

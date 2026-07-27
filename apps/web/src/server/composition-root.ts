@@ -32,6 +32,7 @@ import { GenerationRunner } from './generation-runner.js'
 import { sliceLimitsForJobId } from './job-identity.js'
 import { createM1VoiceCast, loadPinnedQwenConfig, pinnedVoiceMaterial } from './m1-voice-cast.js'
 import { type ReviewerIdentity, resolveReviewerIdentity } from './reviewer-identity.js'
+import { type RuntimeShutdownOptions, ShutdownController } from './shutdown-controller.js'
 import { createWorkspace, type LocalWorkspace } from './workspace.js'
 
 /**
@@ -117,11 +118,14 @@ export interface AudiobookWebApiOptions extends AudiobookAdapterFactories {
   readonly qwenConfigPath?: string | undefined
   /** Operational cancellation/deadline controls forwarded to every director call. */
   readonly directorOptions?: DirectChapterOptions | undefined
+  /** Process-lifetime resource ownership and test seams for the Stop control. */
+  readonly runtimeShutdown?: RuntimeShutdownOptions | undefined
 }
 
 /** Everything one process composition builds. */
 export interface AudiobookComposition {
   readonly api: AudiobookWebApi
+  readonly shutdown: ShutdownController
 }
 
 export const createAudiobookComposition = async (
@@ -143,6 +147,15 @@ export const createAudiobookComposition = async (
   const createEpubExtractor = options.createEpubExtractor ?? (() => new FakeEpubExtractor())
   const createDirectorModel = options.createDirectorModel ?? (() => new FakeDirectorModel())
   const createAudioAssembler = options.createAudioAssembler ?? (() => new FakeAudioAssembler())
+  const runtimeController = options.runtimeShutdown?.controller ?? new AbortController()
+  const shutdownSignal = runtimeController.signal
+  const directorOptions: DirectChapterOptions = {
+    ...options.directorOptions,
+    signal:
+      options.directorOptions?.signal === undefined
+        ? shutdownSignal
+        : AbortSignal.any([options.directorOptions.signal, shutdownSignal]),
+  }
   // Never constructs a director. The command identity has to bind the director's identity before any
   // direction happens, but building the model here would defeat the point of the factory twice over:
   // a render-only review resume must construct nothing, and a failing factory must surface as a run
@@ -153,6 +166,7 @@ export const createAudiobookComposition = async (
   const speechEngineFactory =
     options.speechEngineFactory ??
     createFakeSpeechEngineFactory(workspace, {
+      signal: shutdownSignal,
       fallbackVoiceProfileId: voices.fallback.id,
       pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
     })
@@ -201,10 +215,15 @@ export const createAudiobookComposition = async (
         completedOutputs,
       }),
   })
+  const shutdown = new ShutdownController(runner, {
+    ...options.runtimeShutdown,
+    controller: runtimeController,
+  })
 
   const review = new ReviewFallbackApprovals({ jobs, approvals, catalogAccess })
   const reviewer = options.reviewer ?? resolveReviewerIdentity()
   return {
+    shutdown,
     api: new AudiobookWebApi({
       workspace,
       uploads: new EpubUploadStore(workspace),
@@ -216,9 +235,8 @@ export const createAudiobookComposition = async (
       directionReview: new ReviewDirection({ jobs, approvals: directionApprovals }),
       completedOutputs,
       reviewer,
-      ...(options.directorOptions === undefined
-        ? {}
-        : { directorOptions: options.directorOptions }),
+      shutdownSignal,
+      directorOptions,
     }),
   }
 }

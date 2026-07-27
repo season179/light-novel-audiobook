@@ -47,6 +47,7 @@ import { WORKSPACE_ENV_VAR } from '../src/server/workspace.js'
 const handoff = vi.hoisted(() => ({
   transportCalls: [] as RealTransportConfig[],
   runtimeDirs: [] as string[],
+  closeCalls: 0,
 }))
 
 vi.mock('@light-novel-audiobook/pipeline-driver', async (importOriginal) => {
@@ -77,10 +78,17 @@ vi.mock('@light-novel-audiobook/pipeline-driver', async (importOriginal) => {
         nodePath.join(nodeOs.tmpdir(), 'lna-web-real-handoff-rt-'),
       )
       handoff.runtimeDirs.push(runtimeDirectory)
-      return original.createFakeTransports(
+      const transports = await original.createFakeTransports(
         { runtimeDirectory, repositoryRoot },
         config.directorBaseUrl,
       )
+      return {
+        ...transports,
+        close: async () => {
+          handoff.closeCalls += 1
+          await transports.close()
+        },
+      }
     },
   }
 })
@@ -173,6 +181,11 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('real mode selected through the environment'
     const director = await options.createDirectorModel?.()
     expect(director?.identity).toBe(options.directorIdentity)
     await director?.release()
+
+    const closesBefore = handoff.closeCalls
+    await options.runtimeShutdown?.releaseOwnedResources?.()
+    expect(handoff.closeCalls).toBe(closesBefore + 1)
+    await options.runtimeShutdown?.closeResources?.()
   })
 
   it('serves the API on the real factories when the server entry point reads real mode', async () => {

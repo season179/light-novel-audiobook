@@ -217,6 +217,8 @@ export interface AssembleAudiobookRequest {
   readonly book: Book
   readonly chapters: readonly AssemblyChapter[]
   readonly reservation: OutputReservation
+  /** Operational process cancellation; never part of output identity. */
+  readonly signal?: AbortSignal | undefined
 }
 
 /** Implemented by issue #32. identity binds encoding, pause, and assembly settings. */

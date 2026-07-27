@@ -4,6 +4,7 @@ import {
   approveSelectedFallbacksFn,
   getJobStateFn,
   getScriptChapterFn,
+  getStopPreviewFn,
   listChapterAudioFn,
   listFallbackReviewFn,
   listScriptChaptersFn,
@@ -18,6 +19,7 @@ import type { AudiobookClient } from './audiobook-client.js'
 
 /** The browser implementation: one TanStack Start server function per API operation. */
 export const serverFnAudiobookClient: AudiobookClient = {
+  getStopPreview: () => getStopPreviewFn(),
   uploadEpub: ({ file }) => {
     const formData = new FormData()
     formData.append('file', file)

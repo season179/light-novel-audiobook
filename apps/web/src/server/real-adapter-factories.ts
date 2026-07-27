@@ -36,6 +36,8 @@ export interface RealAdapterFactoryOptions {
   readonly characterSpeakerIds: readonly string[]
   readonly narratorProfileId: string
   readonly fallbackProfileId: string
+  /** Cancels the owned Qwen worker when the web process begins a user-requested stop. */
+  readonly shutdownSignal?: AbortSignal | undefined
   readonly confidenceThreshold?: number | undefined
 }
 
@@ -147,7 +149,10 @@ export const createRealAdapterFactories = async (
     gpuGate: transports.gpu.coordinator,
     processEnvironment: transports.speech.processEnvironment,
   })
-  const speechEngineFactory = createQwenSpeechEngineFactory(engine)
+  const speechEngineFactory = createQwenSpeechEngineFactory(
+    engine,
+    options.shutdownSignal === undefined ? {} : { signal: options.shutdownSignal },
+  )
 
   // --- assembly: the pinned ffmpeg toolchain, version-checked. Stateless per call, so shared.
   const audioAssembler = await FfmpegAudioAssembler.create()

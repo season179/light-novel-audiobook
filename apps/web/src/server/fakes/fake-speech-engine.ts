@@ -29,6 +29,8 @@ export interface FakeFallbackApproval {
 export interface FakeSpeechEngineOptions {
   /** Test seam: lets a test hold a render open to observe mid-generation state. */
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
+  /** Mirrors the real Qwen worker's process-lifetime cancellation. */
+  readonly signal?: AbortSignal | undefined
   /** The cast's fallback profile. A fallback render must use exactly this profile. */
   readonly fallbackVoiceProfileId?: string | undefined
   /** Persisted human decisions authorizing fallback use, one per approved segment. */
@@ -61,6 +63,7 @@ export class FakeSpeechEngine implements SpeechEngine {
   readonly identity = 'fake-speech-engine/2'
   private readonly workspace: LocalWorkspace
   private readonly beforeRender: ((segmentId: string) => Promise<void>) | undefined
+  private readonly signal: AbortSignal | undefined
   private readonly fallbackVoiceProfileId: string | undefined
   private approvals: Map<string, FakeFallbackApproval>
   private readonly pinnedVoiceProfiles: readonly PinnedVoiceMaterial[] | undefined
@@ -71,6 +74,7 @@ export class FakeSpeechEngine implements SpeechEngine {
   constructor(workspace: LocalWorkspace, options: FakeSpeechEngineOptions = {}) {
     this.workspace = workspace
     this.beforeRender = options.beforeRender
+    this.signal = options.signal
     this.fallbackVoiceProfileId = options.fallbackVoiceProfileId
     this.pinnedVoiceProfiles = options.pinnedVoiceProfiles
     this.approvals = new Map()
@@ -114,6 +118,7 @@ export class FakeSpeechEngine implements SpeechEngine {
   }
 
   async beginBatch(): Promise<void> {
+    this.throwIfStopped()
     if (this.batchOpen) throw new Error('Fake speech engine batch is already open')
     this.batchOpen = true
   }
@@ -139,7 +144,7 @@ export class FakeSpeechEngine implements SpeechEngine {
 
     this.rendering = true
     try {
-      await this.beforeRender?.(request.segment.id)
+      await this.beforeRenderOrStop(request.segment.id)
 
       const bytes = createPlaceholderWav(
         `${request.segment.id}:${request.voice.renderIdentity}`,
@@ -164,6 +169,33 @@ export class FakeSpeechEngine implements SpeechEngine {
 
   async endBatch(): Promise<void> {
     this.batchOpen = false
+  }
+
+  private throwIfStopped(): void {
+    if (this.signal?.aborted === true) throw new Error('Fake speech render was stopped')
+  }
+
+  private async beforeRenderOrStop(segmentId: string): Promise<void> {
+    this.throwIfStopped()
+    const pending = this.beforeRender?.(segmentId)
+    if (pending === undefined || this.signal === undefined) {
+      await pending
+      this.throwIfStopped()
+      return
+    }
+    const signal = this.signal
+    let rejectStopped: ((reason: Error) => void) | undefined
+    const stopped = new Promise<never>((_, reject) => {
+      rejectStopped = reject
+    })
+    const onStop = () => rejectStopped?.(new Error('Fake speech render was stopped'))
+    signal.addEventListener('abort', onStop, { once: true })
+    try {
+      await Promise.race([pending, stopped])
+      this.throwIfStopped()
+    } finally {
+      signal.removeEventListener('abort', onStop)
+    }
   }
 
   /** Mirrors `QwenTtsSpeechEngine.selectedVoiceProfile()`: exact speaker, instruction and seed. */

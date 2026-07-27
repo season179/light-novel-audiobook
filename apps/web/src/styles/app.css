@@ -179,6 +179,59 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Stop is destructive in shape and words as well as colour: the square stop glyph remains visible
+   in monochrome and the confirmation names the interrupted operation before it can run. */
+button.destructive {
+  border-color: #a94555;
+  color: #fff0f2;
+  background: #702534;
+}
+
+button.destructive::before {
+  margin-right: 0.45rem;
+  content: "■";
+}
+
+button.destructive:hover:not(:disabled) {
+  background: #8b3042;
+}
+
+.stop-app-control {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 10;
+  display: flex;
+  max-width: min(var(--measure), calc(100% - 2rem));
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.stop-confirmation {
+  width: min(var(--measure), calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid #a94555;
+  border-left: 0.35rem solid #ff9fb0;
+  border-radius: 0.8rem;
+  background: #20131a;
+  box-shadow: 0 1rem 4rem rgb(0 0 0 / 55%);
+}
+
+.stop-confirmation p:last-of-type {
+  margin-bottom: 1rem;
+}
+
+.server-stopped {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: #0b0f17;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -236,6 +289,20 @@ button:disabled {
   color: var(--ink);
   font-size: 1.1rem;
   line-height: 1.5;
+}
+
+.server-stopped .status-block {
+  width: min(var(--measure), 100%);
+}
+
+.status-block[data-state="stopped"] {
+  --state-edge: #4a4f5c;
+  --state-bg: #161a20;
+  --state-ink: #c4cad6;
+}
+
+.status-block[data-state="stopped"] .stage::before {
+  content: "■";
 }
 
 .status-block[data-state="pending"] {

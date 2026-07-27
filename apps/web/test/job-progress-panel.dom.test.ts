@@ -113,6 +113,7 @@ const reviewView = (overrides: Partial<FallbackReviewView> = {}): FallbackReview
 
 /** A full AudiobookClient; tests override the methods under observation. */
 const stubClient = (overrides: Partial<AudiobookClient>): AudiobookClient => ({
+  getStopPreview: vi.fn(async () => ({ ok: true as const, value: { inFlight: null } })),
   uploadEpub: vi.fn(async () => ({
     ok: false as const,
     error: { code: 'invalid_upload' as const, message: 'not used in these tests' },
