@@ -69,6 +69,7 @@
           <li><a href="#awaiting-review">Awaiting review — needs decisions</a></li>
           <li><a href="#awaiting-review-select">Awaiting review — exact-set selection</a></li>
           <li><a href="#awaiting-review-ready">Awaiting review — ready to confirm</a></li>
+          <li><a href="#script-review">Script review — reading the directed script</a></li>
           <li><a href="#abandoned">Abandoned</a></li>
           <li><a href="#failed">Failed</a></li>
           <li><a href="#completed">Completed</a></li>
@@ -478,6 +479,143 @@
               <dt>Job</dt>
               <dd><code>job-preview0000000000001</code></dd>
             </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 7b. The read-only script review: one chapter open with flagged lines, the rest collapsed.
+         All prose is invented for this page. -->
+    <section class="preview" id="script-review" aria-labelledby="preview-script-review">
+      <h2 class="preview-label" id="preview-script-review">
+        Script review — chapter 1 open with two flagged lines, chapters 2 and 3 collapsed
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-script">
+          <h2 id="job-heading-script">The Clockwork Tidewater</h2>
+          <div
+            class="status-block"
+            data-state="awaiting_review"
+            data-review="ready_to_confirm"
+            role="status"
+            aria-live="polite"
+          >
+            <p class="stage">
+              Direction finished and nothing needs a decision. Confirming starts speech rendering.
+            </p>
+            <p class="latest">Awaiting fallback approval review</p>
+          </div>
+          <section class="stack bordered" aria-labelledby="script-review-heading">
+            <h3 id="script-review-heading">Read the directed script</h3>
+            <p class="hint">
+              The exact script you are being asked to confirm, read back from what is saved.
+              Nothing here changes it — this view only reads.
+            </p>
+            <div class="row">
+              <button type="button" aria-expanded="true" aria-controls="script-region">
+                Hide the script
+              </button>
+            </div>
+            <div id="script-region">
+              <div class="stack">
+                <p class="hint">3 chapters · 16 segments · 2 flagged across the book</p>
+                <label class="review-select">
+                  <input type="checkbox" />
+                  <span>
+                    Show only flagged lines — fallback voices, unidentified speakers, and
+                    low-confidence attributions
+                  </span>
+                </label>
+                <ol class="script-chapters">
+                  <li class="script-chapter">
+                    <h4>
+                      <button type="button" aria-expanded="true" aria-controls="script-ch1">
+                        Chapter 1 of 3 — The Brine Road
+                      </button>
+                    </h4>
+                    <p class="hint">6 segments · 2 flagged — worth a look</p>
+                    <div id="script-ch1" class="script-chapter-body">
+                      <ol class="script-lines" aria-label="Directed script for chapter 1">
+                        <li class="script-line">
+                          <p class="script-text">
+                            The river carried the last of the evening light under the lock, and the
+                            lamps came on one by one along the towpath.
+                          </p>
+                          <p class="script-meta">
+                            Narration — no speaker (narration) · Voice: narrator-even · Confidence
+                            99% · neutral · normal pace · normal volume · 320 ms pause
+                          </p>
+                        </li>
+                        <li class="script-line" data-flagged="true">
+                          <p class="script-text">
+                            “Keep the gate until the second bell, whatever the tide says.”
+                          </p>
+                          <p class="script-meta">
+                            Dialogue — speaker not identified · Voice: fallback-serena-gentle
+                            (fallback voice) · Confidence 42% · measured · normal pace · normal
+                            volume · 180 ms pause
+                          </p>
+                          <p class="script-meta">
+                            Director note: The director could not resolve a speaker from the
+                            supplied roster and context.
+                          </p>
+                          <p class="script-flags">
+                            Flagged:
+                            <strong data-flag="fallback_voice">fallback voice</strong>
+                            <strong data-flag="unresolved_speaker">no speaker identified</strong>
+                            <strong data-flag="low_confidence">low confidence</strong>
+                          </p>
+                        </li>
+                        <li class="script-line">
+                          <p class="script-text">
+                            “Then the towpath can keep my name as well,” pell answered, and the
+                            lamp between them dipped with the wind.
+                          </p>
+                          <p class="script-meta">
+                            Dialogue — spoken by pell · Voice: pell-cast · Confidence 93% · wry ·
+                            normal pace · normal volume · 180 ms pause
+                          </p>
+                        </li>
+                        <li class="script-line" data-flagged="true">
+                          <p class="script-text">
+                            “The bell has never lied to me yet,” said the keeper of the far gate.
+                          </p>
+                          <p class="script-meta">
+                            Dialogue — spoken by renn · Voice: fallback-serena-gentle (fallback
+                            voice) · Confidence 58% · measured · slow pace · soft volume · 240 ms
+                            pause
+                          </p>
+                          <p class="script-flags">
+                            Flagged:
+                            <strong data-flag="fallback_voice">fallback voice</strong>
+                            <strong data-flag="missing_speaker_voice"
+                              >speaker has no cast voice</strong
+                            >
+                            <strong data-flag="low_confidence">low confidence</strong>
+                          </p>
+                        </li>
+                      </ol>
+                    </div>
+                  </li>
+                  <li class="script-chapter">
+                    <h4>
+                      <button type="button" aria-expanded="false" aria-controls="script-ch2">
+                        Chapter 2 of 3 — A Lantern Over the Lock
+                      </button>
+                    </h4>
+                    <p class="hint">6 segments · none flagged</p>
+                  </li>
+                  <li class="script-chapter">
+                    <h4>
+                      <button type="button" aria-expanded="false" aria-controls="script-ch3">
+                        Chapter 3 of 3 — What the Courier Carried
+                      </button>
+                    </h4>
+                    <p class="hint">4 segments · none flagged</p>
+                  </li>
+                </ol>
+              </div>
+            </div>
           </section>
         </section>
       </main>

@@ -30,6 +30,12 @@ import {
   PIPELINE_STAGES,
   STAGE_LABELS,
 } from './job-state-view.js'
+import {
+  buildScriptChapterListView,
+  buildScriptChapterView,
+  type ScriptChapterListView,
+  type ScriptChapterView,
+} from './script-review-view.js'
 import type { ContainedFile, LocalWorkspace } from './workspace.js'
 
 export { deriveJobId } from './job-identity.js'
@@ -260,6 +266,49 @@ export class AudiobookWebApi {
   /** Records confirmation of the exact currently persisted script without starting audio. */
   async confirmDirection(input: { readonly jobId: string }): Promise<PersistedDirectionApproval> {
     return this.directionReview.confirm({ jobId: input.jobId, decidedBy: this.reviewer })
+  }
+
+  /**
+   * The chapter index of the persisted directed script (#96 step 6): counts per chapter, text for
+   * none. Read-only, and answered from the display projection whose per-chapter counts are
+   * precomputed when the book changes (#100) — the projection is only warmed from persistence when
+   * it is cold, so this read never recounts a book.
+   */
+  async listScriptChapters(input: { readonly jobId: string }): Promise<ScriptChapterListView> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.bookId === null) return buildScriptChapterListView(input.jobId, undefined)
+    if (this.books.find(job.bookId) === undefined) {
+      // Cold projection (the process restarted): one persisted read warms it. `findBook` goes
+      // through the projecting repository, which records what it loads.
+      await this.jobs.findBook(job.bookId)
+    }
+    return buildScriptChapterListView(input.jobId, this.books.find(job.bookId))
+  }
+
+  /**
+   * One chapter of the persisted directed script, exactly as the render gate hashes it — the text
+   * the user confirms but could not previously read. Read-only, fetched on demand, one chapter at a
+   * time: a full book runs to hundreds of segments per chapter, so the whole book is never one
+   * answer. The returned segment text is story content: render it, never log or persist it.
+   */
+  async getScriptChapter(input: {
+    readonly jobId: string
+    readonly chapterId: string
+  }): Promise<ScriptChapterView> {
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.bookId === null) {
+      throw new WebApiError('invalid_request', 'This audiobook has no directed script yet.')
+    }
+    const book = await this.jobs.findBook(job.bookId)
+    const chapter = book?.chapters.find((candidate) => candidate.id === input.chapterId)
+    if (book === undefined || chapter === undefined) {
+      throw new WebApiError('invalid_request', 'That chapter is not part of this audiobook.')
+    }
+    return buildScriptChapterView(input.jobId, book, chapter)
   }
 
   /**

@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DirectChapterOptions } from '@light-novel-audiobook/application'
+import type { DirectChapterOptions, EpubExtractor } from '@light-novel-audiobook/application'
 import type { AudiobookClient } from '../../src/client/audiobook-client.js'
 import type { AudiobookWebApi } from '../../src/server/audiobook-web-api.js'
 import { createAudiobookComposition } from '../../src/server/composition-root.js'
@@ -64,6 +64,7 @@ export interface TestHarnessOptions {
   readonly beforeRender?: ((segmentId: string) => Promise<void>) | undefined
   readonly directorOptions?: DirectChapterOptions | undefined
   readonly createDirectorModel?: (() => FakeDirectorModel) | undefined
+  readonly createEpubExtractor?: (() => EpubExtractor) | undefined
 }
 
 export const createTestHarness = async (options: TestHarnessOptions = {}): Promise<TestHarness> => {
@@ -81,6 +82,8 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
     pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
   })
   const directors: FakeDirectorModel[] = []
+  // Held by the harness as well as the composition, so a test can assert on what was persisted —
+  // e.g. that a read surface never wrote story text into a stored snapshot.
   const jobs = new InMemoryJobRepository(workspace)
 
   const composition = await createAudiobookComposition({
@@ -104,6 +107,9 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
       directors.push(director)
       return director
     },
+    ...(options.createEpubExtractor === undefined
+      ? {}
+      : { createEpubExtractor: options.createEpubExtractor }),
     ...(options.directorOptions === undefined ? {} : { directorOptions: options.directorOptions }),
   })
 
@@ -148,6 +154,10 @@ export const createInProcessClient = (composition: {
       toWebApiResult('resumeGeneration', () => api.resumeGeneration(input)),
     renderApprovedScript: (input) =>
       toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
+    listScriptChapters: (input) =>
+      toWebApiResult('listScriptChapters', () => api.listScriptChapters(input)),
+    getScriptChapter: (input) =>
+      toWebApiResult('getScriptChapter', () => api.getScriptChapter(input)),
   }
 }
 

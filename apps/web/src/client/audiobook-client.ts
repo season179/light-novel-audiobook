@@ -7,6 +7,7 @@ import type {
 } from '../server/audiobook-web-api.js'
 import type { WebApiResult } from '../server/errors.js'
 import type { JobStateView } from '../server/job-state-view.js'
+import type { ScriptChapterListView, ScriptChapterView } from '../server/script-review-view.js'
 
 /**
  * What the pages are allowed to do. Components depend on this interface, never on the transport, so
@@ -58,6 +59,21 @@ export interface AudiobookClient {
   }): Promise<WebApiResult<FallbackReviewView>>
   resumeGeneration(input: { readonly jobId: string }): Promise<WebApiResult<StartedGeneration>>
   renderApprovedScript(input: { readonly jobId: string }): Promise<WebApiResult<StartedGeneration>>
+  /**
+   * The chapter index of the persisted directed script (#96 step 6): counts per chapter, text for
+   * none. Read-only; fetched on demand, never polled.
+   */
+  listScriptChapters(input: {
+    readonly jobId: string
+  }): Promise<WebApiResult<ScriptChapterListView>>
+  /**
+   * One chapter of the directed script, exactly as it will be spoken. The segment text is story
+   * content: it is rendered for the reader and must never be logged or persisted by a client.
+   */
+  getScriptChapter(input: {
+    readonly jobId: string
+    readonly chapterId: string
+  }): Promise<WebApiResult<ScriptChapterView>>
 }
 
 export type {
@@ -65,6 +81,8 @@ export type {
   EpubUploadView,
   FallbackReviewView,
   JobStateView,
+  ScriptChapterListView,
+  ScriptChapterView,
   SliceLimits,
   StartedGeneration,
   WebApiResult,

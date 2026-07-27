@@ -81,7 +81,15 @@ describe('buildJobStateView', () => {
       bookId,
       title: 'A Small Story',
       author: null,
-      chapters: [{ chapterId: `${bookId}-ch0002`, position: 2, title: 'A Stranger' }],
+      chapters: [
+        {
+          chapterId: `${bookId}-ch0002`,
+          position: 2,
+          title: 'A Stranger',
+          segmentCount: 6,
+          flaggedSegments: 1,
+        },
+      ],
       totalPassages: 40,
       totalSegments: 12,
       fallbackSegments: 2,
@@ -118,7 +126,15 @@ describe('buildJobStateView', () => {
         bookId,
         title: 'A Small Story',
         author: null,
-        chapters: [{ chapterId: `${bookId}-ch0002`, position: 2, title: 'A Stranger' }],
+        chapters: [
+          {
+            chapterId: `${bookId}-ch0002`,
+            position: 2,
+            title: 'A Stranger',
+            segmentCount: 6,
+            flaggedSegments: 1,
+          },
+        ],
         totalPassages: 40,
         totalSegments: 12,
         fallbackSegments: 2,
