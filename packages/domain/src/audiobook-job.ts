@@ -60,8 +60,17 @@ export interface FallbackVoiceWarning {
   readonly speakerReason?: string | undefined
 }
 
+export interface AudiobookDirectionProgress {
+  readonly completedChapters: number
+  readonly totalChapters: number
+  readonly completedPassages: number
+  readonly totalPassages: number
+}
+
 export interface AudiobookJobProgress {
   readonly currentChapterId: string | null
+  /** Direction counts passages and chapters; rendering counts the distinct quantity segments. */
+  readonly direction: AudiobookDirectionProgress | null
   readonly completedSegments: number
   readonly totalSegments: number
   readonly latestMessage: string
@@ -109,6 +118,7 @@ export class AudiobookJob {
   private attachedBookId: string | null = null
   private currentProgress: AudiobookJobProgress = Object.freeze({
     currentChapterId: null,
+    direction: null,
     completedSegments: 0,
     totalSegments: 0,
     latestMessage: 'Waiting to start',
@@ -234,14 +244,61 @@ export class AudiobookJob {
     this.attachedBookId = bookId
   }
 
-  beginDirection(): void {
+  beginDirection(totalChapters: number, totalPassages: number): void {
     if (this.currentState !== 'running' || this.currentStage !== 'extracting') {
       throw new InvalidStateTransitionError('AudiobookJob stage', this.currentStage, 'directing')
     }
     if (this.attachedBookId === null) {
       throw new DomainError('A book must be attached before direction')
     }
+    if (
+      !Number.isSafeInteger(totalChapters) ||
+      totalChapters < 1 ||
+      !Number.isSafeInteger(totalPassages) ||
+      totalPassages < totalChapters
+    ) {
+      throw new DomainError('Direction requires positive chapter and passage totals')
+    }
     this.advance('directing', 'Directing chapters')
+    this.currentProgress = Object.freeze({
+      ...this.currentProgress,
+      direction: Object.freeze({
+        completedChapters: 0,
+        totalChapters,
+        completedPassages: 0,
+        totalPassages,
+      }),
+    })
+  }
+
+  recordDirectionProgress(
+    chapterId: string,
+    completedChapters: number,
+    completedPassages: number,
+    latestMessage: string,
+  ): void {
+    const direction = this.currentProgress.direction
+    if (
+      this.currentState !== 'running' ||
+      this.currentStage !== 'directing' ||
+      direction === null ||
+      chapterId.trim().length === 0 ||
+      latestMessage.trim().length === 0 ||
+      !Number.isSafeInteger(completedChapters) ||
+      !Number.isSafeInteger(completedPassages) ||
+      completedChapters < direction.completedChapters ||
+      completedChapters > direction.totalChapters ||
+      completedPassages < direction.completedPassages ||
+      completedPassages > direction.totalPassages
+    ) {
+      throw new DomainError('Direction progress is invalid')
+    }
+    this.currentProgress = Object.freeze({
+      ...this.currentProgress,
+      currentChapterId: chapterId,
+      direction: Object.freeze({ ...direction, completedChapters, completedPassages }),
+      latestMessage,
+    })
   }
 
   /**
@@ -254,8 +311,14 @@ export class AudiobookJob {
     if (this.currentState !== 'running' || this.currentStage !== 'directing') {
       throw new InvalidStateTransitionError('AudiobookJob', this.currentState, 'awaiting_review')
     }
-    if (this.attachedBookId === null) {
-      throw new DomainError('A reviewed job must have an attached book')
+    const direction = this.currentProgress.direction
+    if (
+      this.attachedBookId === null ||
+      direction === null ||
+      direction.completedChapters !== direction.totalChapters ||
+      direction.completedPassages !== direction.totalPassages
+    ) {
+      throw new DomainError('A reviewed job requires every chapter and passage to be directed')
     }
     this.currentState = 'awaiting_review'
     this.currentProgress = Object.freeze({
@@ -289,6 +352,7 @@ export class AudiobookJob {
     this.completedCatalogRevision = null
     this.failureMessage = null
     this.currentProgress = Object.freeze({
+      ...this.currentProgress,
       currentChapterId: null,
       completedSegments: 0,
       totalSegments: 0,
@@ -399,7 +463,13 @@ export class AudiobookJob {
       renderContract: this.boundRenderContract,
       catalogRevision: this.completedCatalogRevision,
       bookId: this.attachedBookId,
-      progress: Object.freeze({ ...this.currentProgress }),
+      progress: Object.freeze({
+        ...this.currentProgress,
+        direction:
+          this.currentProgress.direction === null
+            ? null
+            : Object.freeze({ ...this.currentProgress.direction }),
+      }),
       warnings: Object.freeze(
         this.fallbackWarnings.map((warning) => Object.freeze({ ...warning })),
       ),
@@ -408,19 +478,34 @@ export class AudiobookJob {
   }
 
   static reconstitute(snapshot: AudiobookJobSnapshot): AudiobookJob {
-    AudiobookJob.validateSnapshot(snapshot)
-    const job = new AudiobookJob(snapshot.id)
-    job.currentState = snapshot.state
-    job.currentStage = snapshot.stage
-    job.boundCommandIdentity = snapshot.commandIdentity?.toLowerCase() ?? null
-    job.boundRenderContract = snapshot.renderContract?.toLowerCase() ?? null
-    job.completedCatalogRevision = snapshot.catalogRevision
-    job.attachedBookId = snapshot.bookId
-    job.currentProgress = Object.freeze({ ...snapshot.progress })
+    // Schema v4 predates direction progress. Treat its missing field as unavailable rather than
+    // making an existing resting/completed job unreadable; every newly saved snapshot writes it.
+    const normalized = {
+      ...snapshot,
+      progress: {
+        ...snapshot.progress,
+        direction: snapshot.progress.direction ?? null,
+      },
+    } satisfies AudiobookJobSnapshot
+    AudiobookJob.validateSnapshot(normalized)
+    const job = new AudiobookJob(normalized.id)
+    job.currentState = normalized.state
+    job.currentStage = normalized.stage
+    job.boundCommandIdentity = normalized.commandIdentity?.toLowerCase() ?? null
+    job.boundRenderContract = normalized.renderContract?.toLowerCase() ?? null
+    job.completedCatalogRevision = normalized.catalogRevision
+    job.attachedBookId = normalized.bookId
+    job.currentProgress = Object.freeze({
+      ...normalized.progress,
+      direction:
+        normalized.progress.direction === null
+          ? null
+          : Object.freeze({ ...normalized.progress.direction }),
+    })
     job.fallbackWarnings = Object.freeze(
-      snapshot.warnings.map((warning) => Object.freeze({ ...warning })),
+      normalized.warnings.map((warning) => Object.freeze({ ...warning })),
     )
-    job.failureMessage = snapshot.error
+    job.failureMessage = normalized.error
     return job
   }
 
@@ -473,7 +558,19 @@ export class AudiobookJob {
       throw new DomainError('Only failed jobs can contain a nonempty error')
     }
     const progress = snapshot.progress
+    const direction = progress.direction
     if (
+      (direction !== null &&
+        (!Number.isSafeInteger(direction.completedChapters) ||
+          !Number.isSafeInteger(direction.totalChapters) ||
+          !Number.isSafeInteger(direction.completedPassages) ||
+          !Number.isSafeInteger(direction.totalPassages) ||
+          direction.completedChapters < 0 ||
+          direction.totalChapters < 1 ||
+          direction.completedChapters > direction.totalChapters ||
+          direction.completedPassages < 0 ||
+          direction.totalPassages < direction.totalChapters ||
+          direction.completedPassages > direction.totalPassages)) ||
       !Number.isSafeInteger(progress.completedSegments) ||
       !Number.isSafeInteger(progress.totalSegments) ||
       progress.completedSegments < 0 ||
@@ -505,6 +602,7 @@ export class AudiobookJob {
       if (
         snapshot.stage !== 'extracting' ||
         snapshot.bookId !== null ||
+        progress.direction !== null ||
         progress.completedSegments !== 0 ||
         progress.totalSegments !== 0 ||
         progress.currentChapterId !== null ||
@@ -523,6 +621,9 @@ export class AudiobookJob {
       if (
         snapshot.stage !== 'directing' ||
         snapshot.bookId === null ||
+        (progress.direction !== null &&
+          (progress.direction.completedChapters !== progress.direction.totalChapters ||
+            progress.direction.completedPassages !== progress.direction.totalPassages)) ||
         progress.completedSegments !== 0 ||
         progress.totalSegments !== 0 ||
         progress.currentChapterId !== null ||
@@ -544,6 +645,7 @@ export class AudiobookJob {
       case 'extracting':
         if (
           !activeOrInterrupted ||
+          progress.direction !== null ||
           progress.completedSegments !== 0 ||
           progress.totalSegments !== 0 ||
           progress.currentChapterId !== null ||
@@ -670,6 +772,7 @@ export class AudiobookJob {
     this.currentStage = 'extracting'
     this.currentProgress = Object.freeze({
       currentChapterId: null,
+      direction: null,
       completedSegments: 0,
       totalSegments: 0,
       latestMessage: message,

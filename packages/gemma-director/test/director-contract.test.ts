@@ -381,6 +381,26 @@ describe('GemmaDirectorModel issue #29 DirectorModel contract', () => {
     )
   })
 
+  it('forwards the adapter existing progress events through the optional application sink', async () => {
+    const book = makeBook()
+    const { model, progress } = create()
+    const sinkEvents: object[] = []
+
+    await model.directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        sinkEvents.push(event)
+      },
+    })
+
+    expect(sinkEvents).toEqual(progress.events)
+    expect(sinkEvents.length).toBeGreaterThan(0)
+    expect(sinkEvents.at(-1)).toMatchObject({
+      state: 'completed',
+      completedPassages: 2,
+      totalPassages: 2,
+    })
+  })
+
   it('implements directChapter(Book, Chapter) with exact issue #29 DirectedChapter mapping', async () => {
     const book = makeBook()
     const { model, progress } = create()

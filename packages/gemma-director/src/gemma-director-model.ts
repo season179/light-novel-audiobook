@@ -456,9 +456,11 @@ export class GemmaDirectorModel implements ApplicationDirectorModel {
         ...(error === undefined ? {} : { error }),
       }
       try {
-        await this.progressStore.append(Object.freeze(event))
+        const frozenEvent = Object.freeze(event)
+        await this.progressStore.append(frozenEvent)
+        await options.onProgress?.(frozenEvent)
       } catch (cause: unknown) {
-        throw new DirectorError('progress', 'Gemma Director could not persist run progress', true, {
+        throw new DirectorError('progress', 'Gemma Director could not publish run progress', true, {
           cause,
         })
       }

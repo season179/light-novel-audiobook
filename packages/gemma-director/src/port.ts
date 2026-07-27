@@ -1,4 +1,9 @@
-import type { DirectedChapter } from '@light-novel-audiobook/application'
+import type {
+  DirectChapterOptions,
+  DirectChapterProgress,
+  DirectChapterProgressState,
+  DirectedChapter,
+} from '@light-novel-audiobook/application'
 import type {
   Book,
   Chapter,
@@ -124,15 +129,7 @@ export interface GemmaDirectedChapter extends DirectedChapter {
   readonly warnings: readonly DirectorWarning[]
 }
 
-export type DirectorRunState =
-  | 'started'
-  | 'requesting'
-  | 'response_started'
-  | 'streaming'
-  | 'validating'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
+export type DirectorRunState = DirectChapterProgressState
 
 export interface DirectorProgressError {
   readonly code: string
@@ -141,17 +138,13 @@ export interface DirectorProgressError {
 }
 
 /** Text-free event suitable for durable SQLite/job progress storage. */
-export interface DirectorProgressEvent {
+export interface DirectorProgressEvent extends DirectChapterProgress {
   readonly requestId: string
-  readonly chapterId: string
   readonly requestSha256: string
   readonly sequence: number
   readonly occurredAt: string
   readonly state: DirectorRunState
-  readonly completedPassages: number
-  readonly totalPassages: number
   readonly warningCount?: number
-  readonly message: string
   readonly error?: DirectorProgressError
 }
 
@@ -159,15 +152,7 @@ export interface DirectorProgressStore {
   append(event: DirectorProgressEvent): Promise<void>
 }
 
-export interface DirectionOptions {
-  readonly signal?: AbortSignal
-  /**
-   * Whole-chapter deadline in milliseconds, spanning all window requests and retries. Defaults
-   * to 60 minutes, the representative-chapter budget PLAN locks. The per-request timeout is the
-   * adapter-owned `requestTimeoutMs` constructor setting.
-   */
-  readonly timeoutMs?: number
-}
+export type DirectionOptions = DirectChapterOptions
 
 export interface DirectorHealth {
   readonly status: string

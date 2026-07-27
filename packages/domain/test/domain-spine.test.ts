@@ -357,12 +357,13 @@ describe('audiobook job and numbered output lifecycle', () => {
 
   it('rejects skipped work and reaches a terminal completed state', () => {
     const job = new AudiobookJob('job-1')
-    expect(() => job.beginDirection()).toThrow(InvalidStateTransitionError)
+    expect(() => job.beginDirection(1, 1)).toThrow(InvalidStateTransitionError)
     expect(() => job.start()).toThrow('Generation inputs must be bound')
     job.bindCommand(commandIdentity)
     job.start()
     job.attachBook(bookId)
-    job.beginDirection()
+    job.beginDirection(1, 1)
+    job.recordDirectionProgress(chapterId, 1, 1, 'Directed chapter 1 of 1')
     job.beginRendering(1)
     expect(() => job.beginAssembly()).toThrow('All segments must complete')
     job.recordSegmentCompleted('segment-1')
@@ -383,6 +384,31 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(() => job.retry()).toThrow(InvalidStateTransitionError)
     expect(version.label).toBe('v001')
     expect(version.fileName('My Book', 'm4b')).toBe('My Book-v001.m4b')
+  })
+
+  it('keeps direction passage progress distinct from rendering segments and rejects nonsense', () => {
+    const job = new AudiobookJob('job-direction-progress')
+    job.bindCommand(commandIdentity)
+    job.start()
+    job.attachBook(bookId)
+    expect(() => job.beginDirection(1, 0)).toThrow('positive chapter and passage totals')
+    job.beginDirection(2, 5)
+    job.recordDirectionProgress(chapterId, 0, 2, 'Directed 2 of 5 passages')
+
+    expect(job.progress.direction).toEqual({
+      completedChapters: 0,
+      totalChapters: 2,
+      completedPassages: 2,
+      totalPassages: 5,
+    })
+    expect(job.progress).toMatchObject({ completedSegments: 0, totalSegments: 0 })
+    expect(() => job.recordDirectionProgress(chapterId, 0, 1, 'Progress went backward')).toThrow(
+      'Direction progress is invalid',
+    )
+    expect(() => job.recordDirectionProgress(chapterId, 1, 6, 'Too many passages')).toThrow(
+      'Direction progress is invalid',
+    )
+    expect(() => job.awaitReview()).toThrow('every chapter and passage')
   })
 
   it('allows failed jobs to retry from extraction without changing their book', () => {
@@ -414,7 +440,8 @@ describe('audiobook job and numbered output lifecycle', () => {
     completed.bindCommand(commandIdentity)
     completed.start()
     completed.attachBook(bookId)
-    completed.beginDirection()
+    completed.beginDirection(1, 1)
+    completed.recordDirectionProgress(chapterId, 1, 1, 'Directed chapter 1 of 1')
     completed.beginRendering(1)
     completed.recordSegmentCompleted('segment-1')
     completed.beginAssembly()
@@ -443,6 +470,40 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(failedReloaded.state).toBe('running')
   })
 
+  it('loads a legacy schema-v4 failed-direction snapshot with no direction key', () => {
+    const legacySnapshot = {
+      schemaVersion: 4,
+      id: 'job-legacy-direction-progress',
+      state: 'failed',
+      stage: 'directing',
+      commandIdentity,
+      renderContract: null,
+      catalogRevision: null,
+      bookId,
+      progress: {
+        currentChapterId: chapterId,
+        completedSegments: 0,
+        totalSegments: 0,
+        latestMessage: 'Synthetic director stopped',
+      },
+      warnings: [],
+      error: 'Synthetic director stopped',
+    } as const
+    const reconstitute = (): AudiobookJob =>
+      AudiobookJob.reconstitute(legacySnapshot as unknown as AudiobookJobSnapshot)
+
+    expect(reconstitute).not.toThrow()
+    const job = reconstitute()
+    expect(job.state).toBe('failed')
+    expect(job.stage).toBe('directing')
+    expect(job.progress.direction).toBeNull()
+
+    job.retry()
+    expect(job.state).toBe('running')
+    expect(job.stage).toBe('extracting')
+    expect(job.progress.direction).toBeNull()
+  })
+
   it('rejects corrupt snapshots and duplicate completed output paths', () => {
     const pending = new AudiobookJob('job-invalid-snapshot').snapshot()
     expect(() =>
@@ -457,7 +518,8 @@ describe('audiobook job and numbered output lifecycle', () => {
     job.bindCommand(commandIdentity)
     job.start()
     job.attachBook(bookId)
-    job.beginDirection()
+    job.beginDirection(1, 1)
+    job.recordDirectionProgress(chapterId, 1, 1, 'Directed chapter 1 of 1')
     job.beginRendering(1)
     job.recordSegmentCompleted('segment-1')
     job.beginAssembly()
@@ -482,13 +544,14 @@ describe('audiobook job and numbered output lifecycle', () => {
     directing.bindCommand(commandIdentity)
     directing.start()
     directing.attachBook(bookId)
-    directing.beginDirection()
+    directing.beginDirection(1, 1)
 
     const rendering = new AudiobookJob('snapshot-rendering')
     rendering.bindCommand(commandIdentity)
     rendering.start()
     rendering.attachBook(bookId)
-    rendering.beginDirection()
+    rendering.beginDirection(1, 1)
+    rendering.recordDirectionProgress(chapterId, 1, 1, 'Directed chapter 1 of 1')
     rendering.beginRendering(2)
 
     const assembling = AudiobookJob.reconstitute(rendering.snapshot())
@@ -617,7 +680,7 @@ describe('audiobook job and numbered output lifecycle', () => {
     job.bindCommand(commandIdentity)
     job.start()
     job.attachBook(bookId)
-    job.beginDirection()
+    job.beginDirection(1, 1)
     const segmentId = StableIds.segment(StableIds.passage(chapterId, 1), 1)
     const valid = {
       segmentId,

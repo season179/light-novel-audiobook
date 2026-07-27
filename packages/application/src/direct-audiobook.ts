@@ -9,6 +9,7 @@ import { createGenerationCommandIdentity } from './generation-command-identity.j
 import type {
   AudioAssembler,
   DirectChapterOptions,
+  DirectChapterProgress,
   DirectorModel,
   DirectorModelFactory,
   EpubExtractor,
@@ -164,7 +165,10 @@ export class DirectAudiobook {
       }
       job.attachBook(book.id)
       await this.jobs.saveBook(book)
-      job.beginDirection()
+      job.beginDirection(
+        book.chapters.length,
+        book.chapters.reduce((total, chapter) => total + chapter.sourcePassages.length, 0),
+      )
       await this.jobs.saveJob(job)
 
       await this.directBook(book, command.voices, job, command.directorOptions)
@@ -211,6 +215,8 @@ export class DirectAudiobook {
       return created
     }
 
+    let completedChapters = 0
+    let completedPassages = 0
     let failure: unknown
     try {
       for (const chapter of book.chapters) {
@@ -231,6 +237,15 @@ export class DirectAudiobook {
               })
             }
           }
+          completedChapters += 1
+          completedPassages += chapter.sourcePassages.length
+          job.recordDirectionProgress(
+            chapter.id,
+            completedChapters,
+            completedPassages,
+            `Directed chapter ${completedChapters} of ${book.chapters.length}`,
+          )
+          await this.jobs.saveJob(job)
           continue
         }
         if (chapter.state !== 'draft') {
@@ -238,13 +253,37 @@ export class DirectAudiobook {
             `Chapter ${chapter.id} is ${chapter.state}; only draft chapters can be directed`,
           )
         }
-        job.report(chapter.id, `Directing ${chapter.title}`)
-        await this.jobs.saveJob(job)
-        const directed = await (await director()).directChapter(
-          book,
-          chapter,
-          directorOptions === undefined ? undefined : { ...directorOptions },
+        job.recordDirectionProgress(
+          chapter.id,
+          completedChapters,
+          completedPassages,
+          `Directing ${chapter.title}`,
         )
+        await this.jobs.saveJob(job)
+        const onProgress = async (progress: DirectChapterProgress): Promise<void> => {
+          if (
+            progress.chapterId !== chapter.id ||
+            !Number.isSafeInteger(progress.completedPassages) ||
+            progress.completedPassages < 0 ||
+            progress.totalPassages !== chapter.sourcePassages.length ||
+            progress.completedPassages > progress.totalPassages
+          ) {
+            throw new DomainError('Director reported invalid passage progress')
+          }
+          const recordedPassages = job.progress.direction?.completedPassages ?? completedPassages
+          job.recordDirectionProgress(
+            chapter.id,
+            completedChapters,
+            Math.max(recordedPassages, completedPassages + progress.completedPassages),
+            progress.message,
+          )
+          await this.jobs.saveJob(job)
+          await directorOptions?.onProgress?.(progress)
+        }
+        const directed = await (await director()).directChapter(book, chapter, {
+          ...directorOptions,
+          onProgress,
+        })
         if (directed.chapterId !== chapter.id) {
           throw new DomainError(
             `Director returned chapter ${directed.chapterId} while directing ${chapter.id}`,
@@ -274,6 +313,14 @@ export class DirectAudiobook {
         }
         chapter.submitForReview(segments)
         chapter.approve()
+        completedChapters += 1
+        completedPassages += chapter.sourcePassages.length
+        job.recordDirectionProgress(
+          chapter.id,
+          completedChapters,
+          completedPassages,
+          `Directed chapter ${completedChapters} of ${book.chapters.length}`,
+        )
         book.assertGloballyUniqueSegmentIds()
         await this.jobs.saveBook(book)
         await this.jobs.saveJob(job)

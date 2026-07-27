@@ -17,6 +17,10 @@ export interface BookReadModel {
   readonly title: string
   readonly author: string | null
   readonly chapters: readonly ChapterReadModel[]
+  /** Precomputed when the book changes, so 700ms job polling never recounts a whole book. */
+  readonly totalPassages?: number
+  readonly totalSegments?: number
+  readonly fallbackSegments?: number
 }
 
 /**
@@ -31,10 +35,23 @@ export class BookReadModelStore {
   private readonly byBookId = new Map<string, BookReadModel>()
 
   record(book: Book): void {
+    let totalPassages = 0
+    let totalSegments = 0
+    let fallbackSegments = 0
+    for (const chapter of book.chapters) {
+      totalPassages += chapter.sourcePassages.length
+      totalSegments += chapter.segments.length
+      fallbackSegments += chapter.segments.filter(
+        (segment) => segment.voiceAssignment?.usesFallback === true,
+      ).length
+    }
     this.byBookId.set(book.id, {
       bookId: book.id,
       title: book.title,
       author: book.author,
+      totalPassages,
+      totalSegments,
+      fallbackSegments,
       chapters: book.chapters.map((chapter) => ({
         chapterId: chapter.id,
         position: chapter.position,

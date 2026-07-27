@@ -1,6 +1,7 @@
 export {
   AUDIOBOOK_JOB_STAGES,
   AUDIOBOOK_JOB_STATES,
+  type AudiobookDirectionProgress,
   AudiobookJob,
   type AudiobookJobProgress,
   type AudiobookJobSnapshot,

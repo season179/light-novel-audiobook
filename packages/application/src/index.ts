@@ -63,6 +63,8 @@ export type {
   CastApprovalRepository,
   CompletedSegmentAudio,
   DirectChapterOptions,
+  DirectChapterProgress,
+  DirectChapterProgressState,
   DirectedChapter,
   DirectorModel,
   DirectorModelFactory,

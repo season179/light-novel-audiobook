@@ -313,12 +313,52 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     expect(await harness.repo.findJob(job.id)).toBeDefined()
   })
 
+  it('loads and re-saves a legacy schema-v4 job row with no direction key', async () => {
+    const legacySnapshot = {
+      schemaVersion: 4,
+      id: 'job-legacy-direction-row',
+      state: 'failed',
+      stage: 'directing',
+      commandIdentity: COMMAND_IDENTITY,
+      renderContract: null,
+      catalogRevision: null,
+      bookId: BOOK_ID,
+      progress: {
+        currentChapterId: CHAPTER_ID,
+        completedSegments: 0,
+        totalSegments: 0,
+        latestMessage: 'Synthetic director stopped',
+      },
+      warnings: [],
+      error: 'Synthetic director stopped',
+    } as const
+    harness.db
+      .prepare('INSERT INTO jobs (id, snapshot_json) VALUES (?, ?)')
+      .run(legacySnapshot.id, JSON.stringify(legacySnapshot))
+
+    harness.reopen()
+    const legacy = await harness.repo.findJob(legacySnapshot.id)
+    expect(legacy?.state).toBe('failed')
+    expect(legacy?.stage).toBe('directing')
+    expect(legacy?.progress.direction).toBeNull()
+    legacy?.retry()
+    if (legacy === undefined) throw new Error('Legacy job row disappeared')
+    await harness.repo.saveJob(legacy)
+
+    harness.reopen()
+    const saved = await harness.repo.findJob(legacySnapshot.id)
+    expect(saved?.state).toBe('running')
+    expect(saved?.stage).toBe('extracting')
+    expect(saved?.progress.direction).toBeNull()
+  })
+
   it('stores completed output separately from public job state across restart and reopen', async () => {
     const job = new AudiobookJob('job-separated-output')
     job.bindCommand(COMMAND_IDENTITY)
     job.start()
     job.attachBook(BOOK_ID)
-    job.beginDirection()
+    job.beginDirection(1, 1)
+    job.recordDirectionProgress(CHAPTER_ID, 1, 1, 'Directed chapter 1 of 1')
     job.beginRendering(1)
     job.recordSegmentCompleted('segment-1')
     job.beginAssembly()
@@ -532,7 +572,17 @@ describe('SqliteJobRepository contract (issue #27)', () => {
     job.bindCommand(COMMAND_IDENTITY)
     job.start()
     job.attachBook(book.id)
-    job.beginDirection()
+    const totalPassages = book.chapters.reduce(
+      (total, chapter) => total + chapter.sourcePassages.length,
+      0,
+    )
+    job.beginDirection(book.chapters.length, totalPassages)
+    job.recordDirectionProgress(
+      book.chapters.at(-1)?.id ?? CHAPTER_ID,
+      book.chapters.length,
+      totalPassages,
+      `Directed chapter ${book.chapters.length} of ${book.chapters.length}`,
+    )
     job.beginRendering(3)
     await harness.repo.saveBook(book)
     await harness.repo.saveJob(job)
