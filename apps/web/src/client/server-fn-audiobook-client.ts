@@ -3,8 +3,10 @@ import {
   approveFallbackFn,
   approveSelectedFallbacksFn,
   getJobStateFn,
+  getScriptChapterFn,
   listChapterAudioFn,
   listFallbackReviewFn,
+  listScriptChaptersFn,
   listUploadsFn,
   renderApprovedScriptFn,
   resumeGenerationFn,
@@ -35,4 +37,6 @@ export const serverFnAudiobookClient: AudiobookClient = {
   revokeFallback: ({ jobId, segmentId }) => revokeFallbackFn({ data: { jobId, segmentId } }),
   resumeGeneration: ({ jobId }) => resumeGenerationFn({ data: { jobId } }),
   renderApprovedScript: ({ jobId }) => renderApprovedScriptFn({ data: { jobId } }),
+  listScriptChapters: ({ jobId }) => listScriptChaptersFn({ data: { jobId } }),
+  getScriptChapter: ({ jobId, chapterId }) => getScriptChapterFn({ data: { jobId, chapterId } }),
 }

@@ -5,11 +5,16 @@ import type {
   ReusableSegmentQuery,
 } from '@light-novel-audiobook/application'
 import type { AudiobookJob, AudiobookOutput, Book } from '@light-novel-audiobook/domain'
+import { scriptSegmentFlags } from './script-segment-flags.js'
 
 export interface ChapterReadModel {
   readonly chapterId: string
   readonly position: number
   readonly title: string
+  /** Precomputed per chapter, so the script-review index never recounts segments at read time. */
+  readonly segmentCount: number
+  /** Segments carrying at least one suspicion flag (#96 step 6). Precomputed with the book. */
+  readonly flaggedSegments: number
 }
 
 export interface BookReadModel {
@@ -67,6 +72,10 @@ export class BookReadModelStore {
         chapterId: chapter.id,
         position: chapter.position,
         title: chapter.title,
+        segmentCount: chapter.segments.length,
+        flaggedSegments: chapter.segments.filter(
+          (segment) => scriptSegmentFlags(segment).length > 0,
+        ).length,
       })),
     })
   }

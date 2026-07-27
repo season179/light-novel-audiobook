@@ -5,6 +5,7 @@ import type { JobStateView } from '../server/job-state-view.js'
 import { ChapterAudioList } from './chapter-audio-list.js'
 import { FallbackReviewPanel } from './fallback-review-panel.js'
 import { FallbackWarningList } from './fallback-warning-list.js'
+import { ScriptReviewPanel } from './script-review-panel.js'
 
 export interface JobProgressPanelProps {
   readonly client: AudiobookClient
@@ -238,6 +239,11 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
           onRender={() => render.mutate()}
         />
       )}
+
+      {/* #96 step 6: the script the user is confirming, read-only, fetched on demand — never as
+          part of the 700 ms poll. Mounted once a book exists; the panel stays collapsed until the
+          user opens it. */}
+      {job.bookId !== null && <ScriptReviewPanel client={client} jobId={jobId} />}
 
       {/* Reference material: the pipeline and the counts recede into a recessed box so the live
           status above keeps the eye. */}

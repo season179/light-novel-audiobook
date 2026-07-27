@@ -5,6 +5,8 @@ export default defineConfig({
     include: [
       'packages/**/test/**/*.test.ts',
       'apps/**/test/**/*.test.ts',
+      // Component tests written in JSX (the apps' tsconfig already typechecks them).
+      'apps/**/test/**/*.test.tsx',
       // The proof/listening scripts are not part of any package, and nothing else executes them.
       'scripts/test/**/*.test.ts',
     ],

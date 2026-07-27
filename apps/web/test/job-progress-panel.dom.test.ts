@@ -143,6 +143,22 @@ const stubClient = (overrides: Partial<AudiobookClient>): AudiobookClient => ({
     ok: true as const,
     value: { jobId: JOB_ID, job: view({}) },
   })),
+  listScriptChapters: vi.fn(async () => ({
+    ok: true as const,
+    value: {
+      jobId: JOB_ID,
+      bookId: 'book-uitest0000000000000001',
+      bookTitle: 'Fixture Book',
+      chapterCount: 0,
+      totalSegments: 0,
+      flaggedSegments: 0,
+      chapters: [],
+    },
+  })),
+  getScriptChapter: vi.fn(async () => ({
+    ok: false as const,
+    error: { code: 'invalid_request' as const, message: 'not used in these tests' },
+  })),
   ...overrides,
 })
 

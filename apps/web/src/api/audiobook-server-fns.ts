@@ -9,6 +9,7 @@ import type {
 } from '../server/audiobook-web-api.js'
 import { requireIdInput, toWebApiResult, WebApiError, type WebApiResult } from '../server/errors.js'
 import type { JobStateView } from '../server/job-state-view.js'
+import type { ScriptChapterListView, ScriptChapterView } from '../server/script-review-view.js'
 
 /**
  * The local web API the browser calls. Each server function is a thin adapter over
@@ -182,5 +183,35 @@ export const renderApprovedScriptFn = createServerFn({ method: 'POST' })
     async ({ data }): Promise<WebApiResult<StartedGeneration>> =>
       toWebApiResult('renderApprovedScript', async () =>
         (await api()).renderApprovedScript({ jobId: requireIdInput(data.jobId, 'Job ID') }),
+      ),
+  )
+
+/**
+ * The chapter index of the persisted directed script (#96 step 6): counts and titles only, so the
+ * reader can find the flagged chapters without the server shipping a whole book of story text.
+ */
+export const listScriptChaptersFn = createServerFn({ method: 'GET' })
+  .validator((data: { jobId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<ScriptChapterListView>> =>
+      toWebApiResult('listScriptChapters', async () =>
+        (await api()).listScriptChapters({ jobId: requireIdInput(data.jobId, 'Job ID') }),
+      ),
+  )
+
+/**
+ * One chapter of the directed script, exactly as it will be spoken. The segment text in this
+ * answer is story content: it exists so the user can read what they are confirming, and it must
+ * never be logged or written into job state.
+ */
+export const getScriptChapterFn = createServerFn({ method: 'GET' })
+  .validator((data: { jobId: string; chapterId: string }) => data)
+  .handler(
+    async ({ data }): Promise<WebApiResult<ScriptChapterView>> =>
+      toWebApiResult('getScriptChapter', async () =>
+        (await api()).getScriptChapter({
+          jobId: requireIdInput(data.jobId, 'Job ID'),
+          chapterId: requireIdInput(data.chapterId, 'Chapter ID'),
+        }),
       ),
   )
