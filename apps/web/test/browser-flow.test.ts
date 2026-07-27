@@ -202,13 +202,13 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
         ),
       )
 
-      expect(
-        await screen.findByText(
-          'Recheck saved segment audio and render only the missing segments.',
-          undefined,
-          WAIT,
-        ),
-      ).toBeTruthy()
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByText('Recheck saved segment audio and render only the missing segments.'),
+          ).not.toBeNull(),
+        WAIT,
+      )
       expect(harness.directors).toHaveLength(directorsBeforeOpen)
       expect(harness.speechEngine.rendered).toBe(speechBeforeOpen)
       expect(screen.queryByRole('button', { name: 'Recover and continue' })).toBeNull()
