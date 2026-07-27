@@ -449,6 +449,10 @@ class InMemoryJobRepository implements JobRepository {
     if (job.state !== 'completed') this.completedOutputs.delete(job.id)
   }
 
+  async saveFailureDiagnostic(): Promise<undefined> {
+    return undefined
+  }
+
   async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
     this.jobs.set(job.id, AudiobookJob.reconstitute(job.snapshot()))
     this.completedOutputs.set(job.id, output)

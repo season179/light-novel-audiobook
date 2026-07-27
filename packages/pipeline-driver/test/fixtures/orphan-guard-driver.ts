@@ -23,6 +23,7 @@ const transports = await createRealTransports({
   runtimeManifestPath: path.join(root, 'unused-manifest.json'),
   modelSnapshotPath: path.join(root, 'qwen-snapshot'),
   gpuLockFilePath: path.join(root, 'gpu.lock'),
+  directorCaptureDirectory: path.join(root, 'diagnostics'),
   startupTimeoutMs: 5_000,
 })
 

@@ -83,6 +83,10 @@ export class ProjectingJobRepository implements JobRepository {
     return this.inner.saveJob(job)
   }
 
+  saveFailureDiagnostic(jobId: string, error: unknown): Promise<string | undefined> {
+    return this.inner.saveFailureDiagnostic(jobId, error)
+  }
+
   saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
     return this.inner.saveCompletedJob(job, output)
   }

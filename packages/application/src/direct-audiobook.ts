@@ -179,14 +179,7 @@ export class DirectAudiobook {
       await this.jobs.saveJob(job)
       return { job, book, commandIdentity }
     } catch (error) {
-      if (job.state === 'running') {
-        job.fail(errorMessage(error))
-        try {
-          await this.jobs.saveJob(job)
-        } catch {
-          // Preserve the causative pipeline error; the repository already surfaced if it caused the failure.
-        }
-      }
+      if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
       throw error
     }
   }
@@ -343,3 +336,30 @@ export class DirectAudiobook {
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
+
+/**
+ * Preserves the caught object before reducing it to browser-safe prose. Diagnostic persistence is
+ * best effort: if the artifact cannot be written, the job still fails and its message names no file.
+ */
+export const persistJobFailure = async (
+  jobs: JobRepository,
+  job: AudiobookJob,
+  error: unknown,
+): Promise<void> => {
+  let diagnosticPath: string | undefined
+  try {
+    diagnosticPath = await jobs.saveFailureDiagnostic(job.id, error)
+  } catch {
+    // A full disk or unavailable diagnostic directory must not hide the pipeline failure.
+  }
+  const message =
+    diagnosticPath === undefined
+      ? errorMessage(error)
+      : `${errorMessage(error)} Diagnostic details: ${diagnosticPath}`
+  job.fail(message, diagnosticPath ?? null)
+  try {
+    await jobs.saveJob(job)
+  } catch {
+    // Preserve the causative pipeline error; the repository already surfaced if it caused the failure.
+  }
+}

@@ -38,6 +38,7 @@ const runningSnapshot: AudiobookJobSnapshot = {
     },
   ],
   error: null,
+  failureDiagnosticPath: null,
 }
 
 describe('chapter labels derived from stable IDs', () => {

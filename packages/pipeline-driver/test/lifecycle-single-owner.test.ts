@@ -125,6 +125,7 @@ describe('one OwnedLlamaLifecycle, owned by gemma-director', () => {
       runtimeManifestPath: path.join(layout.llamaRuntimeRoot, 'manifest.json'),
       modelSnapshotPath: layout.modelSnapshotPath,
       gpuLockFilePath: layout.gpuLockFilePath,
+      directorCaptureDirectory: path.join(layout.llamaRuntimeRoot, 'diagnostics'),
     })
 
     // Proves we went through the real function rather than failing early, then consumes the exact

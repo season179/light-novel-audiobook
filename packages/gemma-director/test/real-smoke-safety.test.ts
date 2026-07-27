@@ -2,8 +2,23 @@ import { describe, expect, it } from 'vitest'
 import {
   assertOwnedLoopbackListener,
   assertOwnedProcessIdentity,
+  llamaServerArgs,
   probeBrowserBoundary,
 } from '../src/index.js'
+
+describe('owned llama-server logging safety', () => {
+  it('captures normal diagnostics without enabling prompt printing or disabling all logs', () => {
+    const args = llamaServerArgs({
+      modelPath: '/runtime/model.gguf',
+      host: '127.0.0.1',
+      port: 8080,
+      keyPath: '/runtime/key',
+    })
+
+    expect(args).not.toContain('--verbose-prompt')
+    expect(args).not.toContain('--log-disable')
+  })
+})
 
 describe('real-smoke ownership proof', () => {
   it('requires the verified executable, exact model argv, loopback listener, and owned PID', () => {

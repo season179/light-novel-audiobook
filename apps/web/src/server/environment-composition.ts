@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import {
   createRealTransports,
@@ -63,6 +64,7 @@ const required = (env: NodeJS.ProcessEnv, name: string): string => {
 export const resolveRealTransportConfig = async (
   env: NodeJS.ProcessEnv,
   repositoryRoot: string,
+  workspaceRoot = resolveWorkspaceRoot(env[WORKSPACE_ENV_VAR]),
 ): Promise<RealTransportConfig> => ({
   directorBaseUrl: required(env, DIRECTOR_URL_ENV_VAR),
   llamaRuntimeRoot: env[LLAMA_RUNTIME_ROOT_ENV_VAR] ?? SELECTED_GEMMA_PROFILE.defaultRuntimeRoot,
@@ -72,6 +74,7 @@ export const resolveRealTransportConfig = async (
   modelSnapshotPath:
     env[QWEN_SNAPSHOT_ENV_VAR] ?? (await resolveDefaultModelSnapshotPath(repositoryRoot)),
   gpuLockFilePath: required(env, GPU_LOCK_ENV_VAR),
+  directorCaptureDirectory: path.join(workspaceRoot, 'diagnostics', 'llama-server'),
 })
 
 /**
@@ -101,7 +104,7 @@ export const resolveEnvironmentCompositionOptions = async (
   const workspace = await createWorkspace(resolveWorkspaceRoot(env[WORKSPACE_ENV_VAR]))
   const voices = createM1VoiceCast(await loadPinnedQwenConfig(env[QWEN_PRODUCTION_CONFIG_ENV_VAR]))
   const transports = await createRealTransports(
-    await resolveRealTransportConfig(env, repositoryRoot),
+    await resolveRealTransportConfig(env, repositoryRoot, workspace.root),
   )
   const { factories } = await createRealAdapterFactories({
     workspace,

@@ -143,6 +143,7 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('real mode selected through the environment'
       runtimeManifestPath: '/runtimes/tts/manifest.json',
       modelSnapshotPath: '/runtimes/tts/snapshot',
       gpuLockFilePath: path.join(root, 'gpu.lock'),
+      directorCaptureDirectory: path.join(root, 'diagnostics', 'llama-server'),
     })
 
     // Containment: every adapter field is the real set, not a fake default left behind.

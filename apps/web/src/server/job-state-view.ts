@@ -67,6 +67,7 @@ export interface JobStateView {
   readonly pipelineStages: readonly PipelineStageView[]
   readonly latestMessage: string
   readonly error: string | null
+  readonly failureDiagnosticPath: string | null
   readonly active: boolean
   readonly finished: boolean
   readonly warnings: readonly JobWarningView[]
@@ -219,6 +220,7 @@ export const buildJobStateView = (
     pipelineStages: buildPipelineStages(snapshot, book, output),
     latestMessage: progress.latestMessage,
     error: snapshot.error,
+    failureDiagnosticPath: snapshot.failureDiagnosticPath,
     active: snapshot.state === 'running' || snapshot.state === 'pending',
     finished: snapshot.state === 'completed',
     warnings: snapshot.warnings.map((warning) => ({

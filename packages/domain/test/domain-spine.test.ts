@@ -470,7 +470,7 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(failedReloaded.state).toBe('running')
   })
 
-  it('loads a legacy schema-v4 failed-direction snapshot with no direction key', () => {
+  it('loads a hand-built legacy schema-v4 failure with no direction or diagnostic key', () => {
     const legacySnapshot = {
       schemaVersion: 4,
       id: 'job-legacy-direction-progress',
@@ -497,6 +497,8 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(job.state).toBe('failed')
     expect(job.stage).toBe('directing')
     expect(job.progress.direction).toBeNull()
+    expect(job.failureDiagnosticPath).toBeNull()
+    expect(job.snapshot().failureDiagnosticPath).toBeNull()
 
     job.retry()
     expect(job.state).toBe('running')

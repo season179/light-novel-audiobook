@@ -82,6 +82,7 @@ server.listen(port, '127.0.0.1')
     runtimeManifestPath: path.join(root, 'unused-manifest.json'),
     modelSnapshotPath,
     gpuLockFilePath: path.join(root, 'gpu.lock'),
+    directorCaptureDirectory: path.join(root, 'diagnostics'),
     startupTimeoutMs: 2_000,
   })
   transportsToClose.push(transports)
@@ -139,6 +140,14 @@ describe('real transport per-run director lifecycle factory', () => {
       `director:start:pid=${pids[2]}`,
       'director:release:process-exited',
     ])
+    const captureNames = (await readdir(path.join(root, 'diagnostics'))).sort()
+    expect(captureNames).toHaveLength(3)
+    expect(new Set(captureNames).size).toBe(3)
+    for (const captureName of captureNames) {
+      const capture = await readFile(path.join(root, 'diagnostics', captureName), 'utf8')
+      expect(capture).toContain('phase=healthy')
+      expect(capture).toContain('phase=exited')
+    }
     await expectNoRuntimeKeys(root)
   })
 

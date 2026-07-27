@@ -140,6 +140,10 @@ class StubJobRepository implements JobRepository {
     if (job.state !== 'completed') this.completedOutputs.delete(job.id)
   }
 
+  async saveFailureDiagnostic(): Promise<undefined> {
+    return undefined
+  }
+
   async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
     this.savedJobs.push(`${job.id}:${job.state}`)
     this.jobs.set(job.id, job)

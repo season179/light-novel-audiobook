@@ -21,6 +21,7 @@ import {
   SourcePassage,
   type VoiceAssignment,
 } from '@light-novel-audiobook/domain'
+import { persistFailureDiagnostic } from '@light-novel-audiobook/persistence'
 import type { LocalWorkspace } from '../workspace.js'
 
 const MAX_OUTPUT_VERSIONS = 999
@@ -77,6 +78,10 @@ export class InMemoryJobRepository implements JobRepository {
     if (job.state === 'completed') throw new DomainError('Completed job requires separate output')
     this.jobSnapshots.set(job.id, job.snapshot())
     this.#completedOutputs.delete(job.id)
+  }
+
+  async saveFailureDiagnostic(jobId: string, error: unknown): Promise<string | undefined> {
+    return await persistFailureDiagnostic(this.workspace.root, jobId, error)
   }
 
   async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {

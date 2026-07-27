@@ -104,7 +104,7 @@ describe('real transport configuration', () => {
   })
 
   it('passes every supplied value through and derives the two conventional defaults', async () => {
-    const config = await resolveRealTransportConfig(completeEnv, REPOSITORY_ROOT)
+    const config = await resolveRealTransportConfig(completeEnv, REPOSITORY_ROOT, '/workspace')
 
     expect(config).toEqual({
       directorBaseUrl: 'http://127.0.0.1:8080/v1',
@@ -116,6 +116,7 @@ describe('real transport configuration', () => {
       runtimeManifestPath: '/runtimes/tts/manifest.json',
       modelSnapshotPath: await resolveDefaultModelSnapshotPath(REPOSITORY_ROOT),
       gpuLockFilePath: '/gpu/exclusive.lock',
+      directorCaptureDirectory: '/workspace/diagnostics/llama-server',
     })
   })
 

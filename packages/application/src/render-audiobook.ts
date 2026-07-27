@@ -8,7 +8,7 @@ import type {
 import { DomainError, type VoiceCast } from '@light-novel-audiobook/domain'
 import { CompletedOutputAuthority } from './completed-output.js'
 import { validateCompletedSegmentAudioMetadata } from './completed-segment-audio.js'
-import { errorMessage } from './direct-audiobook.js'
+import { persistJobFailure } from './direct-audiobook.js'
 import {
   approvalStillDescribes,
   collectFallbackSubjects,
@@ -250,14 +250,7 @@ export class RenderAudiobook {
       await this.jobs.saveCompletedJob(job, output)
       return { job, output, generatedSegments, reusedSegments }
     } catch (error) {
-      if (job.state === 'running') {
-        job.fail(errorMessage(error))
-        try {
-          await this.jobs.saveJob(job)
-        } catch {
-          // Preserve the causative pipeline error; the repository already surfaced if it caused the failure.
-        }
-      }
+      if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
       throw error
     }
   }

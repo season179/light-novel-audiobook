@@ -20,6 +20,7 @@ import {
   Segment,
   SourcePassage,
 } from '@light-novel-audiobook/domain'
+import { persistFailureDiagnostic } from './failure-diagnostic.js'
 import { classifySqliteFailure, withBusyRetryingTransaction } from './transaction.js'
 import type { WorkspaceLayout } from './workspace.js'
 import { outputBaseName, sha256OfFile, toSafeAbsolute } from './workspace.js'
@@ -66,6 +67,11 @@ export class SqliteJobRepository implements JobRepository {
       () => this.replaceJob(job.id, json),
       `Could not save audiobook job ${job.id}; the workspace database stayed locked`,
     )
+  }
+
+  async saveFailureDiagnostic(jobId: string, error: unknown): Promise<string | undefined> {
+    if (!jobId) throw new DomainError('Job ID is required')
+    return await persistFailureDiagnostic(this.layout.root, jobId, error)
   }
 
   async saveCompletedJob(job: AudiobookJob, output: AudiobookOutput): Promise<void> {
