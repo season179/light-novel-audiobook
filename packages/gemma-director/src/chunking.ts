@@ -27,7 +27,7 @@ export interface DirectionChunkingSettings {
   readonly contextReserveTokens: number
   /** Conservative characters-per-token divisor used for prompt size estimates. */
   readonly charsPerTokenEstimate: number
-  /** Halvings applied after a truncation signature before the window is retried. */
+  /** Halvings applied after a recoverable window-size failure before the window is retried. */
   readonly maxWindowShrinks: number
 }
 
@@ -155,8 +155,8 @@ export function planChapterWindows(
 }
 
 /**
- * A window smaller than the current one after a truncation signature. Both dimensions halve
- * because truncation can come from echo volume (chars) or fragment overhead (count); the floor
+ * A window smaller than the current one after a recoverable size-related failure. Both dimensions
+ * halve because failure can come from source volume (chars) or fragment overhead (count); the floor
  * keeps a single passage sendable, which is the escape hatch the solo-window rule relies on.
  */
 export function shrinkSettings(settings: DirectionChunkingSettings): DirectionChunkingSettings {

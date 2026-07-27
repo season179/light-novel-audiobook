@@ -34,6 +34,8 @@ export class OracleLlamaServer {
    * `context_length_exceeded` rejection, as llama.cpp reports a prompt that cannot fit.
    */
   contextOverflowAbovePassages: number | undefined
+  /** When set, larger requests return a schema-valid response with an invalid source echo. */
+  fidelityFailureAbovePassages: number | undefined
   /** Artificial per-request delay, for timeout and deadline tests. */
   delayMs = 0
 
@@ -127,31 +129,35 @@ export class OracleLlamaServer {
 
     const truncated =
       this.truncateAbovePassages !== undefined && user.passages.length > this.truncateAbovePassages
-    const value = truncated
-      ? '{"segments":[{"source_passage_id":'
-      : JSON.stringify({
-          segments: user.passages.flatMap((passage) => {
-            const fragments = this.oracle.get(passage.source_passage_id)
-            if (fragments === undefined) throw new Error('Oracle missing passage')
-            return fragments.map((fragment) => ({
-              source_passage_id: passage.source_passage_id,
-              source_text: passage.source_text.slice(fragment.start, fragment.end),
-              kind: fragment.kind,
-              confidence: fragment.confidence,
-              delivery: {
-                emotion: 'calm',
-                pace: 'normal',
-                volume: 'normal',
-                pause_after_ms: 200,
-              },
-              ...(fragment.kind === 'narration' || fragment.kind === 'sound_cue'
-                ? {}
-                : fragment.unresolved
-                  ? { speaker_id: null, speaker_reason: 'Not identified in context.' }
-                  : { speaker_id: fragment.speaker, speaker_reason: null }),
-            }))
-          }),
-        })
+    const segments = user.passages.flatMap((passage) => {
+      const fragments = this.oracle.get(passage.source_passage_id)
+      if (fragments === undefined) throw new Error('Oracle missing passage')
+      return fragments.map((fragment) => ({
+        source_passage_id: passage.source_passage_id,
+        source_text: passage.source_text.slice(fragment.start, fragment.end),
+        kind: fragment.kind,
+        confidence: fragment.confidence,
+        delivery: {
+          emotion: 'calm',
+          pace: 'normal',
+          volume: 'normal',
+          pause_after_ms: 200,
+        },
+        ...(fragment.kind === 'narration' || fragment.kind === 'sound_cue'
+          ? {}
+          : fragment.unresolved
+            ? { speaker_id: null, speaker_reason: 'Not identified in context.' }
+            : { speaker_id: fragment.speaker, speaker_reason: null }),
+      }))
+    })
+    if (
+      this.fidelityFailureAbovePassages !== undefined &&
+      user.passages.length > this.fidelityFailureAbovePassages
+    ) {
+      const first = segments[0]
+      if (first !== undefined) first.source_text += '!'
+    }
+    const value = truncated ? '{"segments":[{"source_passage_id":' : JSON.stringify({ segments })
 
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     const chunk = (content: string, finish: string | null = null): string =>
