@@ -245,12 +245,12 @@ async function runDetachedLeaseCaller(
  * deadline: nothing here is allowed to wait forever.
  */
 async function acquireWithin(lockFilePath: string, ms: number): Promise<GpuLease> {
-  const deadline = Date.now() + ms
+  const deadline = performance.now() + ms
   for (;;) {
     try {
       return await coordinator(lockFilePath).acquire('qwen3-tts')
     } catch (error) {
-      if (Date.now() >= deadline || (error as { code?: string }).code !== 'busy') throw error
+      if (performance.now() >= deadline || (error as { code?: string }).code !== 'busy') throw error
       await new Promise((resolveRetry) => setTimeout(resolveRetry, 25))
     }
   }
@@ -300,10 +300,10 @@ async function settleWithin<T>(
   work: Promise<T>,
   ms: number,
 ): Promise<{ readonly value?: T; readonly error?: unknown; readonly elapsedMs: number }> {
-  const started = Date.now()
+  const started = performance.now()
   const settled = work.then(
-    (value) => ({ value, elapsedMs: Date.now() - started }),
-    (error: unknown) => ({ error, elapsedMs: Date.now() - started }),
+    (value) => ({ value, elapsedMs: performance.now() - started }),
+    (error: unknown) => ({ error, elapsedMs: performance.now() - started }),
   )
   let timer: NodeJS.Timeout | undefined
   try {

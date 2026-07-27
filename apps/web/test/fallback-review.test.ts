@@ -33,8 +33,8 @@ const startAndStopForReview = async (marker: string) => {
   })
   const started = await api.startGeneration({ uploadId: upload.uploadId })
   // `waitForJobState` would make the decision itself, so this waits on the raw state instead.
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + 10_000
+  while (performance.now() < deadline) {
     const job = await api.getJobState({ jobId: started.jobId })
     if (job !== null && !job.active && job.state === 'awaiting_review') break
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -138,8 +138,8 @@ describe('fallback approvals in the web app (issue #45)', () => {
       bytes: createStubEpubBytes('busy'),
     })
     const started = await api.startGeneration({ uploadId: upload.uploadId })
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 10_000
+    while (performance.now() < deadline) {
       const job = await api.getJobState({ jobId: started.jobId })
       if (job !== null && !job.active && job.state === 'awaiting_review') break
       await new Promise((resolve) => setTimeout(resolve, 20))

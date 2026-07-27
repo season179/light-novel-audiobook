@@ -71,8 +71,8 @@ describe('reviewer identity (issue #45, round 3)', () => {
       bytes: createStubEpubBytes('attributed'),
     })
     const started = await api.startGeneration({ uploadId: upload.uploadId })
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 10_000
+    while (performance.now() < deadline) {
       const job = await api.getJobState({ jobId: started.jobId })
       if (job !== null && !job.active && job.state === 'awaiting_review') break
       await new Promise((resolve) => setTimeout(resolve, 20))

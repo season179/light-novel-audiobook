@@ -80,8 +80,8 @@ const completedAudiobook = async (
   const settle = async (
     predicate: (job: Awaited<ReturnType<typeof api.getJobState>>) => boolean,
   ): Promise<void> => {
-    const deadline = Date.now() + 20_000
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 20_000
+    while (performance.now() < deadline) {
       if (predicate(await api.getJobState({ jobId: started.jobId }))) return
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
@@ -366,8 +366,8 @@ describe('a revoked audiobook is not downloadable (issue #45, round 4)', () => {
     const cleared = await api.approveFallback({ jobId, segmentId: victim.segmentId })
     expect(cleared.pendingCount).toBe(0)
     await api.renderApprovedScript({ jobId })
-    const deadline = Date.now() + 20_000
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 20_000
+    while (performance.now() < deadline) {
       const job = await api.getJobState({ jobId })
       if (job?.finished === true) break
       await new Promise((resolve) => setTimeout(resolve, 20))
