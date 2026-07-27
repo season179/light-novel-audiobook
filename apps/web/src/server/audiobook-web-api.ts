@@ -363,10 +363,17 @@ export class AudiobookWebApi {
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
     }
     const projection = await this.authorizedSnapshot(job)
+    // The review sub-status (#96) is derived from the live review records, not the snapshot: an
+    // approval recorded after the snapshot was written changes the answer immediately.
+    const reviewItems =
+      projection.snapshot.state === 'awaiting_review' && projection.snapshot.bookId !== null
+        ? await this.review.list(job.id)
+        : []
     const view = buildJobStateView(
       projection.snapshot,
       this.books.find(job.bookId),
       projection.output,
+      reviewItems,
     )
     return this.withRunnerStatus(view)
   }
@@ -426,6 +433,7 @@ export class AudiobookWebApi {
       latestMessage: message,
       active: true,
       finished: false,
+      review: null,
     }
   }
 
@@ -581,6 +589,7 @@ export class AudiobookWebApi {
       failureDiagnosticPath: null,
       active: true,
       finished: false,
+      review: null,
       warnings: [],
       output: null,
     }

@@ -21,10 +21,19 @@ const chapterText = (job: JobStateView): string => {
   return `${job.currentChapterLabel} — ${job.currentChapterTitle}`
 }
 
-const stageText = (job: JobStateView): string =>
-  job.state === 'awaiting_review'
-    ? 'Waiting for fallback voice review. Continuing starts speech rendering.'
-    : `${job.stageLabel} · ${job.state}`
+const stageText = (job: JobStateView): string => {
+  if (job.state !== 'awaiting_review') return `${job.stageLabel} · ${job.state}`
+  // The two situations inside awaiting_review (#96), derived server-side from the live review
+  // records — never inferred here from the state or the stored message.
+  if (job.review === null) {
+    return 'Waiting for fallback voice review. Continuing starts speech rendering.'
+  }
+  if (job.review.status === 'ready_to_confirm') {
+    return 'Direction finished and nothing needs a decision. Confirming starts speech rendering.'
+  }
+  const { blockers } = job.review
+  return `Waiting for fallback voice review — ${blockers} ${blockers === 1 ? 'line needs' : 'lines need'} a decision.`
+}
 
 const passagesText = (job: JobStateView): string =>
   `${job.completedPassages} of ${job.totalPassages}`
@@ -146,7 +155,13 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     <section className="panel stack" aria-labelledby="job-heading">
       <h2 id="job-heading">{job.bookTitle ?? 'Generation'}</h2>
 
-      <div className="status-block" data-state={job.state} role="status" aria-live="polite">
+      <div
+        className="status-block"
+        data-state={job.state}
+        data-review={job.review?.status ?? undefined}
+        role="status"
+        aria-live="polite"
+      >
         <p className="stage">{stageText(job)}</p>
         <p className="latest">{job.latestMessage}</p>
       </div>

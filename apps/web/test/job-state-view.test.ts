@@ -4,6 +4,7 @@ import {
   buildJobStateView,
   deriveChapterLabel,
   deriveChapterNumber,
+  type ReviewQueueEntry,
 } from '../src/server/job-state-view.js'
 
 const bookId = `book-${'a'.repeat(24)}`
@@ -133,5 +134,64 @@ describe('buildJobStateView', () => {
     expect(view.pipelineStages.every((stage) => stage.status === 'completed')).toBe(true)
     expect(view.pipelineStages[2]?.summary).toBe('12 segment audio files ready')
     expect(view.pipelineStages[3]?.summary).toBe('Output v003 assembled')
+  })
+})
+
+const awaitingReviewSnapshot: AudiobookJobSnapshot = {
+  ...runningSnapshot,
+  state: 'awaiting_review',
+  stage: 'directing',
+  progress: {
+    ...runningSnapshot.progress,
+    currentChapterId: null,
+    completedSegments: 0,
+    totalSegments: 0,
+    latestMessage: 'Awaiting fallback approval review',
+  },
+}
+
+const reviewItem = (decision: ReviewQueueEntry['decision']): ReviewQueueEntry => ({ decision })
+
+describe('derived review status (issue #96)', () => {
+  it('needs_decisions while any fallback subject lacks a live approval', () => {
+    const view = buildJobStateView(awaitingReviewSnapshot, undefined, undefined, [
+      reviewItem('approved'),
+      reviewItem('pending'),
+      reviewItem('excluded'),
+    ])
+
+    expect(view.review).toEqual({ status: 'needs_decisions', blockers: 2, total: 3 })
+  })
+
+  it('ready_to_confirm when every fallback subject carries a live approval', () => {
+    const view = buildJobStateView(awaitingReviewSnapshot, undefined, undefined, [
+      reviewItem('approved'),
+      reviewItem('approved'),
+    ])
+
+    expect(view.review).toEqual({ status: 'ready_to_confirm', blockers: 0, total: 2 })
+  })
+
+  it('an empty queue is ready_to_confirm — nothing is blocking, not a missing panel', () => {
+    const view = buildJobStateView(awaitingReviewSnapshot, undefined, undefined, [])
+
+    expect(view.review).toEqual({ status: 'ready_to_confirm', blockers: 0, total: 0 })
+  })
+
+  it('answers from the live records, not the stored message: approvals recorded after the snapshot flip it', () => {
+    // The snapshot's message still says the book awaits review — it was written before the
+    // approvals landed and is never rewritten by a review decision.
+    const view = buildJobStateView(awaitingReviewSnapshot, undefined, undefined, [
+      reviewItem('approved'),
+    ])
+
+    expect(view.review?.status).toBe('ready_to_confirm')
+    expect(view.latestMessage).toBe('Awaiting fallback approval review')
+  })
+
+  it('is null outside awaiting_review, where there is no review surface at all', () => {
+    const view = buildJobStateView(runningSnapshot, undefined, undefined, [reviewItem('pending')])
+
+    expect(view.review).toBeNull()
   })
 })

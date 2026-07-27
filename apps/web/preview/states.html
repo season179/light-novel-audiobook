@@ -66,7 +66,8 @@
           <li><a href="#directing-no-total">Directing, no total yet</a></li>
           <li><a href="#directing">Directing, known total</a></li>
           <li><a href="#rendering">Rendering</a></li>
-          <li><a href="#awaiting-review">Awaiting review</a></li>
+          <li><a href="#awaiting-review">Awaiting review — needs decisions</a></li>
+          <li><a href="#awaiting-review-ready">Awaiting review — ready to confirm</a></li>
           <li><a href="#abandoned">Abandoned</a></li>
           <li><a href="#failed">Failed</a></li>
           <li><a href="#completed">Completed</a></li>
@@ -261,18 +262,22 @@
       </main>
     </section>
 
-    <!-- 6. Awaiting review: the decision the human must make. -->
+    <!-- 6. Awaiting review, needs decisions: fallback lines still block the render. -->
     <section class="preview" id="awaiting-review" aria-labelledby="preview-awaiting-review">
       <h2 class="preview-label" id="preview-awaiting-review">
-        Awaiting review — stopped at the fallback-voice gate
+        Awaiting review — needs decisions (▮▮ glyph)
       </h2>
       <main class="shell stack">
         <section class="panel stack" aria-labelledby="job-heading-review">
           <h2 id="job-heading-review">The Clockwork Tidewater</h2>
-          <div class="status-block" data-state="awaiting_review" role="status" aria-live="polite">
-            <p class="stage">
-              Waiting for fallback voice review. Continuing starts speech rendering.
-            </p>
+          <div
+            class="status-block"
+            data-state="awaiting_review"
+            data-review="needs_decisions"
+            role="status"
+            aria-live="polite"
+          >
+            <p class="stage">Waiting for fallback voice review — 2 lines need a decision.</p>
             <p class="latest">Awaiting fallback approval review</p>
           </div>
           <section class="stack bordered" aria-labelledby="review-heading">
@@ -322,7 +327,76 @@
       </main>
     </section>
 
-    <!-- 7. Abandoned: dashed border, stopped glyph. -->
+    <!-- 7. Awaiting review, ready to confirm: an empty queue is a good state, shown not hidden. -->
+    <section
+      class="preview"
+      id="awaiting-review-ready"
+      aria-labelledby="preview-awaiting-review-ready"
+    >
+      <h2 class="preview-label" id="preview-awaiting-review-ready">
+        Awaiting review — ready to confirm, nothing blocking (▮▶ glyph)
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-review-ready">
+          <h2 id="job-heading-review-ready">The Clockwork Tidewater</h2>
+          <div
+            class="status-block"
+            data-state="awaiting_review"
+            data-review="ready_to_confirm"
+            role="status"
+            aria-live="polite"
+          >
+            <p class="stage">
+              Direction finished and nothing needs a decision. Confirming starts speech rendering.
+            </p>
+            <p class="latest">Awaiting fallback approval review</p>
+          </div>
+          <section class="stack bordered" aria-labelledby="review-heading-ready">
+            <h3 id="review-heading-ready">Nothing needs your decision</h3>
+            <p class="hint">
+              Direction finished and every line has a cast voice, so nothing is blocking. Render
+              the approved script when you are ready.
+            </p>
+            <div class="row">
+              <button type="button">Render approved script</button>
+            </div>
+          </section>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-review-ready">
+            <h3 id="pipeline-heading-review-ready">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 2 chapters and 16 passages
+                extracted
+              </dd>
+              <dt>Directing chapters</dt>
+              <dd>
+                <strong data-status="current" aria-current="step">Current</strong> — 16 segments
+                directed; 0 needed a fallback voice
+              </dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>0 of not yet counted</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 8. Abandoned: dashed border, stopped glyph. -->
     <section class="preview" id="abandoned" aria-labelledby="preview-abandoned">
       <h2 class="preview-label" id="preview-abandoned">Abandoned — worker stopped mid-render</h2>
       <main class="shell stack">
@@ -361,7 +435,7 @@
       </main>
     </section>
 
-    <!-- 8. Failed: the status block itself carries the failure, the alert explains it. -->
+    <!-- 9. Failed: the status block itself carries the failure, the alert explains it. -->
     <section class="preview" id="failed" aria-labelledby="preview-failed">
       <h2 class="preview-label" id="preview-failed">Failed — partial progress kept visible</h2>
       <main class="shell stack">
@@ -407,7 +481,7 @@
       </main>
     </section>
 
-    <!-- 9. Completed: success treatment, warnings, and the chapter audio. -->
+    <!-- 10. Completed: success treatment, warnings, and the chapter audio. -->
     <section class="preview" id="completed" aria-labelledby="preview-completed">
       <h2 class="preview-label" id="preview-completed">
         Completed — chapter audio and the numbered M4B
@@ -506,7 +580,7 @@
       </main>
     </section>
 
-    <!-- 10. The not-found page, as emitted by the root route. -->
+    <!-- 11. The not-found page, as emitted by the root route. -->
     <section class="preview" id="not-found" aria-labelledby="preview-not-found">
       <h2 class="preview-label" id="preview-not-found">Not found — unmatched address</h2>
       <main class="shell stack">
