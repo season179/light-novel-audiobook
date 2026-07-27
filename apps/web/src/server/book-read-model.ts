@@ -19,6 +19,9 @@ export interface BookReadModel {
   readonly chapters: readonly ChapterReadModel[]
   /** Precomputed when the book changes, so 700ms job polling never recounts a whole book. */
   readonly totalPassages?: number
+  /** Counts from persisted approved chapters; failed direction never trusts an in-window counter. */
+  readonly approvedChapters?: number
+  readonly approvedPassages?: number
   readonly totalSegments?: number
   readonly fallbackSegments?: number
 }
@@ -36,10 +39,16 @@ export class BookReadModelStore {
 
   record(book: Book): void {
     let totalPassages = 0
+    let approvedChapters = 0
+    let approvedPassages = 0
     let totalSegments = 0
     let fallbackSegments = 0
     for (const chapter of book.chapters) {
       totalPassages += chapter.sourcePassages.length
+      if (chapter.state === 'approved') {
+        approvedChapters += 1
+        approvedPassages += chapter.sourcePassages.length
+      }
       totalSegments += chapter.segments.length
       fallbackSegments += chapter.segments.filter(
         (segment) => segment.voiceAssignment?.usesFallback === true,
@@ -50,6 +59,8 @@ export class BookReadModelStore {
       title: book.title,
       author: book.author,
       totalPassages,
+      approvedChapters,
+      approvedPassages,
       totalSegments,
       fallbackSegments,
       chapters: book.chapters.map((chapter) => ({

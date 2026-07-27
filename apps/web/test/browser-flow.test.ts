@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
+
+import { AudiobookJob } from '@light-novel-audiobook/domain'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createElement, type ReactNode } from 'react'
+import { createElement, type ReactNode, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { AudiobookClient, StartGenerationCommand } from '../src/client/audiobook-client.js'
 import { EpubUploadPanel } from '../src/components/epub-upload-panel.js'
 import { JobProgressPanel } from '../src/components/job-progress-panel.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
@@ -28,10 +29,8 @@ const withQueryClient = (children: ReactNode) =>
     children,
   )
 
-const renderUploadPanel = (
-  onStarted: (jobId: string) => void,
-  client: AudiobookClient = harness.client,
-) => render(withQueryClient(createElement(EpubUploadPanel, { client, onStarted })))
+const renderUploadPanel = (onStarted: (jobId: string) => void) =>
+  render(withQueryClient(createElement(EpubUploadPanel, { client: harness.client, onStarted })))
 
 const renderJobPanel = (jobId: string) =>
   render(
@@ -43,6 +42,19 @@ const renderJobPanel = (jobId: string) =>
       }),
     ),
   )
+
+const BrowserSurface = () => {
+  const [jobId, setJobId] = useState<string | null>(null)
+  return jobId === null
+    ? createElement(EpubUploadPanel, { client: harness.client, onStarted: setJobId })
+    : createElement(JobProgressPanel, {
+        client: harness.client,
+        jobId,
+        pollIntervalMs: POLL_MS,
+      })
+}
+
+const renderBrowserSurface = () => render(withQueryClient(createElement(BrowserSurface)))
 
 const epubFile = (name = 'the-lantern-courier.epub') =>
   new File([createStubEpubBytes()], name, { type: 'application/epub+zip' })
@@ -103,31 +115,22 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     expect(job?.state).toBe('awaiting_review')
   })
 
-  it('recovers a rejected bounded start with the same slice bounds', async () => {
-    const user = userEvent.setup()
-    const commands: StartGenerationCommand[] = []
-    const client: AudiobookClient = {
-      ...harness.client,
-      startGeneration: async (command) => {
-        commands.push(command)
-        if (commands.length === 1) {
-          return {
-            ok: false,
-            error: {
-              code: 'generation_rejected',
-              message: 'This bounded job was abandoned.',
-            },
-          }
-        }
-        return harness.client.startGeneration(command)
+  it('reopens a genuinely failed bounded start with the same slice bounds', async () => {
+    await harness.dispose()
+    let renderAttempts = 0
+    harness = await createTestHarness({
+      beforeRender: async () => {
+        renderAttempts += 1
+        if (renderAttempts === 1) throw new Error('Injected bounded render failure')
       },
-    }
+    })
+    const user = userEvent.setup()
     let startedJobId: string | null = null
     renderUploadPanel((jobId) => {
       startedJobId = jobId
-    }, client)
+    })
 
-    await user.upload(screen.getByLabelText('EPUB file'), epubFile())
+    await user.upload(screen.getByLabelText('EPUB file'), epubFile('bounded-resume.epub'))
     await user.click(screen.getByRole('button', { name: 'Upload EPUB' }))
     await screen.findByRole('button', { name: 'Generate audiobook' }, WAIT)
 
@@ -135,18 +138,87 @@ describe('browser flow: upload, generate, watch, refresh, play, download', () =>
     await user.type(screen.getByLabelText('Number of chapters'), '1')
     await user.type(screen.getByLabelText('Passages per chapter'), '1')
     await user.click(screen.getByRole('button', { name: 'Generate this slice' }))
-    await user.click(await screen.findByRole('button', { name: 'Recover and continue' }, WAIT))
-
     await waitFor(() => expect(startedJobId).not.toBeNull(), WAIT)
-    expect(commands).toHaveLength(2)
-    expect(commands[0]).toMatchObject({
-      recoverAbandoned: false,
-      slice: { firstChapter: 2, maxChapters: 1, maxPassagesPerChapter: 1 },
-    })
-    expect(commands[1]).toEqual({ ...commands[0], recoverAbandoned: true })
-    gate.open()
-    await waitForJobState(harness.api, startedJobId ?? '', (job) => job.finished)
+    const failedJobId = startedJobId ?? ''
+    await waitForJobState(harness.api, failedJobId, (job) => job.state === 'failed')
+    expect(failedJobId).toContain('-slice-firstChapter=2,maxChapters=1,maxPassagesPerChapter=1')
+
+    startedJobId = null
+    const directors = harness.directors.length
+    const speechCalls = harness.speechEngine.rendered
+    await user.click(screen.getByRole('button', { name: 'Generate this slice' }))
+
+    await waitFor(() => expect(startedJobId).toBe(failedJobId), WAIT)
+    expect((await harness.api.getJobState({ jobId: failedJobId }))?.state).toBe('failed')
+    expect(harness.directors).toHaveLength(directors)
+    expect(harness.speechEngine.rendered).toBe(speechCalls)
+    expect(screen.queryByRole('button', { name: 'Recover and continue' })).toBeNull()
   })
+
+  it.each(['failed', 'abandoned'] as const)(
+    'opens a %s job from recent uploads and resumes it explicitly',
+    async (restingState) => {
+      await harness.dispose()
+      let renderAttempts = 0
+      harness = await createTestHarness({
+        beforeRender: async () => {
+          renderAttempts += 1
+          if (renderAttempts === 6) throw new Error('Injected resume reachability failure')
+        },
+      })
+      const stored = await harness.api.uploadEpub({
+        fileName: `resume-${restingState}.epub`,
+        bytes: createStubEpubBytes(`resume-${restingState}`),
+      })
+      const started = await harness.api.startGeneration({ uploadId: stored.uploadId })
+      await waitForJobState(harness.api, started.jobId, (job) => job.state === 'failed')
+
+      if (restingState === 'abandoned') {
+        const failedJob = await harness.jobs.findJob(started.jobId)
+        if (failedJob === undefined) throw new Error('Failed job fixture disappeared')
+        const snapshot = failedJob.snapshot()
+        await harness.jobs.saveJob(
+          AudiobookJob.reconstitute({
+            ...snapshot,
+            state: 'abandoned',
+            error: null,
+            failureDiagnosticPath: null,
+            progress: { ...snapshot.progress, latestMessage: 'Job marked abandoned' },
+          }),
+        )
+      }
+
+      const directorsBeforeOpen = harness.directors.length
+      const speechBeforeOpen = harness.speechEngine.rendered
+      const user = userEvent.setup()
+      renderBrowserSurface()
+      await user.click(
+        await screen.findByRole(
+          'button',
+          {
+            name: `Generate or resume the audiobook for resume-${restingState}.epub`,
+          },
+          WAIT,
+        ),
+      )
+
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByText('Recheck saved segment audio and render only the missing segments.'),
+          ).not.toBeNull(),
+        WAIT,
+      )
+      expect(harness.directors).toHaveLength(directorsBeforeOpen)
+      expect(harness.speechEngine.rendered).toBe(speechBeforeOpen)
+      expect(screen.queryByRole('button', { name: 'Recover and continue' })).toBeNull()
+
+      await user.click(screen.getByRole('button', { name: 'Resume' }))
+      await waitForJobState(harness.api, started.jobId, (job) => job.finished)
+      expect(await screen.findByText('Completed · completed', undefined, WAIT)).toBeTruthy()
+      expect(harness.directors).toHaveLength(directorsBeforeOpen)
+    },
+  )
 
   it('rejects an unparseable bound in the form instead of starting a whole-book render', async () => {
     const user = userEvent.setup()

@@ -56,6 +56,7 @@ export interface AudiobookClient {
     readonly jobId: string
     readonly segmentId: string
   }): Promise<WebApiResult<FallbackReviewView>>
+  resumeGeneration(input: { readonly jobId: string }): Promise<WebApiResult<StartedGeneration>>
   renderApprovedScript(input: { readonly jobId: string }): Promise<WebApiResult<StartedGeneration>>
 }
 

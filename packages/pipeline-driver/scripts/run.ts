@@ -1,11 +1,11 @@
 /**
- * Explicit direction or confirmed-render operation over the five real adapters.
+ * Explicit direction, confirmed-render, or interrupted-stage resume over the five real adapters.
  *
  *   pnpm pipeline:demo -- --epub <path> [options]
  *
  * Options:
  *   --epub <path>              EPUB to ingest. Required.
- *   --operation direction|render  Default: direction. Render confirms, then starts audio.
+ *   --operation direction|render|resume  Default: direction. Resume preserves the failed stage.
  *   --workspace <path>         Workspace root. Default: a fresh directory under the OS temp dir.
  *   --job-id <id>              Job ID. Default: pipeline-demo-<timestamp>.
  *   --from-chapter <n>         Start at domain chapter N (1-based). Default: 1.
@@ -43,7 +43,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveReviewerIdentity } from '@light-novel-audiobook/application'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
-import { runConfirmedRender, runPipeline } from '../src/driver.js'
+import { runConfirmedRender, runPipeline, runResume } from '../src/driver.js'
 import { type FakeDirectorMode, NarrationEchoDirectorServer } from '../src/fake-director-server.js'
 import type { SliceLimits } from '../src/slice.js'
 import {
@@ -77,8 +77,8 @@ function required(name: string): string {
 
 const epubPath = path.resolve(required('epub'))
 const operation = flag('operation') ?? 'direction'
-if (operation !== 'direction' && operation !== 'render') {
-  throw new Error('--operation must be direction or render')
+if (operation !== 'direction' && operation !== 'render' && operation !== 'resume') {
+  throw new Error('--operation must be direction, render, or resume')
 }
 const mode = flag('transports') ?? 'fake'
 if (mode !== 'fake' && mode !== 'real') throw new Error('--transports must be fake or real')
@@ -184,7 +184,9 @@ try {
   const report =
     operation === 'direction'
       ? await runPipeline(pipelineOptions)
-      : await runConfirmedRender(pipelineOptions, resolveReviewerIdentity())
+      : operation === 'render'
+        ? await runConfirmedRender(pipelineOptions, resolveReviewerIdentity())
+        : await runResume(pipelineOptions)
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 } catch (error) {
   // Legible failure: the known blockers all surface as a typed error, and which one matters.

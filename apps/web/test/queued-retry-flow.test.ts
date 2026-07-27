@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JobProgressPanel } from '../src/components/job-progress-panel.js'
@@ -72,8 +71,8 @@ describe('a queued retry keeps the progress page live', () => {
     const blockingRun = await harness.api.startGeneration({ uploadId: blocking.uploadId })
     await waitForJobState(harness.api, blockingRun.jobId, (job) => job.stage === 'rendering')
 
-    // 3. The user retries; the run is accepted but queued behind the blocking job.
-    const retryRun = await harness.api.startGeneration({ uploadId: retried.uploadId })
+    // 3. The user resumes the failed rendering stage; it queues behind the blocking job.
+    const retryRun = await harness.api.resumeGeneration({ jobId: firstAttempt.jobId })
     expect(retryRun.jobId).toBe(firstAttempt.jobId)
     expect(retryRun.job.active).toBe(true)
     expect(retryRun.job.state).toBe('pending')
@@ -88,8 +87,6 @@ describe('a queued retry keeps the progress page live', () => {
     gate.open()
     await waitForJobState(harness.api, blockingRun.jobId, (job) => job.finished)
 
-    const renderButton = await screen.findByRole('button', { name: 'Render approved script' }, WAIT)
-    await userEvent.click(renderButton)
     const heading = await screen.findByRole('heading', { name: 'Audiobook v001' }, WAIT)
     expect(heading).toBeTruthy()
     expect(screen.getByText('Completed · completed')).toBeTruthy()

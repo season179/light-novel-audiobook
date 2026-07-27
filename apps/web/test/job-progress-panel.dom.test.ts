@@ -135,6 +135,10 @@ const stubClient = (overrides: Partial<AudiobookClient>): AudiobookClient => ({
   approveFallback: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
   approveSelectedFallbacks: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
   revokeFallback: vi.fn(async () => ({ ok: true as const, value: reviewView() })),
+  resumeGeneration: vi.fn(async () => ({
+    ok: true as const,
+    value: { jobId: JOB_ID, job: view({ state: 'pending' }) },
+  })),
   renderApprovedScript: vi.fn(async () => ({
     ok: true as const,
     value: { jobId: JOB_ID, job: view({}) },
@@ -779,6 +783,36 @@ describe('JobProgressPanel — the status block wears the job state', () => {
     // The state treatment is keyed off data-state; "completed" is the success treatment.
     expect(status.getAttribute('data-state')).toBe('failed')
     expect(status.getAttribute('data-state')).not.toBe('completed')
+  })
+
+  it('explains and invokes stage-local direction resume', async () => {
+    const resumeGeneration = vi.fn(async () => ({
+      ok: true as const,
+      value: { jobId: JOB_ID, job: view({ state: 'pending' as const }) },
+    }))
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'failed',
+        stage: 'directing',
+        active: false,
+        completedChapters: 3,
+        totalChapters: 15,
+        resumeDescription:
+          'Continue directing from chapter 4 of 15. Completed chapters stay saved.',
+      }),
+    }))
+    renderPanel(stubClient({ getJobState, resumeGeneration }))
+
+    expect(
+      await screen.findByText(
+        'Continue directing from chapter 4 of 15. Completed chapters stay saved.',
+        undefined,
+        WAIT,
+      ),
+    ).toBeDefined()
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    expect(resumeGeneration).toHaveBeenCalledWith({ jobId: JOB_ID })
   })
 
   it('carries every one of the six job states on the status block', async () => {

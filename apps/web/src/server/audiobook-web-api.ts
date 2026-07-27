@@ -21,7 +21,7 @@ import type { BookReadModelStore } from './book-read-model.js'
 import type { EpubUploadStore, StoredEpubUpload } from './epub-upload-store.js'
 import { WebApiError } from './errors.js'
 import type { GenerationRunner } from './generation-runner.js'
-import { deriveJobId } from './job-identity.js'
+import { deriveJobId, sliceLimitsForJobId } from './job-identity.js'
 import {
   buildJobStateView,
   type ChapterAudioView,
@@ -214,6 +214,21 @@ export class AudiobookWebApi {
     return this.listFallbackReview({ jobId: input.jobId })
   }
 
+  /** One atomic decision over exactly the selected, currently pending fallback subjects. */
+  async approveSelectedFallbacks(input: {
+    readonly jobId: string
+    readonly segmentIds: readonly string[]
+  }): Promise<FallbackReviewView> {
+    await this.runReviewDecision(input.jobId, () =>
+      this.review.grantBookFallback({
+        jobId: input.jobId,
+        decidedBy: this.reviewer,
+        segmentIds: input.segmentIds,
+      }),
+    )
+    return this.listFallbackReview({ jobId: input.jobId })
+  }
+
   async approveFallback(input: {
     readonly jobId: string
     readonly segmentId: string
@@ -324,11 +339,10 @@ export class AudiobookWebApi {
         'This audiobook is already generating. Refresh to see its progress.',
       )
     }
-    if (existing?.state === 'abandoned' && !recoverAbandoned) {
-      throw new WebApiError(
-        'generation_rejected',
-        'This job stopped unexpectedly. Choose “Recover and continue” to take it over.',
-      )
+    if (existing?.state === 'failed' || existing?.state === 'abandoned') {
+      // Opening an interrupted job is not resuming it. Return the persisted resting state so the
+      // browser can navigate to its explicit Resume control without enqueuing any operation.
+      return { jobId, job: await this.requireJobState({ jobId }) }
     }
 
     this.runner.startDirection({
@@ -343,6 +357,55 @@ export class AudiobookWebApi {
     return { jobId, job: (await this.getJobState({ jobId })) ?? this.pendingJobView(jobId) }
   }
 
+  /** Explicitly continues the failed/abandoned stage; it never confirms direction for the user. */
+  async resumeGeneration(input: { readonly jobId: string }): Promise<StartedGeneration> {
+    if (this.runner.isActive(input.jobId)) {
+      return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
+    }
+    const job = await this.jobs.findJob(input.jobId)
+    if (job === undefined)
+      throw new WebApiError('unknown_job', 'That audiobook job does not exist.')
+    if (job.state !== 'failed' && job.state !== 'abandoned') {
+      throw new WebApiError(
+        'generation_rejected',
+        'Only a failed or abandoned audiobook job can be resumed.',
+      )
+    }
+
+    if (job.stage === 'extracting' || job.stage === 'directing') {
+      const limits = sliceLimitsForJobId(input.jobId)
+      const upload = (await this.uploads.list()).find(
+        (candidate) => deriveJobId(candidate.sha256, limits) === input.jobId,
+      )
+      if (upload === undefined) {
+        throw new WebApiError(
+          'unknown_upload',
+          'The EPUB upload for this job is no longer available, so direction cannot resume.',
+        )
+      }
+      this.runner.startDirection({
+        jobId: input.jobId,
+        epubPath: upload.epubPath,
+        epubSha256: upload.sha256,
+        voices: this.voices,
+        recoverAbandoned: true,
+        ...(this.directorOptions === undefined ? {} : { directorOptions: this.directorOptions }),
+      })
+    } else if (job.stage === 'rendering' || job.stage === 'assembling') {
+      // Deliberately no confirmation write here. RenderAudiobook requires the existing live exact-
+      // script confirmation, so Resume cannot turn a stale or absent decision into permission.
+      this.runner.startRendering({
+        jobId: input.jobId,
+        voices: this.voices,
+        recoverAbandoned: true,
+      })
+    } else {
+      throw new WebApiError('generation_rejected', 'A completed audiobook cannot be resumed.')
+    }
+
+    return { jobId: input.jobId, job: await this.requireJobState({ jobId: input.jobId }) }
+  }
+
   /**
    * Reads current job state from stored data. Safe at any time, including after a refresh.
    * `null` means no such job — a deliberate part of the contract, not a failure.
@@ -353,6 +416,11 @@ export class AudiobookWebApi {
       if (this.runner.isActive(input.jobId)) return this.pendingJobView(input.jobId)
       const failure = this.runner.startupFailure(input.jobId)
       return failure === undefined ? null : this.rejectedJobView(input.jobId, failure)
+    }
+    // A cold-started web process has no in-memory book projection. Reload it before projecting an
+    // interrupted job so legacy schema-v4 direction progress comes from approved persisted chapters.
+    if (job.bookId !== null && this.books.find(job.bookId) === undefined) {
+      await this.jobs.findBook(job.bookId)
     }
     const projection = await this.authorizedSnapshot(job)
     // The review sub-status (#96) is derived from the live review records, not the snapshot: an
@@ -425,6 +493,7 @@ export class AudiobookWebApi {
       latestMessage: message,
       active: true,
       finished: false,
+      resumeDescription: null,
       review: null,
     }
   }
@@ -579,6 +648,7 @@ export class AudiobookWebApi {
       latestMessage: message,
       error: null,
       failureDiagnosticPath: null,
+      resumeDescription: null,
       active: true,
       finished: false,
       review: null,

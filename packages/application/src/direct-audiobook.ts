@@ -113,22 +113,54 @@ export class DirectAudiobook {
       job.bindCommand(commandIdentity)
     }
 
+    let resumedBook: Book | undefined
     if (job.state === 'pending') {
       job.start()
-    } else if (job.state === 'failed') {
-      job.retry()
-    } else if (job.state === 'running') {
-      if (command.recoverAbandoned !== true) {
-        throw new DomainError('Audiobook job is already running; duplicate request rejected')
+    } else {
+      if (job.state === 'running') {
+        if (command.recoverAbandoned !== true) {
+          throw new DomainError('Audiobook job is already running; duplicate request rejected')
+        }
+        job.markAbandoned()
+        await this.jobs.saveJob(job)
       }
-      job.markAbandoned()
-      await this.jobs.saveJob(job)
-      job.recoverAbandoned()
-    } else if (job.state === 'abandoned') {
-      if (command.recoverAbandoned !== true) {
+      if (job.state === 'abandoned' && command.recoverAbandoned !== true) {
         throw new DomainError('Audiobook job is abandoned; explicit recovery is required')
       }
-      job.recoverAbandoned()
+      if (job.state !== 'failed' && job.state !== 'abandoned') {
+        throw new DomainError(`Audiobook job ${command.jobId} cannot continue direction`)
+      }
+      if (job.stage !== 'extracting' && job.stage !== 'directing') {
+        throw new DomainError(
+          `Audiobook job ${command.jobId} failed during ${job.stage}; resume that stage instead of direction`,
+        )
+      }
+      if (job.stage === 'directing') {
+        if (job.bookId === null) throw new DomainError('A directing job must have an attached book')
+        resumedBook = await this.jobs.findBook(job.bookId)
+        if (resumedBook === undefined) {
+          throw new DomainError(`Directed book ${job.bookId} is not persisted`)
+        }
+        this.assertSourceIdentity(resumedBook, command.epubSha256)
+        const completed = resumedBook.chapters.filter((chapter) => chapter.state === 'approved')
+        job.resumeFailedStage({
+          stage: 'directing',
+          completedChapters: completed.length,
+          totalChapters: resumedBook.chapters.length,
+          completedPassages: completed.reduce(
+            (total, chapter) => total + chapter.sourcePassages.length,
+            0,
+          ),
+          totalPassages: resumedBook.chapters.reduce(
+            (total, chapter) => total + chapter.sourcePassages.length,
+            0,
+          ),
+        })
+      } else {
+        // Extraction has no checkpoint. Even if a save happened just before the failure, rerun the
+        // deterministic extractor rather than promoting an artifact the failed stage never closed.
+        job.resumeFailedStage({ stage: 'extracting' })
+      }
     }
     // Bound before anything is produced, so a later standalone render can prove it was handed the
     // same cast, speech engine and assembler that direction ran under.
@@ -148,28 +180,25 @@ export class DirectAudiobook {
       // re-renders correct audio under new identities and orphans the old WAVs. `findBook` reads
       // back exactly the chapters direction approved — approved chapters are skipped in
       // `directBook`, and only never-directed (draft) chapters cost director calls.
-      const persisted = job.bookId === null ? undefined : await this.jobs.findBook(job.bookId)
       let book: Book
-      if (persisted !== undefined) {
-        if (persisted.source.sha256 !== command.epubSha256.toLowerCase()) {
-          throw new DomainError(
-            'Persisted book EPUB identity does not match the generation command',
-          )
+      if (job.stage === 'directing') {
+        if (resumedBook === undefined) {
+          throw new DomainError('A direction resume requires its persisted book checkpoint')
         }
-        book = persisted
+        book = resumedBook
       } else {
         book = await this.epubExtractor.extract({ epubPath: command.epubPath })
         if (book.source.sha256 !== command.epubSha256.toLowerCase()) {
           throw new DomainError('Extracted EPUB identity does not match the generation command')
         }
+        job.attachBook(book.id)
+        await this.jobs.saveBook(book)
+        job.beginDirection(
+          book.chapters.length,
+          book.chapters.reduce((total, chapter) => total + chapter.sourcePassages.length, 0),
+        )
+        await this.jobs.saveJob(job)
       }
-      job.attachBook(book.id)
-      await this.jobs.saveBook(book)
-      job.beginDirection(
-        book.chapters.length,
-        book.chapters.reduce((total, chapter) => total + chapter.sourcePassages.length, 0),
-      )
-      await this.jobs.saveJob(job)
 
       await this.directBook(book, command.voices, job, command.directorOptions)
       book.assertGloballyUniqueSegmentIds()
@@ -179,8 +208,14 @@ export class DirectAudiobook {
       await this.jobs.saveJob(job)
       return { job, book, commandIdentity }
     } catch (error) {
-      if (job.state === 'running') await persistJobFailure(this.jobs, job, error)
+      if (job.snapshot().state === 'running') await persistJobFailure(this.jobs, job, error)
       throw error
+    }
+  }
+
+  private assertSourceIdentity(book: Book, epubSha256: string): void {
+    if (book.source.sha256 !== epubSha256.toLowerCase()) {
+      throw new DomainError('Persisted book EPUB identity does not match the generation command')
     }
   }
 
@@ -232,13 +267,17 @@ export class DirectAudiobook {
           }
           completedChapters += 1
           completedPassages += chapter.sourcePassages.length
-          job.recordDirectionProgress(
-            chapter.id,
-            completedChapters,
-            completedPassages,
-            `Directed chapter ${completedChapters} of ${book.chapters.length}`,
-          )
-          await this.jobs.saveJob(job)
+          // A resumed job was already rebased to all persisted approved chapters. Walk them to
+          // rebuild warnings and local ordering, but never move its honest durable count backward.
+          if (completedChapters >= (job.progress.direction?.completedChapters ?? 0)) {
+            job.recordDirectionProgress(
+              chapter.id,
+              completedChapters,
+              completedPassages,
+              `Directed chapter ${completedChapters} of ${book.chapters.length}`,
+            )
+            await this.jobs.saveJob(job)
+          }
           continue
         }
         if (chapter.state !== 'draft') {

@@ -423,6 +423,36 @@ describe('audiobook job and numbered output lifecycle', () => {
     expect(() => job.attachBook('another-book')).toThrow('cannot change its source book')
   })
 
+  it('resumes the failed stage from a durable checkpoint instead of retrying extraction', () => {
+    const job = new AudiobookJob('job-stage-resume')
+    job.bindCommand(commandIdentity)
+    job.start()
+    job.attachBook(bookId)
+    job.beginDirection(15, 150)
+    job.recordDirectionProgress(chapterId, 3, 30, 'Direction stopped in chapter 4')
+    const diagnostic = '/tmp/job-stage-resume-failure.json'
+    job.fail(`Director failed. Diagnostic details: ${diagnostic}`, diagnostic)
+
+    job.resumeFailedStage({
+      stage: 'directing',
+      completedChapters: 3,
+      totalChapters: 15,
+      completedPassages: 30,
+      totalPassages: 150,
+    })
+
+    expect(job.state).toBe('running')
+    expect(job.stage).toBe('directing')
+    expect(job.progress.direction).toEqual({
+      completedChapters: 3,
+      totalChapters: 15,
+      completedPassages: 30,
+      totalPassages: 150,
+    })
+    expect(job.error).toBeNull()
+    expect(job.failureDiagnosticPath).toBeNull()
+  })
+
   it('requires an explicit abandoned transition before recovering an active job', () => {
     const job = new AudiobookJob('job-abandoned')
     job.bindCommand(commandIdentity)

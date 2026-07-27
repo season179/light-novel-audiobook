@@ -47,9 +47,11 @@ export interface GenerateAudiobookDependencies {
 export class GenerateAudiobook {
   private readonly direction: DirectAudiobook
   private readonly review: ReviewFallbackApprovals
+  private readonly jobs: JobRepository
 
   constructor(dependencies: GenerateAudiobookDependencies) {
     this.direction = new DirectAudiobook(dependencies)
+    this.jobs = dependencies.jobs
     this.review = new ReviewFallbackApprovals({
       jobs: dependencies.jobs,
       approvals: dependencies.approvals,
@@ -62,6 +64,34 @@ export class GenerateAudiobook {
   }
 
   async execute(command: GenerateAudiobookCommand): Promise<GenerateAudiobookResult> {
+    // Compatibility only: old composed callers invoke this facade again after a render/assembly
+    // failure. Return the persisted script without replaying Stage A; their separate renderer can
+    // then use the new stage-local resume semantics.
+    const interrupted = await this.jobs.findJob(command.jobId)
+    if (
+      interrupted !== undefined &&
+      interrupted.state === 'failed' &&
+      (interrupted.stage === 'rendering' || interrupted.stage === 'assembling')
+    ) {
+      const commandIdentity = this.direction.commandIdentity(command)
+      if (interrupted.commandIdentity !== commandIdentity || interrupted.bookId === null) {
+        throw new Error('Audiobook job result is stale for the requested generation inputs')
+      }
+      const book = await this.jobs.findBook(interrupted.bookId)
+      if (book === undefined) throw new Error('Persisted directed book is missing')
+      const reconciliation = await this.review.reconcile({
+        book,
+        warnings: interrupted.warnings,
+      })
+      return {
+        job: interrupted,
+        book,
+        commandIdentity,
+        pendingFallbackApprovals: reconciliation.pending,
+        recordedFallbackApprovals: reconciliation.created,
+      }
+    }
+
     const directed = await this.direction.execute(command)
     const reconciliation = await this.review.reconcile({
       book: directed.book,

@@ -100,6 +100,10 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
     mutationFn: () => client.renderApprovedScript({ jobId }),
     onSuccess: refresh,
   })
+  const resume = useMutation({
+    mutationFn: () => client.resumeGeneration({ jobId }),
+    onSuccess: refresh,
+  })
   const reviewBusy =
     approveAll.isPending ||
     approveOne.isPending ||
@@ -183,6 +187,20 @@ export function JobProgressPanel({ client, jobId, pollIntervalMs }: JobProgressP
         <p className="error" role="alert">
           Generation failed: {job.error}
         </p>
+      )}
+
+      {typeof job.resumeDescription === 'string' && (
+        <div className="stack bordered">
+          <p>{job.resumeDescription}</p>
+          <button type="button" disabled={resume.isPending} onClick={() => resume.mutate()}>
+            {resume.isPending ? 'Resuming…' : 'Resume'}
+          </button>
+          {resume.data !== undefined && !resume.data.ok && (
+            <p className="error" role="alert">
+              {resume.data.error.message}
+            </p>
+          )}
+        </div>
       )}
 
       {job.stage === 'directing' && job.totalPassages > 0 && (

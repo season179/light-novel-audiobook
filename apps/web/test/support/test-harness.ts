@@ -8,7 +8,7 @@ import { createAudiobookComposition } from '../../src/server/composition-root.js
 import { toWebApiResult } from '../../src/server/errors.js'
 import { FakeDirectorModel } from '../../src/server/fakes/fake-director-model.js'
 import { FakeSpeechEngine } from '../../src/server/fakes/fake-speech-engine.js'
-import type { FallbackSelectionReview } from '../../src/server/fallback-selection-review.js'
+import { InMemoryJobRepository } from '../../src/server/fakes/in-memory-job-repository.js'
 import type { JobStateView } from '../../src/server/job-state-view.js'
 import {
   createM1VoiceCast,
@@ -49,9 +49,9 @@ export class RenderGate {
 
 export interface TestHarness {
   readonly api: AudiobookWebApi
-  /** The exact-set decision path, sharing the composition's review ledgers and runner. */
-  readonly selection: FallbackSelectionReview
   readonly workspace: LocalWorkspace
+  /** Raw persistence adapter for restart-state fixtures; production calls still use the real API. */
+  readonly jobs: InMemoryJobRepository
   /** The shared fake engine, so a test can count renders across runs. */
   readonly speechEngine: FakeSpeechEngine
   /** Every director the composition root built, newest last. One per generation run. */
@@ -81,9 +81,11 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
     pinnedVoiceProfiles: pinnedVoiceMaterial(pinnedConfig),
   })
   const directors: FakeDirectorModel[] = []
+  const jobs = new InMemoryJobRepository(workspace)
 
   const composition = await createAudiobookComposition({
     workspace,
+    jobs,
     voices,
     // Supplied through the canonical resolver (explicit configuration, never the OS account), so a
     // test does not depend on the account running it and the branded value still only originates
@@ -107,8 +109,8 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
 
   return {
     api: composition.api,
-    selection: composition.fallbackSelection,
     workspace,
+    jobs,
     speechEngine,
     directors,
     client: createInProcessClient(composition),
@@ -122,9 +124,8 @@ export const createTestHarness = async (options: TestHarnessOptions = {}): Promi
  */
 export const createInProcessClient = (composition: {
   readonly api: AudiobookWebApi
-  readonly fallbackSelection: FallbackSelectionReview
 }): AudiobookClient => {
-  const { api, fallbackSelection } = composition
+  const { api } = composition
   return {
     uploadEpub: ({ file }) =>
       toWebApiResult('uploadEpub', async () =>
@@ -140,13 +141,11 @@ export const createInProcessClient = (composition: {
     approveAllFallbacks: (input) =>
       toWebApiResult('approveAllFallbacks', () => api.approveAllFallbacks(input)),
     approveFallback: (input) => toWebApiResult('approveFallback', () => api.approveFallback(input)),
-    // The exact-set decision and the re-listed view, in the same order the server function does them.
     approveSelectedFallbacks: (input) =>
-      toWebApiResult('approveSelectedFallbacks', async () => {
-        await fallbackSelection.approveSelected(input)
-        return api.listFallbackReview({ jobId: input.jobId })
-      }),
+      toWebApiResult('approveSelectedFallbacks', () => api.approveSelectedFallbacks(input)),
     revokeFallback: (input) => toWebApiResult('revokeFallback', () => api.revokeFallback(input)),
+    resumeGeneration: (input) =>
+      toWebApiResult('resumeGeneration', () => api.resumeGeneration(input)),
     renderApprovedScript: (input) =>
       toWebApiResult('renderApprovedScript', () => api.renderApprovedScript(input)),
   }

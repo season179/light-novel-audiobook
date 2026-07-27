@@ -93,6 +93,8 @@ export interface JobStateView {
   readonly latestMessage: string
   readonly error: string | null
   readonly failureDiagnosticPath: string | null
+  /** Exact stage-local work an interrupted job will perform when Resume is pressed. */
+  readonly resumeDescription?: string | null
   readonly active: boolean
   readonly finished: boolean
   readonly review: JobReviewView | null
@@ -206,6 +208,30 @@ export const fileNameOf = (path: string): string => {
   return parts[parts.length - 1] ?? path
 }
 
+const resumeDescription = (
+  snapshot: AudiobookJobSnapshot,
+  completedChapters: number,
+  totalChapters: number,
+): string | null => {
+  if (snapshot.state !== 'failed' && snapshot.state !== 'abandoned') return null
+  switch (snapshot.stage) {
+    case 'extracting':
+      return 'Retry EPUB extraction. No later stage has started.'
+    case 'directing': {
+      if (totalChapters > 0 && completedChapters < totalChapters) {
+        return `Continue directing from chapter ${completedChapters + 1} of ${totalChapters}. Completed chapters stay saved.`
+      }
+      return 'Recheck the persisted directed chapters and continue to review.'
+    }
+    case 'rendering':
+      return 'Recheck saved segment audio and render only the missing segments.'
+    case 'assembling':
+      return 'Rebuild the audiobook from completed segment audio into a new numbered output. No speech will be rendered.'
+    case 'completed':
+      return null
+  }
+}
+
 export const buildJobStateView = (
   snapshot: AudiobookJobSnapshot,
   book: BookReadModel | undefined,
@@ -213,6 +239,22 @@ export const buildJobStateView = (
   reviewItems: readonly ReviewQueueEntry[] = [],
 ): JobStateView => {
   const { progress } = snapshot
+  const useDurableDirection =
+    (snapshot.state === 'failed' || snapshot.state === 'abandoned') &&
+    snapshot.stage === 'directing' &&
+    book !== undefined
+  const completedChapters = useDurableDirection
+    ? (book.approvedChapters ?? 0)
+    : (progress.direction?.completedChapters ?? 0)
+  const totalChapters = useDurableDirection
+    ? book.chapters.length
+    : (progress.direction?.totalChapters ?? 0)
+  const completedPassages = useDurableDirection
+    ? (book.approvedPassages ?? 0)
+    : (progress.direction?.completedPassages ?? 0)
+  const totalPassages = useDurableDirection
+    ? (book.totalPassages ?? 0)
+    : (progress.direction?.totalPassages ?? 0)
   const chapterTitles = new Map(
     (book?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]),
   )
@@ -249,16 +291,12 @@ export const buildJobStateView = (
       progress.currentChapterId === null
         ? null
         : (chapterTitles.get(progress.currentChapterId) ?? null),
-    completedChapters: progress.direction?.completedChapters ?? 0,
-    totalChapters: progress.direction?.totalChapters ?? 0,
-    completedPassages: progress.direction?.completedPassages ?? 0,
-    totalPassages: progress.direction?.totalPassages ?? 0,
+    completedChapters,
+    totalChapters,
+    completedPassages,
+    totalPassages,
     directionPercentComplete:
-      progress.direction === null || progress.direction.totalPassages === 0
-        ? null
-        : Math.round(
-            (progress.direction.completedPassages / progress.direction.totalPassages) * 100,
-          ),
+      totalPassages === 0 ? null : Math.round((completedPassages / totalPassages) * 100),
     completedSegments: progress.completedSegments,
     totalSegments: progress.totalSegments,
     percentComplete:
@@ -269,6 +307,7 @@ export const buildJobStateView = (
     latestMessage: progress.latestMessage,
     error: snapshot.error,
     failureDiagnosticPath: snapshot.failureDiagnosticPath,
+    resumeDescription: resumeDescription(snapshot, completedChapters, totalChapters),
     active: snapshot.state === 'running' || snapshot.state === 'pending',
     finished: snapshot.state === 'completed',
     review: deriveJobReview(snapshot.state, reviewItems),

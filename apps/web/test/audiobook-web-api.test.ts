@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deriveJobId } from '../src/server/audiobook-web-api.js'
+import { GenerationRunner } from '../src/server/generation-runner.js'
 import { createStubEpubBytes } from './support/stub-epub.js'
 import {
   createTestHarness,
@@ -282,7 +283,9 @@ describe('AudiobookWebApi', () => {
     let renderAttempts = 0
     const crashOnSixthSegment = async (): Promise<void> => {
       renderAttempts += 1
-      if (renderAttempts === 6) throw new Error('Simulated speech engine crash')
+      if (renderAttempts === 6 || renderAttempts === 7) {
+        throw new Error(`Simulated speech engine crash ${renderAttempts}`)
+      }
     }
     await harness.dispose()
     harness = await createTestHarness({ beforeRender: crashOnSixthSegment })
@@ -301,20 +304,50 @@ describe('AudiobookWebApi', () => {
         call
           .map((argument) => String(argument))
           .join(' ')
-          .includes('Simulated speech engine crash'),
+          .includes('Simulated speech engine crash 6'),
       ),
     ).toBe(true)
     expect(harness.speechEngine.rendered).toBe(5)
 
-    const second = await harness.api.startGeneration({ uploadId: stored.uploadId })
-    const completed = await waitForJobState(harness.api, second.jobId, (job) => job.finished)
+    expect(failed.resumeDescription).toBe(
+      'Recheck saved segment audio and render only the missing segments.',
+    )
+    const startDirection = vi.spyOn(GenerationRunner.prototype, 'startDirection')
+    const startRendering = vi.spyOn(GenerationRunner.prototype, 'startRendering')
+    const directorsBeforeOpen = harness.directors.length
+    const speechBeforeOpen = harness.speechEngine.rendered
+    const reopened = await harness.api.startGeneration({ uploadId: stored.uploadId })
+    expect(reopened.jobId).toBe(first.jobId)
+    expect(reopened.job.state).toBe('failed')
+    expect(reopened.job).toEqual(failed)
+    expect(startDirection).not.toHaveBeenCalled()
+    expect(startRendering).not.toHaveBeenCalled()
+    expect(harness.directors).toHaveLength(directorsBeforeOpen)
+    expect(harness.speechEngine.rendered).toBe(speechBeforeOpen)
+
+    const second = await harness.api.resumeGeneration({ jobId: first.jobId })
+    const failedAgain = await waitForJobState(
+      harness.api,
+      second.jobId,
+      (job) => job.state === 'failed' && job.failureDiagnosticPath !== failed.failureDiagnosticPath,
+    )
+    expect(failedAgain.failureDiagnosticPath).not.toBe(failed.failureDiagnosticPath)
+    await expect(readFile(failed.failureDiagnosticPath as string, 'utf8')).resolves.toContain(
+      first.jobId,
+    )
+
+    const third = await harness.api.resumeGeneration({ jobId: first.jobId })
+    const completed = await waitForJobState(harness.api, third.jobId, (job) => job.finished)
 
     expect(completed.completedSegments).toBe(EXPECTED_SEGMENTS)
     // Five clips survived the crash, so only the remaining eleven are rendered again.
     expect(harness.speechEngine.rendered).toBe(EXPECTED_SEGMENTS)
-    // Issue #54: the retry resumes from the persisted approved script — direction is an LLM whose
-    // output is hashed into every segment's content address, so no second director is constructed
-    // and no chapter is re-directed. (Pre-fix this asserted 2: the retry re-directed everything.)
+    // Stage-local resume neither extracts nor directs again.
     expect(harness.directors).toHaveLength(1)
+    // Resume clears the active failed-state pointer, not either immutable history file.
+    expect(completed.failureDiagnosticPath).toBeNull()
+    await expect(readFile(failedAgain.failureDiagnosticPath as string, 'utf8')).resolves.toContain(
+      first.jobId,
+    )
   })
 })
