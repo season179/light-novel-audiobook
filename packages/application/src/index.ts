@@ -24,6 +24,13 @@ export {
   type DirectAudiobookDependencies,
   type DirectAudiobookResult,
 } from './direct-audiobook.js'
+export {
+  createDirectionApprovalRecord,
+  createDirectionScriptSha256,
+  type DirectionApprovalDecision,
+  type DirectionApprovalQuery,
+  type PersistedDirectionApproval,
+} from './direction-approval.js'
 export { withDirectorContentIdentity } from './director-content-identity.js'
 export {
   approvalStillDescribes,
@@ -66,6 +73,7 @@ export type {
   DirectChapterProgress,
   DirectChapterProgressState,
   DirectedChapter,
+  DirectionApprovalRepository,
   DirectorModel,
   DirectorModelFactory,
   EpubExtractionRequest,
@@ -95,6 +103,11 @@ export {
   ReviewCastApprovals,
   type ReviewCastApprovalsDependencies,
 } from './review-cast-approvals.js'
+export {
+  type ConfirmDirectionRequest,
+  ReviewDirection,
+  type ReviewDirectionDependencies,
+} from './review-direction.js'
 export {
   type BookFallbackGrantRequest,
   type FallbackApprovalDecisionRequest,

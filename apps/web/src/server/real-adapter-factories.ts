@@ -8,6 +8,7 @@ import {
   layoutFor,
   migrateSchema,
   openWorkspace,
+  SqliteDirectionApprovalRepository,
   SqliteFallbackApprovalRepository,
   SqliteJobRepository,
 } from '@light-novel-audiobook/persistence'
@@ -80,6 +81,7 @@ export const createRealAdapterFactories = async (
   migrateSchema(database)
   const jobs = new SqliteJobRepository(layout, database)
   const approvals = new SqliteFallbackApprovalRepository(database)
+  const directionApprovals = new SqliteDirectionApprovalRepository(database)
 
   // --- director: identity bound from configuration only, and a fresh model per run. The wrapper
   // and the factory value MUST be the same string: `DirectAudiobook` releases a director whose
@@ -158,6 +160,7 @@ export const createRealAdapterFactories = async (
         new DomainEpubExtractor({ workspaceRoot: workspace.root, repositoryRoot }),
       speechEngineFactory,
       approvals,
+      directionApprovals,
       createAudioAssembler: () => audioAssembler,
       jobs,
     },

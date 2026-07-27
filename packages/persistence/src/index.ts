@@ -1,4 +1,5 @@
 export { SqliteCastApprovalRepository } from './cast-approvals.js'
+export { SqliteDirectionApprovalRepository } from './direction-approvals.js'
 export {
   type FailureDiagnosticArtifact,
   failureDiagnosticDirectory,
