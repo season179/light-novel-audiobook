@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Job view states — visual preview</title>
+    <!-- The real stylesheet, imported relatively so this file opens straight from disk. -->
+    <link rel="stylesheet" href="../src/styles/app.css" />
+    <style>
+      /* Scaffolding for this preview page only. Every state below uses the real app.css. */
+      .preview-banner,
+      .preview-label {
+        width: min(40rem, calc(100% - 2rem));
+        margin-inline: auto;
+      }
+
+      .preview-banner {
+        padding: 2rem 0 1rem;
+      }
+
+      .preview-banner nav ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .preview {
+        padding: 1.5rem 0 3rem;
+        border-top: 2px solid #273044;
+      }
+
+      .preview-label {
+        margin-bottom: 1rem;
+        color: #8e9ab1;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .preview .shell.stack {
+        padding: 0;
+      }
+
+      .preview .panel {
+        margin-top: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="preview-banner">
+      <p class="eyebrow">Visual preview</p>
+      <h1>Job view states</h1>
+      <p>
+        Every state of the job view, rendered with the real <code>app.css</code> and static markup
+        copied from the components. All book, chapter, and speaker names on this page are invented
+        placeholders. Open this file directly in a browser — no build step, no dev server.
+      </p>
+      <nav aria-label="Preview states">
+        <ul>
+          <li><a href="#loading">Loading</a></li>
+          <li><a href="#pending">Pending / empty</a></li>
+          <li><a href="#directing-no-total">Directing, no total yet</a></li>
+          <li><a href="#directing">Directing, known total</a></li>
+          <li><a href="#rendering">Rendering</a></li>
+          <li><a href="#awaiting-review">Awaiting review</a></li>
+          <li><a href="#abandoned">Abandoned</a></li>
+          <li><a href="#failed">Failed</a></li>
+          <li><a href="#completed">Completed</a></li>
+          <li><a href="#not-found">Not found</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <!-- 1. Loading: neutral base block, indeterminate bar because there is no total. -->
+    <section class="preview" id="loading" aria-labelledby="preview-loading">
+      <h2 class="preview-label" id="preview-loading">Loading — state not read yet</h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-loading">
+          <h2 id="job-heading-loading">Generation</h2>
+          <div class="status-block" role="status" aria-live="polite">
+            <p class="stage">Loading</p>
+            <p class="latest">Loading job state…</p>
+            <progress aria-label="Loading job state"></progress>
+          </div>
+        </section>
+      </main>
+    </section>
+
+    <!-- 2. Pending: queued, and the "not in a chapter yet" empty state. -->
+    <section class="preview" id="pending" aria-labelledby="preview-pending">
+      <h2 class="preview-label" id="preview-pending">
+        Pending — queued, with the not-in-a-chapter-yet empty state
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-pending">
+          <h2 id="job-heading-pending">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="pending" role="status" aria-live="polite">
+            <p class="stage">Reading the EPUB · pending</p>
+            <p class="latest">Waiting for a worker to pick the job up.</p>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-pending">
+            <h3 id="pipeline-heading-pending">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Directing chapters</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd class="empty">Not in a chapter yet</dd>
+              <dt>Segments</dt>
+              <dd>0 of not yet counted</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 3. Directing with no total yet: running, but honestly no bar. -->
+    <section class="preview" id="directing-no-total" aria-labelledby="preview-directing-no-total">
+      <h2 class="preview-label" id="preview-directing-no-total">
+        Running — directing, total not counted yet (no fake bar)
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-directing-no-total">
+          <h2 id="job-heading-directing-no-total">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="running" role="status" aria-live="polite">
+            <p class="stage">Directing chapters · running</p>
+            <p class="latest">Counting chapters and passages…</p>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-no-total">
+            <h3 id="pipeline-heading-no-total">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd><strong data-status="completed">Completed</strong></dd>
+              <dt>Directing chapters</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd class="empty">Not in a chapter yet</dd>
+              <dt>Segments</dt>
+              <dd>0 of not yet counted</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 4. Directing mid-flight with a determinate bar. -->
+    <section class="preview" id="directing" aria-labelledby="preview-directing">
+      <h2 class="preview-label" id="preview-directing">
+        Running — mid-direction with a determinate bar
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-directing">
+          <h2 id="job-heading-directing">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="running" role="status" aria-live="polite">
+            <p class="stage">Directing chapters · running</p>
+            <p class="latest">Directed passage 421</p>
+          </div>
+          <div class="field">
+            <label for="bar-directing">Passages directed</label>
+            <progress id="bar-directing" value="421" max="2328">18%</progress>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-directing">
+            <h3 id="pipeline-heading-directing">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 15 chapters and 2328 passages
+                extracted
+              </dd>
+              <dt>Directing chapters</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 3 — The Undertow Stairs</dd>
+              <dt>Chapters directed</dt>
+              <dd>3 of 15</dd>
+              <dt>Passages directed</dt>
+              <dd>421 of 2328</dd>
+              <dt>Segments</dt>
+              <dd>0 of not yet counted</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 5. Rendering with a determinate bar. -->
+    <section class="preview" id="rendering" aria-labelledby="preview-rendering">
+      <h2 class="preview-label" id="preview-rendering">Running — rendering speech</h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-rendering">
+          <h2 id="job-heading-rendering">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="running" role="status" aria-live="polite">
+            <p class="stage">Rendering speech · running</p>
+            <p class="latest">Completed segment 13</p>
+          </div>
+          <div class="field">
+            <label for="bar-rendering">Segments rendered</label>
+            <progress id="bar-rendering" value="13" max="16">81%</progress>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-rendering">
+            <h3 id="pipeline-heading-rendering">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 2 chapters and 16 passages
+                extracted
+              </dd>
+              <dt>Directing chapters</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 16 segments directed; 1 needed
+                a fallback voice
+              </dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>13 of 16</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 6. Awaiting review: the decision the human must make. -->
+    <section class="preview" id="awaiting-review" aria-labelledby="preview-awaiting-review">
+      <h2 class="preview-label" id="preview-awaiting-review">
+        Awaiting review — stopped at the fallback-voice gate
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-review">
+          <h2 id="job-heading-review">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="awaiting_review" role="status" aria-live="polite">
+            <p class="stage">
+              Waiting for fallback voice review. Continuing starts speech rendering.
+            </p>
+            <p class="latest">Awaiting fallback approval review</p>
+          </div>
+          <section class="stack bordered" aria-labelledby="review-heading">
+            <h3 id="review-heading">Unresolved speakers need your decision (2)</h3>
+            <p class="hint">
+              2 of 2 lines have no cast voice. Approving uses the fallback dialogue voice for them;
+              nothing is rendered until you decide.
+            </p>
+            <div class="row">
+              <button type="button">Use the fallback voice for all 2 unresolved speakers</button>
+              <button type="button" disabled>Render approved script</button>
+              <button type="button">Show the lines</button>
+            </div>
+          </section>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-review">
+            <h3 id="pipeline-heading-review">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 2 chapters and 16 passages
+                extracted
+              </dd>
+              <dt>Directing chapters</dt>
+              <dd>
+                <strong data-status="current" aria-current="step">Current</strong> — 16 segments
+                directed; 2 needed a fallback voice
+              </dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>0 of not yet counted</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 7. Abandoned: dashed border, stopped glyph. -->
+    <section class="preview" id="abandoned" aria-labelledby="preview-abandoned">
+      <h2 class="preview-label" id="preview-abandoned">Abandoned — worker stopped mid-render</h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-abandoned">
+          <h2 id="job-heading-abandoned">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="abandoned" role="status" aria-live="polite">
+            <p class="stage">Rendering speech · abandoned</p>
+            <p class="latest">The worker stopped; resume this book from the import page.</p>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-abandoned">
+            <h3 id="pipeline-heading-abandoned">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd><strong data-status="completed">Completed</strong></dd>
+              <dt>Directing chapters</dt>
+              <dd><strong data-status="completed">Completed</strong></dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>7 of 16</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 8. Failed: the status block itself carries the failure, the alert explains it. -->
+    <section class="preview" id="failed" aria-labelledby="preview-failed">
+      <h2 class="preview-label" id="preview-failed">Failed — partial progress kept visible</h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-failed">
+          <h2 id="job-heading-failed">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="failed" role="status" aria-live="polite">
+            <p class="stage">Rendering speech · failed</p>
+            <p class="latest">The speech engine worker exited unexpectedly.</p>
+          </div>
+          <p class="error" role="alert">
+            Generation failed: The speech engine worker exited unexpectedly.
+          </p>
+          <div class="field">
+            <label for="bar-failed">Segments rendered</label>
+            <progress id="bar-failed" value="13" max="16">81%</progress>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-failed">
+            <h3 id="pipeline-heading-failed">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd><strong data-status="completed">Completed</strong></dd>
+              <dt>Directing chapters</dt>
+              <dd><strong data-status="completed">Completed</strong></dd>
+              <dt>Rendering speech</dt>
+              <dd><strong data-status="current" aria-current="step">Current</strong></dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="upcoming">Upcoming</strong></dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>13 of 16</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 9. Completed: success treatment, warnings, and the chapter audio. -->
+    <section class="preview" id="completed" aria-labelledby="preview-completed">
+      <h2 class="preview-label" id="preview-completed">
+        Completed — chapter audio and the numbered M4B
+      </h2>
+      <main class="shell stack">
+        <section class="panel stack" aria-labelledby="job-heading-completed">
+          <h2 id="job-heading-completed">The Clockwork Tidewater</h2>
+          <div class="status-block" data-state="completed" role="status" aria-live="polite">
+            <p class="stage">Completed · completed</p>
+            <p class="latest">Audiobook completed</p>
+          </div>
+          <section class="stack bordered details" aria-labelledby="pipeline-heading-completed">
+            <h3 id="pipeline-heading-completed">Pipeline</h3>
+            <dl class="summary" aria-label="Audiobook pipeline stages">
+              <dt>Reading the EPUB</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 2 chapters and 16 passages
+                extracted
+              </dd>
+              <dt>Directing chapters</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 16 segments directed; 1 needed
+                a fallback voice
+              </dd>
+              <dt>Rendering speech</dt>
+              <dd>
+                <strong data-status="completed">Completed</strong> — 16 segment audio files ready
+              </dd>
+              <dt>Assembling the audiobook</dt>
+              <dd><strong data-status="completed">Completed</strong> — Output v001 assembled</dd>
+            </dl>
+            <dl class="summary">
+              <dt>Chapter</dt>
+              <dd>Chapter 2 — A Lantern Over the Lock</dd>
+              <dt>Chapters directed</dt>
+              <dd>2 of 2</dd>
+              <dt>Passages directed</dt>
+              <dd>16 of 16</dd>
+              <dt>Segments</dt>
+              <dd>16 of 16</dd>
+              <dt>Job</dt>
+              <dd><code>job-preview0000000000001</code></dd>
+            </dl>
+          </section>
+          <section class="stack bordered" aria-labelledby="warnings-heading">
+            <h3 id="warnings-heading">Fallback voice warnings (1)</h3>
+            <p class="hint">
+              These lines were rendered with the fallback dialogue voice because their speaker was
+              not resolved to a cast voice.
+            </p>
+            <ul class="listing">
+              <li>
+                <span>
+                  <strong>Chapter 1</strong> — No speaker could be identified, so the fallback
+                  dialogue voice was used. Review before you keep this audio. Voice used:
+                  fallback-serena-gentle.
+                </span>
+              </li>
+            </ul>
+          </section>
+          <section class="stack bordered" aria-labelledby="result-heading">
+            <h3 id="result-heading">Audiobook v001</h3>
+            <p class="hint">
+              The version number counts output files, not books — it skips numbers already taken by
+              another book with a similar title, so a first export can start above v001.
+            </p>
+            <p>
+              <a class="download" href="#completed" download="clockwork-tidewater-v001.m4b">
+                Download the M4B (clockwork-tidewater-v001.m4b)
+              </a>
+            </p>
+            <ol class="chapters">
+              <li class="stack">
+                <h4>Chapter 1 — The Brine Road</h4>
+                <!-- biome-ignore lint/a11y/useMediaCaption: generated speech has no separate caption track in M1. -->
+                <audio controls preload="none" aria-label="Play Chapter 1 — The Brine Road"></audio>
+                <a href="#completed" download="clockwork-tidewater-v001-ch01.wav">
+                  Download clockwork-tidewater-v001-ch01.wav
+                </a>
+              </li>
+              <li class="stack">
+                <h4>Chapter 2 — A Lantern Over the Lock</h4>
+                <!-- biome-ignore lint/a11y/useMediaCaption: generated speech has no separate caption track in M1. -->
+                <audio
+                  controls
+                  preload="none"
+                  aria-label="Play Chapter 2 — A Lantern Over the Lock"
+                ></audio>
+                <a href="#completed" download="clockwork-tidewater-v001-ch02.wav">
+                  Download clockwork-tidewater-v001-ch02.wav
+                </a>
+              </li>
+            </ol>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <!-- 10. The not-found page, as emitted by the root route. -->
+    <section class="preview" id="not-found" aria-labelledby="preview-not-found">
+      <h2 class="preview-label" id="preview-not-found">Not found — unmatched address</h2>
+      <main class="shell stack">
+        <header class="hero">
+          <p class="eyebrow">Local audiobook studio</p>
+          <h1>Page not found</h1>
+          <p>
+            No page exists at this address. If you followed a saved link, the workspace may have
+            been rebuilt since it was stored.
+          </p>
+        </header>
+        <section class="panel stack" aria-labelledby="not-found-heading">
+          <h2 id="not-found-heading">Nothing at this address</h2>
+          <p class="error" role="alert">This address does not match any page in the studio.</p>
+          <div class="actions">
+            <a href="#not-found">Back to import</a>
+          </div>
+        </section>
+      </main>
+    </section>
+  </body>
+</html>

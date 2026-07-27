@@ -487,3 +487,100 @@ describe('JobProgressPanel — review gate and completed output on screen', () =
     expect(screen.getByText(/fallback-serena-gentle/)).toBeDefined()
   })
 })
+
+describe('JobProgressPanel — the status block wears the job state', () => {
+  it('never dresses a failed job in the success treatment', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'failed',
+        active: false,
+        error: 'The speech engine worker exited unexpectedly.',
+        latestMessage: 'The speech engine worker exited unexpectedly.',
+      }),
+    }))
+    renderPanel(stubClient({ getJobState }))
+
+    await screen.findByRole('alert', undefined, WAIT)
+    const status = screen.getByRole('status')
+    expect(status.className).toContain('status-block')
+    // The state treatment is keyed off data-state; "completed" is the success treatment.
+    expect(status.getAttribute('data-state')).toBe('failed')
+    expect(status.getAttribute('data-state')).not.toBe('completed')
+  })
+
+  it('carries every one of the six job states on the status block', async () => {
+    const states = [
+      'pending',
+      'running',
+      'awaiting_review',
+      'abandoned',
+      'failed',
+      'completed',
+    ] as const
+    for (const state of states) {
+      const getJobState = vi.fn(async () => ({
+        ok: true as const,
+        value: view({
+          state,
+          stage: state === 'completed' ? 'completed' : 'rendering',
+          stageLabel: state === 'completed' ? 'Completed' : 'Rendering speech',
+          active: state === 'pending' || state === 'running',
+          finished: state === 'completed',
+        }),
+      }))
+      const rendered = renderPanel(stubClient({ getJobState }))
+      // The loading block has no data-state, so this also proves the attribute arrives with data.
+      await waitFor(
+        () => expect(screen.getByRole('status').getAttribute('data-state')).toBe(state),
+        WAIT,
+      )
+      rendered.unmount()
+      cleanup()
+    }
+  })
+
+  it('marks every pipeline stage with data-status, matching the aria-current contract', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({ stage: 'directing', stageLabel: 'Directing chapters' }),
+    }))
+    renderPanel(stubClient({ getJobState }))
+
+    await screen.findByText('Directing chapters · running', undefined, WAIT)
+    const pipeline = screen.getByLabelText('Audiobook pipeline stages')
+    expect(pipeline.querySelectorAll('[data-status]')).toHaveLength(4)
+    expect(pipeline.querySelectorAll('[data-status="completed"]')).toHaveLength(1)
+    expect(pipeline.querySelectorAll('[data-status="current"]')).toHaveLength(1)
+    expect(pipeline.querySelectorAll('[data-status="upcoming"]')).toHaveLength(2)
+    expect(pipeline.querySelector('[data-status="current"]')?.getAttribute('aria-current')).toBe(
+      'step',
+    )
+  })
+
+  it('renders the not-in-a-chapter-yet case as a muted empty value, not a fake chapter', async () => {
+    const getJobState = vi.fn(async () => ({
+      ok: true as const,
+      value: view({
+        state: 'pending',
+        stage: 'extracting',
+        stageLabel: 'Reading the EPUB',
+        currentChapterId: null,
+        currentChapterLabel: null,
+        currentChapterTitle: null,
+        completedChapters: 0,
+        totalChapters: 0,
+        completedPassages: 0,
+        totalPassages: 0,
+        directionPercentComplete: null,
+        completedSegments: 0,
+        totalSegments: 0,
+        percentComplete: null,
+      }),
+    }))
+    renderPanel(stubClient({ getJobState }))
+
+    const empty = await screen.findByText('Not in a chapter yet', undefined, WAIT)
+    expect(empty.className).toContain('empty')
+  })
+})
