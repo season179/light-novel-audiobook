@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "7.0.2",
-  "description": "Pinned FFmpeg/ffprobe 7.0.2 sources for reproducible installs. The linux-amd64 entry mirrors the value used by the Ubuntu CI lane; the darwin-arm64 entry pins the upstream source tarball that scripts/build-ffmpeg-macos.sh compiles. The macOS CI lane verifies the source archive sha256 and the resulting binary version; the referenceBuild block records one known-good binary hash for audit and is not asserted in CI because Apple toolchain versions drift between runner images.",
+  "description": "Pinned FFmpeg/ffprobe 7.0.2 sources for reproducible installs. The linux-amd64 entry mirrors the value used by the Ubuntu CI lane; the darwin-arm64 entry pins the upstream source tarball and ordered configureFlags consumed directly by scripts/build-ffmpeg-macos.sh. The macOS CI lane verifies the source archive sha256 and resulting binary version; each local sidecar records the effective configureFlags and their canonical JSON SHA-256. The referenceBuild block records one known-good binary hash for audit and is not asserted in CI because Apple toolchain versions drift between runner images.",
   "builds": {
     "linux-amd64": {
       "distribution": "johnvansickle.com static release archive (no macOS build is published)",
@@ -43,7 +43,7 @@
       },
       "referenceBuild": {
         "status": "recorded",
-        "note": "One known-good build of the pinned source on the recorded toolchain. Reproduce by running scripts/build-ffmpeg-macos.sh, which also writes these values to a .ffmpeg-build-manifest.json sidecar in installDirectory. Verify independently with: shasum -a 256 \"<installDirectory>/ffmpeg\" and shasum -a 256 \"<installDirectory>/ffprobe\".",
+        "note": "One known-good build of the pinned source on the recorded toolchain. Reproduce by running scripts/build-ffmpeg-macos.sh, which writes source, ordered configureFlags plus their canonical JSON SHA-256, toolchain, and binary hashes to a .ffmpeg-build-manifest.json sidecar in installDirectory. Verify independently with: shasum -a 256 \"<installDirectory>/ffmpeg\" and shasum -a 256 \"<installDirectory>/ffprobe\".",
         "binaries": {
           "ffmpeg": {
             "sha256": "ad69f717b6e96058b93a0704169998fcd26fddd580dafba19db277bdd2fe3904"

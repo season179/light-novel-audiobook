@@ -32,6 +32,47 @@ ffmpeg_read_source_pin() {
   '
 }
 
+ffmpeg_configure_source() {
+  local source_dir="$1"
+  local repository_root="$2"
+  local flags_file flag
+  local -a configure_flags=()
+
+  flags_file="$(mktemp -t light-novel-ffmpeg-flags)"
+  if ! node "$repository_root/scripts/ffmpeg-build-manifest.mjs" flags \
+    "$repository_root/config/ffmpeg-artifacts.json" > "$flags_file"; then
+    rm -f "$flags_file"
+    ffmpeg_error 'could not load valid darwin-arm64 configureFlags from config/ffmpeg-artifacts.json.'
+    return 1
+  fi
+
+  while IFS= read -r flag; do
+    configure_flags[${#configure_flags[@]}]="$flag"
+  done < "$flags_file"
+  rm -f "$flags_file"
+
+  if [[ ${#configure_flags[@]} -eq 0 ]]; then
+    ffmpeg_error 'darwin-arm64 configureFlags resolved to an empty array; refusing to configure.'
+    return 1
+  fi
+
+  (
+    cd "$source_dir"
+    ./configure "${configure_flags[@]}"
+  )
+}
+
+ffmpeg_cleanup() {
+  if [[ -n "${FFMPEG_CLEANUP_INSTALL_PREFIX:-}" ]]; then
+    rm -f "$FFMPEG_CLEANUP_INSTALL_PREFIX/ffmpeg.new" \
+      "$FFMPEG_CLEANUP_INSTALL_PREFIX/ffprobe.new" \
+      "$FFMPEG_CLEANUP_INSTALL_PREFIX/.ffmpeg-build-manifest.json.new"
+  fi
+  if [[ -n "${FFMPEG_CLEANUP_WORK_DIR:-}" ]]; then
+    rm -rf "$FFMPEG_CLEANUP_WORK_DIR"
+  fi
+}
+
 ffmpeg_record_toolchain() {
   local macos_version xcode_version clang_version sdk_path sdk_version make_version
   macos_version="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
@@ -80,8 +121,9 @@ ffmpeg_main() {
 
   local work_dir archive download
   work_dir="$(mktemp -d -t light-novel-ffmpeg)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$work_dir'" EXIT
+  FFMPEG_CLEANUP_WORK_DIR="$work_dir"
+  FFMPEG_CLEANUP_INSTALL_PREFIX="$install_prefix"
+  trap ffmpeg_cleanup EXIT
   archive="$work_dir/ffmpeg-${version}.tar.xz"
   download="$archive.download"
 
@@ -110,22 +152,10 @@ ffmpeg_main() {
   jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 
   printf 'Configuring (make -j%s)...\n' "$jobs"
-  (
-    cd "$source_dir"
-    # No --prefix: the binaries are copied out of the build tree directly so they land beside the
-    # Linux layout (ffmpeg/ffprobe at the install root, not under bin/). Static + disable-shared
-    # keeps libav* linked into the binary; macOS still links libSystem dynamically, which is the
-    # platform norm. --disable-x86asm avoids a hard nasm/yasm dependency on arm64.
-    ./configure \
-      --disable-debug \
-      --disable-doc \
-      --disable-x86asm \
-      --enable-gpl \
-      --enable-version3 \
-      --enable-static \
-      --disable-shared \
-      --enable-pic
-  )
+  # No --prefix: the binaries are copied out of the build tree directly so they land beside the
+  # Linux layout (ffmpeg/ffprobe at the install root, not under bin/). The ordered configure flags
+  # come only from config/ffmpeg-artifacts.json and are validated before this call.
+  ffmpeg_configure_source "$source_dir" "$repository_root"
 
   printf 'Compiling...\n'
   make -C "$source_dir" -j"$jobs"
@@ -152,16 +182,16 @@ ffmpeg_main() {
   fi
 
   mkdir -p "$install_prefix"
-  # Replace any previous install atomically-ish: copy next to the target, fsync, then rename.
+  # Stage each file beside its destination and clean staged files on failure. The three renames
+  # are individually atomic, but this does not claim set-level crash atomicity for the pair and
+  # sidecar.
   cp -f "$built_ffmpeg" "$install_prefix/ffmpeg.new"
   cp -f "$built_ffprobe" "$install_prefix/ffprobe.new"
   chmod 0755 "$install_prefix/ffmpeg.new" "$install_prefix/ffprobe.new"
-  mv -f "$install_prefix/ffmpeg.new" "$install_prefix/ffmpeg"
-  mv -f "$install_prefix/ffprobe.new" "$install_prefix/ffprobe"
 
   local ffmpeg_sha ffprobe_sha
-  ffmpeg_sha="$(shasum -a 256 "$install_prefix/ffmpeg" | cut -d ' ' -f 1)"
-  ffprobe_sha="$(shasum -a 256 "$install_prefix/ffprobe" | cut -d ' ' -f 1)"
+  ffmpeg_sha="$(shasum -a 256 "$install_prefix/ffmpeg.new" | cut -d ' ' -f 1)"
+  ffprobe_sha="$(shasum -a 256 "$install_prefix/ffprobe.new" | cut -d ' ' -f 1)"
 
   local toolchain_fields
   toolchain_fields="$(ffmpeg_record_toolchain)"
@@ -169,36 +199,30 @@ ffmpeg_main() {
   IFS=$'\t' read -r macos_version xcode_version clang_version sdk_path sdk_version make_version uname_m \
     <<< "$toolchain_fields"
 
-  cat > "$install_prefix/.ffmpeg-build-manifest.json" <<EOF
-{
-  "schemaVersion": 1,
-  "version": "${version}",
-  "platform": "darwin/${uname_m}",
-  "source": {
-    "url": "${source_url}",
-    "archiveSha256": "${source_sha}"
-  },
-  "toolchain": {
-    "platform": "darwin/${uname_m}",
-    "macos": "${macos_version}",
-    "xcode": "${xcode_version}",
-    "appleClang": "${clang_version}",
-    "sdkPath": "${sdk_path}",
-    "sdkVersion": "${sdk_version}",
-    "make": "${make_version}"
-  },
-  "binaries": {
-    "ffmpeg": {
-      "path": "${install_prefix}/ffmpeg",
-      "sha256": "${ffmpeg_sha}"
-    },
-    "ffprobe": {
-      "path": "${install_prefix}/ffprobe",
-      "sha256": "${ffprobe_sha}"
-    }
-  }
-}
-EOF
+  local sidecar="$install_prefix/.ffmpeg-build-manifest.json"
+  node "$repository_root/scripts/ffmpeg-build-manifest.mjs" write-sidecar \
+    "$repository_root/config/ffmpeg-artifacts.json" \
+    "$sidecar.new" \
+    "$version" \
+    "darwin/$uname_m" \
+    "$source_url" \
+    "$source_sha" \
+    "$macos_version" \
+    "$xcode_version" \
+    "$clang_version" \
+    "$sdk_path" \
+    "$sdk_version" \
+    "$make_version" \
+    "$install_prefix/ffmpeg" \
+    "$ffmpeg_sha" \
+    "$install_prefix/ffprobe" \
+    "$ffprobe_sha"
+  node "$repository_root/scripts/ffmpeg-build-manifest.mjs" verify-sidecar \
+    "$repository_root/config/ffmpeg-artifacts.json" "$sidecar.new"
+
+  mv -f "$install_prefix/ffmpeg.new" "$install_prefix/ffmpeg"
+  mv -f "$install_prefix/ffprobe.new" "$install_prefix/ffprobe"
+  mv -f "$sidecar.new" "$sidecar"
 
   printf '\nBuilt and installed FFmpeg %s:\n' "$version"
   printf '  ffmpeg:  %s\n' "$install_prefix/ffmpeg"

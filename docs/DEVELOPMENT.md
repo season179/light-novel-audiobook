@@ -127,12 +127,14 @@ bash scripts/build-ffmpeg-macos.sh
 The johnvansickle.com static build that Linux uses publishes no macOS binaries, so macOS compiles
 FFmpeg/ffprobe 7.0.2 from the pinned upstream source tarball tracked in
 [`config/ffmpeg-artifacts.json`](../config/ffmpeg-artifacts.json). `scripts/build-ffmpeg-macos.sh`
-downloads and sha256-checks that tarball, configures with a recorded flag set, builds, and installs
-both binaries into `~/.local/share/light-novel-audiobook/tools/ffmpeg/current` — the same default
-path `packages/audio-assembly/src/ffmpeg-toolchain.ts` resolves, so no environment override is
-needed. The script also writes a `.ffmpeg-build-manifest.json` sidecar recording the exact
-Xcode/clang/SDK toolchain and the resulting binary sha256 values; those are mirrored in the
-committed manifest's `darwin-arm64.referenceBuild` block.
+downloads and sha256-checks that tarball, loads the ordered `configureFlags` directly from that
+manifest under stock macOS Bash 3.2, builds, and installs both binaries into
+`~/.local/share/light-novel-audiobook/tools/ffmpeg/current` — the same default path
+`packages/audio-assembly/src/ffmpeg-toolchain.ts` resolves, so no environment override is needed.
+The script also writes a `.ffmpeg-build-manifest.json` sidecar recording the effective ordered
+flags, the SHA-256 of canonical `JSON.stringify(configureFlags)`, the exact Xcode/clang/SDK
+toolchain, and the resulting binary sha256 values. The known-good binary hashes are mirrored in
+the committed manifest's `darwin-arm64.referenceBuild` block.
 
 A different Xcode/SDK image produces a different binary hash, so the macOS CI lane pins the
 **source archive sha256** and the **7.0.2 version**, not an exact binary hash. The Linux amd64 pin
