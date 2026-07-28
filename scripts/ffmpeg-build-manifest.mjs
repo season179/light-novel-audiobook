@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -156,7 +156,17 @@ function main(argv) {
   throw new Error('usage: ffmpeg-build-manifest.mjs flags|write-sidecar|verify-sidecar ...')
 }
 
-if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+function isDirectExecution(entryPath) {
+  if (!entryPath) return false
+  try {
+    return realpathSync(resolve(entryPath)) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    // Imports must stay side-effect free even when their host supplies a non-filesystem argv[1].
+    return false
+  }
+}
+
+if (isDirectExecution(process.argv[1])) {
   try {
     main(process.argv.slice(2))
   } catch (error) {

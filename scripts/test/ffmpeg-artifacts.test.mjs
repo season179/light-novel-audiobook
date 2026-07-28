@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   configureFlagsSha256,
   createBuildSidecar,
@@ -151,6 +151,50 @@ test('the darwin-arm64 entry pins the upstream source archive and a recorded ref
   )
 })
 
+test('the manifest helper CLI executes through a symlink-aliased path', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'lna-ffmpeg-helper-alias-'))
+  t.after(() => rmSync(root, { force: true, recursive: true }))
+  const realRoot = join(root, 'real')
+  const aliasRoot = join(root, 'alias')
+  mkdirSync(join(realRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(realRoot, 'config'), { recursive: true })
+  cpSync(helperPath, join(realRoot, 'scripts', 'ffmpeg-build-manifest.mjs'))
+  cpSync(manifestPath, join(realRoot, 'config', 'ffmpeg-artifacts.json'))
+  symlinkSync(realRoot, aliasRoot, 'dir')
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(aliasRoot, 'scripts', 'ffmpeg-build-manifest.mjs'),
+      'flags',
+      join(aliasRoot, 'config', 'ffmpeg-artifacts.json'),
+    ],
+    { encoding: 'utf8' },
+  )
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout, `${manifest.builds['darwin-arm64'].configureFlags.join('\n')}\n`)
+
+  const invalid = spawnSync(
+    process.execPath,
+    [join(aliasRoot, 'scripts', 'ffmpeg-build-manifest.mjs'), 'unknown-command'],
+    { encoding: 'utf8' },
+  )
+  assert.equal(invalid.status, 1)
+  assert.equal(invalid.stdout, '')
+  assert.match(invalid.stderr, /^error: usage: ffmpeg-build-manifest\.mjs/mu)
+
+  const importerPath = join(root, 'importer.mjs')
+  writeFileSync(
+    importerPath,
+    `import ${JSON.stringify(pathToFileURL(join(aliasRoot, 'scripts', 'ffmpeg-build-manifest.mjs')).href)}\n`,
+  )
+  const imported = spawnSync(process.execPath, [importerPath], { encoding: 'utf8' })
+  assert.equal(imported.status, 0, imported.stderr)
+  assert.equal(imported.stdout, '')
+  assert.equal(imported.stderr, '')
+})
+
 test('every build-script temporary path uses a BSD/GNU-compatible XXXXXX template', () => {
   const script = readFileSync(buildScriptPath, 'utf8')
   assert.equal(script.includes('mktemp -t '), false)
@@ -174,6 +218,7 @@ test('the Bash 3.2 build path uses only the manifest ordered configure flags', (
   for (const configureFlags of variants) {
     const invocation = runFakeConfigure(configureFlags)
     assert.equal(invocation.result.status, 0, invocation.result.stderr)
+    assert.equal(invocation.result.stderr, '')
     assert.equal(invocation.configureRan, true)
     assert.deepEqual(invocation.arguments, configureFlags)
   }
@@ -246,23 +291,30 @@ test('source-pin loading surfaces explicit Node/JSON read failures', () => {
 })
 
 test('empty, duplicate, malformed, whitespace, newline, and NUL flags fail before configure', () => {
-  const invalidValues = [
-    [],
-    'not-an-array',
-    [''],
-    ['enable-gpl'],
-    ['--enable-gpl', '--enable-gpl'],
-    ['--enable gpl'],
-    ['--enable-gpl\n--disable-doc'],
-    ['--enable-gpl\0'],
+  const invalidCases = [
+    { configureFlags: [], diagnostic: /configureFlags must be a nonempty array/ },
+    { configureFlags: 'not-an-array', diagnostic: /configureFlags must be a nonempty array/ },
+    { configureFlags: [''], diagnostic: /every darwin-arm64 configure flag must be/ },
+    { configureFlags: ['enable-gpl'], diagnostic: /every darwin-arm64 configure flag must be/ },
+    {
+      configureFlags: ['--enable-gpl', '--enable-gpl'],
+      diagnostic: /duplicate darwin-arm64 configure flag/,
+    },
+    { configureFlags: ['--enable gpl'], diagnostic: /unsafe whitespace or NUL/ },
+    {
+      configureFlags: ['--enable-gpl\n--disable-doc'],
+      diagnostic: /unsafe whitespace or NUL/,
+    },
+    { configureFlags: ['--enable-gpl\0'], diagnostic: /unsafe whitespace or NUL/ },
   ]
 
-  for (const configureFlags of invalidValues) {
-    assert.throws(() => validateConfigureFlags(configureFlags))
+  for (const { configureFlags, diagnostic } of invalidCases) {
+    assert.throws(() => validateConfigureFlags(configureFlags), diagnostic)
     const invocation = runFakeConfigure(configureFlags)
     assert.notEqual(invocation.result.status, 0)
     assert.equal(invocation.configureRan, false)
-    assert.match(invocation.result.stderr, /configureFlags|configure flag/i)
+    assert.match(invocation.result.stderr, diagnostic)
+    assert.doesNotMatch(invocation.result.stderr, /configureFlags resolved to an empty array/)
   }
 })
 
