@@ -29,6 +29,39 @@ function canonicalJobText(workflowText, jobId) {
   return `${lines.join('\n')}\n`
 }
 
+const ALLOWED_STEP_KEYS = new Set(['name', 'uses', 'with', 'shell', 'run'])
+const ALLOWED_STEP_KEY_ORDERS = [
+  ['name', 'uses', 'with'],
+  ['name', 'run'],
+  ['name', 'shell', 'run'],
+]
+
+function stripInlineComment(value) {
+  return value.replace(/\s+#.*$/u, '').trim()
+}
+
+function parseWithBlock(lines, start, end, stepName) {
+  const entries = []
+  const seen = new Set()
+  let cursor = start
+  for (; cursor < end; cursor += 1) {
+    const line = lines[cursor]
+    if (line === '' || /^\s*#/u.test(line)) continue
+    if (/^ {8}[A-Za-z0-9_-]+:/u.test(line)) break
+    const entryMatch = /^ {10}([A-Za-z0-9_-]+):\s*(.*?)\s*$/u.exec(line)
+    if (!entryMatch) {
+      throw new Error(`validate-macos step ${stepName} has malformed with content: ${line.trim()}`)
+    }
+    const [, key, rawValue] = entryMatch
+    if (seen.has(key)) throw new Error(`validate-macos step ${stepName} duplicates with.${key}`)
+    seen.add(key)
+    entries.push([key, stripInlineComment(rawValue)])
+  }
+  if (entries.length === 0)
+    throw new Error(`validate-macos step ${stepName} has an empty with block`)
+  return { cursor, entries }
+}
+
 function extractWorkflowSteps(workflowText, jobId) {
   const lines = extractJobLines(workflowText, jobId)
   const workflowSteps = []
@@ -42,44 +75,73 @@ function extractWorkflowSteps(workflowText, jobId) {
       )
     }
 
+    const stepName = nameMatch[1]
     let end = index + 1
     while (end < lines.length && !/^ {6}- /u.test(lines[end])) end += 1
-    let uses = ''
-    let shell = ''
-    let run = ''
+    const step = { name: stepName }
+    const keyOrder = ['name']
+    const seen = new Set(keyOrder)
+    let withKeyOrder = []
+
     for (let cursor = index + 1; cursor < end; cursor += 1) {
-      const usesMatch = /^ {8}uses:\s+(\S+)/u.exec(lines[cursor])
-      if (usesMatch) uses = usesMatch[1]
-      const shellMatch = /^ {8}shell:\s+(\S+)/u.exec(lines[cursor])
-      if (shellMatch) shell = shellMatch[1]
-      const runMatch = /^ {8}run:\s*(.*)$/u.exec(lines[cursor])
-      if (!runMatch) continue
-      run = runMatch[1]
-      if (run === '|') {
+      const line = lines[cursor]
+      if (line === '' || /^\s*#/u.test(line)) continue
+      const keyMatch = /^ {8}([A-Za-z0-9_-]+):\s*(.*)$/u.exec(line)
+      if (!keyMatch) {
+        throw new Error(`validate-macos step ${stepName} has malformed content: ${line.trim()}`)
+      }
+      const [, key, rawValue] = keyMatch
+      if (!ALLOWED_STEP_KEYS.has(key)) {
+        throw new Error(`validate-macos step ${stepName} uses unmodeled key ${key}`)
+      }
+      if (seen.has(key)) throw new Error(`validate-macos step ${stepName} duplicates key ${key}`)
+      seen.add(key)
+      keyOrder.push(key)
+
+      if (key === 'with') {
+        if (rawValue.trim() !== '') {
+          throw new Error(`validate-macos step ${stepName} must use a block with mapping`)
+        }
+        const parsedWith = parseWithBlock(lines, cursor + 1, end, stepName)
+        step.with = Object.fromEntries(parsedWith.entries)
+        withKeyOrder = parsedWith.entries.map(([withKey]) => withKey)
+        cursor = parsedWith.cursor - 1
+        continue
+      }
+
+      if (key === 'run' && rawValue.trim() === '|') {
         const commandLines = []
-        for (let commandIndex = cursor + 1; commandIndex < end; commandIndex += 1) {
+        let commandIndex = cursor + 1
+        for (; commandIndex < end; commandIndex += 1) {
           const commandLine = lines[commandIndex]
+          if (/^ {8}[A-Za-z0-9_-]+:/u.test(commandLine)) break
           if (commandLine.startsWith('          ')) {
             commandLines.push(commandLine.slice(10))
           } else if (commandLine === '') {
             commandLines.push('')
           } else {
-            break
+            throw new Error(
+              `validate-macos step ${stepName} has malformed run content: ${commandLine.trim()}`,
+            )
           }
         }
         while (commandLines.at(-1) === '') commandLines.pop()
-        run = commandLines.join('\n')
+        step.run = commandLines.join('\n')
+        cursor = commandIndex - 1
+        continue
       }
+
+      const value = stripInlineComment(rawValue)
+      if (!value) throw new Error(`validate-macos step ${stepName} has an empty ${key} value`)
+      step[key] = value
     }
 
-    if (uses && run) throw new Error(`validate-macos step ${nameMatch[1]} mixes uses and run`)
-    if (uses) {
-      workflowSteps.push({ name: nameMatch[1], uses })
-    } else if (run) {
-      workflowSteps.push(shell ? { name: nameMatch[1], shell, run } : { name: nameMatch[1], run })
-    } else {
-      throw new Error(`validate-macos step ${nameMatch[1]} has neither uses nor run`)
+    if (!ALLOWED_STEP_KEY_ORDERS.some((allowed) => allowed.join('\0') === keyOrder.join('\0'))) {
+      throw new Error(
+        `validate-macos step ${stepName} has unapproved key order ${keyOrder.join(' -> ')}`,
+      )
     }
+    workflowSteps.push({ step, keyOrder, withKeyOrder })
     index = end - 1
   }
 
@@ -95,10 +157,15 @@ function replaceLast(value, search, replacement) {
 function validateWorkflow(workflowText, specification = gate) {
   const jobText = canonicalJobText(workflowText, specification.jobId)
   assert.match(jobText, new RegExp(`^    runs-on: ${specification.runner}$`, 'mu'))
-  assert.deepEqual(extractWorkflowSteps(workflowText, specification.jobId), [
-    ...specification.setupSteps,
-    ...specification.steps,
-  ])
+  const expectedSteps = [...specification.setupSteps, ...specification.steps]
+  const parsedSteps = extractWorkflowSteps(workflowText, specification.jobId)
+  assert.equal(parsedSteps.length, expectedSteps.length)
+  for (const [index, parsed] of parsedSteps.entries()) {
+    const expected = expectedSteps[index]
+    assert.deepEqual(parsed.keyOrder, Object.keys(expected))
+    assert.deepEqual(parsed.withKeyOrder, expected.with ? Object.keys(expected.with) : [])
+    assert.deepEqual(parsed.step, expected)
+  }
 
   const ubuntuHash = createHash('sha256')
     .update(canonicalJobText(workflowText, 'validate'))
@@ -110,14 +177,17 @@ const exactMacosSetupSteps = [
   {
     name: 'Check out repository',
     uses: 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+    with: { 'fetch-depth': '1' },
   },
   {
     name: 'Install pinned pnpm',
     uses: 'pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320',
+    with: { run_install: 'false' },
   },
   {
     name: 'Install pinned Node.js',
     uses: 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+    with: { 'node-version-file': '.node-version', cache: 'pnpm' },
   },
 ]
 
@@ -227,4 +297,74 @@ test('the policy rejects missing, reordered, extra, and unnamed command substitu
     '      - name: Unapproved action substitute\n        uses: example/action@deadbeef\n\n      - name: Build and install pinned FFmpeg/ffprobe 7.0.2 from source',
   )
   assert.throws(() => validateWorkflow(extraAction))
+})
+
+test('the policy rejects disabling, duplicate, reordered, and trailing step keys', () => {
+  const disabled = replaceLast(
+    workflow,
+    '      - name: Typecheck workspace\n        run: pnpm typecheck',
+    '      - name: Typecheck workspace\n        if: false\n        run: pnpm typecheck',
+  )
+  assert.throws(() => validateWorkflow(disabled), /unmodeled key if/)
+
+  const ignoredFailure = replaceLast(
+    workflow,
+    '      - name: Typecheck workspace\n        run: pnpm typecheck',
+    '      - name: Typecheck workspace\n        continue-on-error: true\n        run: pnpm typecheck',
+  )
+  assert.throws(() => validateWorkflow(ignoredFailure), /unmodeled key continue-on-error/)
+
+  const duplicateRun = replaceLast(
+    workflow,
+    '      - name: Typecheck workspace\n        run: pnpm typecheck',
+    '      - name: Typecheck workspace\n        run: pnpm typecheck\n        run: pnpm check',
+  )
+  assert.throws(() => validateWorkflow(duplicateRun), /duplicates key run/)
+
+  const duplicateName = replaceLast(
+    workflow,
+    '      - name: Typecheck workspace\n        run: pnpm typecheck',
+    '      - name: Typecheck workspace\n        name: Hidden typecheck\n        run: pnpm typecheck',
+  )
+  assert.throws(() => validateWorkflow(duplicateName), /duplicates key name/)
+
+  const reorderedShellRun = replaceLast(
+    workflow,
+    '      - name: Build and install pinned FFmpeg/ffprobe 7.0.2 from source\n        shell: bash\n        run: bash scripts/build-ffmpeg-macos.sh',
+    '      - name: Build and install pinned FFmpeg/ffprobe 7.0.2 from source\n        run: bash scripts/build-ffmpeg-macos.sh\n        shell: bash',
+  )
+  assert.throws(() => validateWorkflow(reorderedShellRun), /unapproved key order/)
+
+  const trailingUnknown = replaceLast(
+    workflow,
+    '          [[ "$ffprobe_version" == "ffprobe version 7.0.2"* ]]',
+    '          [[ "$ffprobe_version" == "ffprobe version 7.0.2"* ]]\n        timeout-minutes: 1',
+  )
+  assert.throws(() => validateWorkflow(trailingUnknown), /unmodeled key timeout-minutes/)
+})
+
+test('the policy pins with block values, key uniqueness, and key order', () => {
+  const changedWith = replaceLast(workflow, '          fetch-depth: 1', '          fetch-depth: 0')
+  assert.throws(() => validateWorkflow(changedWith))
+
+  const duplicateWith = replaceLast(
+    workflow,
+    '          node-version-file: .node-version\n          cache: pnpm',
+    '          node-version-file: .node-version\n          cache: pnpm\n          cache: npm',
+  )
+  assert.throws(() => validateWorkflow(duplicateWith), /duplicates with\.cache/)
+
+  const reorderedWith = replaceLast(
+    workflow,
+    '          node-version-file: .node-version\n          cache: pnpm',
+    '          cache: pnpm\n          node-version-file: .node-version',
+  )
+  assert.throws(() => validateWorkflow(reorderedWith))
+
+  const withOnRunStep = replaceLast(
+    workflow,
+    '      - name: Typecheck workspace\n        run: pnpm typecheck',
+    '      - name: Typecheck workspace\n        with:\n          bypass: true\n        run: pnpm typecheck',
+  )
+  assert.throws(() => validateWorkflow(withOnRunStep), /unapproved key order/)
 })
