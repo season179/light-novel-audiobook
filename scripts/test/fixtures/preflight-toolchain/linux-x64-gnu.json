@@ -1,0 +1,21 @@
+{
+  "packageManager": "pnpm@11.17.0",
+  "completeEntries": [
+    "@biomejs+cli-linux-x64@2.5.5",
+    "@typescript+typescript-linux-x64@7.0.2",
+    "@rolldown+binding-linux-x64-gnu@1.1.5",
+    "@esbuild+linux-x64@0.28.1",
+    "lightningcss-linux-x64-gnu@1.33.0"
+  ],
+  "failingEntries": [
+    "@biomejs+cli-linux-x64@2.5.5",
+    "@biomejs+cli-win32-x64@2.5.5",
+    "@rolldown+binding-linux-x64-gnu@1.1.5",
+    "@esbuild+linux-x64@0.28.1",
+    "lightningcss-linux-x64-gnu@1.33.0"
+  ],
+  "failingErrors": [
+    "@biomejs/cli contains native packages for another platform: @biomejs+cli-win32-x64@2.5.5",
+    "node_modules is missing the native Linux package matching @typescript+typescript-linux-x64@*"
+  ]
+}

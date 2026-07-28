@@ -105,7 +105,11 @@ export function dependencyTreeErrors(
   const families = nativePackageFamilies(targetPlatform, cpuArchitecture, libc)
 
   if (families.length === 0) {
-    errors.push(`unsupported platform/architecture: ${targetPlatform}/${cpuArchitecture}`)
+    errors.push(
+      targetPlatform === 'linux'
+        ? `unsupported Linux CPU architecture: ${cpuArchitecture}`
+        : `unsupported platform/architecture: ${targetPlatform}/${cpuArchitecture}`,
+    )
     return errors
   }
 
@@ -117,9 +121,8 @@ export function dependencyTreeErrors(
       )
     }
     if (required && !entries.some((entry) => entry.startsWith(marker))) {
-      errors.push(
-        `node_modules is missing the native ${targetPlatform} package matching ${marker}*`,
-      )
+      const platformLabel = targetPlatform === 'linux' ? 'Linux' : targetPlatform
+      errors.push(`node_modules is missing the native ${platformLabel} package matching ${marker}*`)
     }
   }
 
@@ -143,41 +146,91 @@ function detectLibc() {
   return report?.header?.glibcVersionRuntime ? 'gnu' : 'musl'
 }
 
-const SUPPORTED_PLATFORMS = new Map([
-  ['linux', new Set(['x64', 'arm64'])],
-  ['darwin', new Set(['arm64'])],
-])
-
-export function inspectToolchain({ requireDependencies = false } = {}) {
-  const errors = []
+export function collectHostFacts() {
   const detectedPlatform = platform()
   const detectedArch = arch()
   const packageJson = readJson(join(repositoryRoot, 'package.json'))
-  const nodeVersion = parseVersion(process.version)
-  const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)$/.exec(packageJson.packageManager ?? '')
-  const supportedArches = SUPPORTED_PLATFORMS.get(detectedPlatform)
+  const nodeRealPath = realpathSync(process.execPath)
+  const osRelease = release()
+  const procVersion = existsSync('/proc/version') ? readFileSync('/proc/version', 'utf8') : ''
+  const pnpmPath = findPnpm()
+  let pnpmRealPath = ''
+  let pnpmResolutionError = ''
 
-  if (!supportedArches?.has(detectedArch)) {
+  if (pnpmPath) {
+    try {
+      pnpmRealPath = realpathSync(pnpmPath)
+    } catch (error) {
+      pnpmResolutionError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  const packageManager = packageJson.packageManager ?? ''
+  const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)$/.exec(packageManager)
+  let pnpmVersion = ''
+  let pnpmExecutionError = ''
+  if (
+    pnpmRealPath &&
+    packageManagerMatch &&
+    !isMountedWindowsPath(pnpmRealPath) &&
+    !/\.(?:cmd|exe)$/i.test(pnpmRealPath)
+  ) {
+    const result = spawnSync(pnpmRealPath, ['--version'], { encoding: 'utf8', env: process.env })
+    pnpmVersion = result.status === 0 ? result.stdout.trim() : ''
+    pnpmExecutionError = result.error?.message ?? ''
+  }
+
+  const virtualStore = join(repositoryRoot, 'node_modules', '.pnpm')
+  const virtualStoreExists = existsSync(virtualStore)
+  return {
+    detectedPlatform,
+    detectedArch,
+    nodeVersion: process.version,
+    nodeExecutablePath: process.execPath,
+    nodeRealPath,
+    osRelease,
+    procVersion,
+    wslDistroName: process.env.WSL_DISTRO_NAME ?? '',
+    packageManager,
+    pnpmPath,
+    pnpmRealPath,
+    pnpmResolutionError,
+    pnpmVersion,
+    pnpmExecutionError,
+    virtualStoreExists,
+    virtualStoreEntries: virtualStoreExists ? readdirSync(virtualStore) : [],
+    libc: virtualStoreExists ? detectLibc() : 'gnu',
+  }
+}
+
+// Pure policy seam: production always calls collectHostFacts(); tests inject facts here rather
+// than introducing environment-variable overrides into the preinstall/postinstall path.
+export function inspectToolchainFacts(facts, { requireDependencies = false } = {}) {
+  const errors = []
+  const nodeVersion = parseVersion(facts.nodeVersion)
+  const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)$/.exec(facts.packageManager)
+  const supportedDarwinHost = facts.detectedPlatform === 'darwin' && facts.detectedArch === 'arm64'
+
+  // Linux intentionally retains main's lazy unsupported-architecture path: architecture is only
+  // diagnosed when a virtual store exists. Darwin rejects unsupported hosts eagerly.
+  if (facts.detectedPlatform !== 'linux' && !supportedDarwinHost) {
     errors.push(
-      `Node must run on a supported native platform/architecture (linux x64/arm64 or darwin arm64); detected ${detectedPlatform}/${detectedArch}`,
+      `Node must run on a supported native platform/architecture (linux x64/arm64 or darwin arm64); detected ${facts.detectedPlatform}/${facts.detectedArch}`,
     )
   }
   if (!nodeVersion || nodeVersion.major < 24) {
-    errors.push(`Node.js 24 or newer is required; detected ${process.version}`)
+    errors.push(`Node.js 24 or newer is required; detected ${facts.nodeVersion}`)
   }
-  if (isMountedWindowsPath(realpathSync(process.execPath))) {
-    errors.push(`Node resolves through a mounted Windows path: ${process.execPath}`)
+  if (isMountedWindowsPath(facts.nodeRealPath)) {
+    errors.push(`Node resolves through a mounted Windows path: ${facts.nodeExecutablePath}`)
   }
 
-  // WSL2 detection is Linux-only. On Darwin every signal below is absent, so this block is a
-  // no-op there; the Windows-path rejection above still guards against mounted-Windows Node.
-  const procVersion = existsSync('/proc/version') ? readFileSync('/proc/version', 'utf8') : ''
   const isWsl =
-    detectedPlatform === 'linux' &&
-    (Boolean(process.env.WSL_DISTRO_NAME) ||
-      /microsoft/i.test(release()) ||
-      /microsoft/i.test(procVersion))
-  if (isWsl && !/wsl2|microsoft-standard-wsl2/i.test(`${release()} ${procVersion}`)) {
+    facts.detectedPlatform === 'linux' &&
+    (Boolean(facts.wslDistroName) ||
+      /microsoft/i.test(facts.osRelease) ||
+      /microsoft/i.test(facts.procVersion))
+  if (isWsl && !/wsl2|microsoft-standard-wsl2/i.test(`${facts.osRelease} ${facts.procVersion}`)) {
     errors.push('WSL was detected, but the kernel does not identify itself as WSL2')
   }
 
@@ -185,74 +238,91 @@ export function inspectToolchain({ requireDependencies = false } = {}) {
     errors.push('package.json must pin packageManager to an exact pnpm version')
   }
 
-  const pnpmPath = findPnpm()
-  let pnpmRealPath = ''
-  if (!pnpmPath) {
-    errors.push('native pnpm is not available on PATH')
-  } else {
-    try {
-      pnpmRealPath = realpathSync(pnpmPath)
-    } catch (error) {
-      errors.push(`pnpm path cannot be resolved: ${error instanceof Error ? error.message : error}`)
-    }
+  const platformLabel = facts.detectedPlatform === 'linux' ? 'Linux ' : ''
+  if (!facts.pnpmPath) {
+    errors.push(`native ${platformLabel}pnpm is not available on PATH`)
+  } else if (facts.pnpmResolutionError) {
+    errors.push(`pnpm path cannot be resolved: ${facts.pnpmResolutionError}`)
   }
 
   if (
-    pnpmRealPath &&
-    (isMountedWindowsPath(pnpmRealPath) || /\.(?:cmd|exe)$/i.test(pnpmRealPath))
+    facts.pnpmRealPath &&
+    (isMountedWindowsPath(facts.pnpmRealPath) || /\.(?:cmd|exe)$/i.test(facts.pnpmRealPath))
   ) {
-    errors.push(`pnpm resolves to a Windows tool instead of native WSL2 pnpm: ${pnpmRealPath}`)
-  } else if (pnpmRealPath && packageManagerMatch) {
-    const result = spawnSync(pnpmRealPath, ['--version'], { encoding: 'utf8', env: process.env })
-    const actualVersion = result.status === 0 ? result.stdout.trim() : ''
+    errors.push(
+      `pnpm resolves to a Windows tool instead of native WSL2 pnpm: ${facts.pnpmRealPath}`,
+    )
+  } else if (facts.pnpmRealPath && packageManagerMatch) {
     const expectedVersion = packageManagerMatch[1]
-    if (actualVersion !== expectedVersion) {
+    if (facts.pnpmVersion !== expectedVersion) {
       errors.push(
-        result.error
-          ? `pnpm could not execute as a native tool: ${result.error.message}`
-          : `pnpm ${expectedVersion} is required; detected ${actualVersion || 'an unusable pnpm executable'}`,
+        facts.pnpmExecutionError
+          ? `pnpm could not execute as a native ${platformLabel}tool: ${facts.pnpmExecutionError}`
+          : `pnpm ${expectedVersion} is required; detected ${facts.pnpmVersion || 'an unusable pnpm executable'}`,
       )
     }
   }
 
-  const virtualStore = join(repositoryRoot, 'node_modules', '.pnpm')
-  if (existsSync(virtualStore)) {
-    if (supportedArches?.has(detectedArch)) {
+  if (facts.virtualStoreExists) {
+    if (facts.detectedPlatform === 'linux' || supportedDarwinHost) {
       errors.push(
-        ...dependencyTreeErrors(readdirSync(virtualStore), detectedPlatform, detectedArch, {
-          libc: detectLibc(),
-          required: requireDependencies,
-        }),
+        ...dependencyTreeErrors(
+          facts.virtualStoreEntries,
+          facts.detectedPlatform,
+          facts.detectedArch,
+          { libc: facts.libc, required: requireDependencies },
+        ),
       )
     }
   } else if (requireDependencies) {
-    errors.push('node_modules is missing; run pnpm install --frozen-lockfile')
+    errors.push(
+      facts.detectedPlatform === 'linux'
+        ? 'node_modules is missing; run pnpm install --frozen-lockfile from WSL2'
+        : 'node_modules is missing; run pnpm install --frozen-lockfile',
+    )
   }
 
-  return { errors, isWsl, pnpmPath: pnpmRealPath || pnpmPath }
+  return {
+    errors,
+    isWsl,
+    pnpmPath: facts.pnpmRealPath || facts.pnpmPath,
+    detectedPlatform: facts.detectedPlatform,
+    nodeVersion: facts.nodeVersion,
+  }
 }
 
-function main() {
-  const requireDependencies = process.argv.includes('--dependencies')
-  const result = inspectToolchain({ requireDependencies })
+export function inspectToolchain(options = {}) {
+  return inspectToolchainFacts(collectHostFacts(), options)
+}
 
+export function formatPreflightResult(result) {
   if (result.errors.length > 0) {
-    const docsLabel = platform() === 'darwin' ? 'macOS' : 'WSL2'
-    console.error('Toolchain preflight failed:')
-    for (const error of result.errors) console.error(`- ${error}`)
-    console.error(`\nSee docs/DEVELOPMENT.md for the native ${docsLabel} setup and cleanup steps.`)
-    process.exitCode = 1
-    return
+    const docsLabel = result.detectedPlatform === 'darwin' ? 'macOS' : 'WSL2'
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Toolchain preflight failed:\n${result.errors.map((error) => `- ${error}`).join('\n')}\n\nSee docs/DEVELOPMENT.md for the native ${docsLabel} setup and cleanup steps.\n`,
+    }
   }
 
   const environment = result.isWsl
     ? 'WSL2'
-    : platform() === 'darwin'
+    : result.detectedPlatform === 'darwin'
       ? 'macOS arm64'
       : 'native Linux'
-  console.log(
-    `Toolchain preflight passed (${environment}, Node ${process.version}, pnpm at ${result.pnpmPath}).`,
-  )
+  return {
+    exitCode: 0,
+    stdout: `Toolchain preflight passed (${environment}, Node ${result.nodeVersion}, pnpm at ${result.pnpmPath}).\n`,
+    stderr: '',
+  }
+}
+
+function main() {
+  const requireDependencies = process.argv.includes('--dependencies')
+  const output = formatPreflightResult(inspectToolchain({ requireDependencies }))
+  if (output.stdout) process.stdout.write(output.stdout)
+  if (output.stderr) process.stderr.write(output.stderr)
+  process.exitCode = output.exitCode
 }
 
 if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) main()
