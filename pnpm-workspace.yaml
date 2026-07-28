@@ -8,3 +8,7 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - pnpm@11.17.0
+
+overrides:
+  'epub2>adm-zip': '>=0.6.0'
+  'esbuild@>=0.27.3 <0.28.1': '>=0.28.1'
