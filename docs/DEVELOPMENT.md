@@ -140,18 +140,30 @@ A different Xcode/SDK image produces a different binary hash, so the macOS CI la
 **source archive sha256** and the **7.0.2 version**, not an exact binary hash. The Linux amd64 pin
 in the same manifest is the value the Ubuntu lane verifies and is kept beside the darwin entry.
 
-### What runs on the macOS CI lane
+### Portable macOS CI gate
 
-The `validate-macos` lane (runs-on `macos-15-arm64`) runs: the frozen install, the generalized
-preflight, Biome checks, the workspace typecheck (every package, strict TypeScript 7), the portable
-preflight and manifest node tests, the workspace build (every package), and exact FFmpeg/ffprobe
-7.0.2 version probes after building from source. It does **not** run the `vitest` runtime suite or
-the WSL2 topology / WSL installer tests — those assert Linux/WSL-only behavior (file `flock`/
-`fcntl` durability, process-group signalling, GPU-lease holder reaping, the Qwen worker's
-`prctl(PR_SET_PDEATHSIG)`, ext4/DrvFS filesystem facts, `/proc/version`, `sha256sum`) that are
-category errors on Darwin and are owned by the runtime-topology track (#107/#111). Workspace
-TypeScript correctness and buildability are still covered on macOS by the typecheck and build
-steps. No model weights, voices, books, or generated audio are downloaded in CI.
+The `validate-macos` lane (runs-on `macos-15-arm64`) is the portable install/toolchain gate owned
+by issue #108. It runs this exact ordered command set, pinned by
+[`config/macos-ci-gate.json`](../config/macos-ci-gate.json) and its policy test:
+
+```sh
+bash scripts/build-ffmpeg-macos.sh
+pnpm install --frozen-lockfile
+pnpm preflight
+pnpm exec biome check .
+pnpm typecheck
+node --test scripts/test/preflight-toolchain.test.mjs scripts/test/ffmpeg-artifacts.test.mjs scripts/test/macos-ci-gate.test.mjs
+pnpm build
+# Exact installed ffmpeg and ffprobe 7.0.2 probes follow in the workflow.
+```
+
+This gate is explicitly **not equivalent to `pnpm check`**. Root `pnpm check` remains the
+Linux/WSL2 gate until #107 and #111–#113 provide portable Darwin contracts. The excluded surfaces
+are WSL2 installer behavior, `flock`, `/proc` process identity, ext4/DrvFS qualification and
+`findmnt`, Bash 4 process-tree assumptions, Linux process-group/reaper semantics, and Python
+`prctl` parent-death signalling. The committed policy fails if the macOS commands are missing,
+reordered, replaced, or supplemented by an unnamed substitute, and it pins the existing Ubuntu
+job bytes separately. No model weights, voices, books, or generated audio are downloaded in CI.
 
 ## VoxCPM2 runtime spike
 
