@@ -151,6 +151,17 @@ test('the darwin-arm64 entry pins the upstream source archive and a recorded ref
   )
 })
 
+test('every build-script temporary path uses a BSD/GNU-compatible XXXXXX template', () => {
+  const script = readFileSync(buildScriptPath, 'utf8')
+  assert.equal(script.includes('mktemp -t '), false)
+  assert.deepEqual(script.match(/^.*mktemp.*$/gmu), [
+    `  pin_file="$(mktemp "\${TMPDIR:-/tmp}/light-novel-ffmpeg-source-pin.stdout.XXXXXX")"`,
+    `  error_file="$(mktemp "\${TMPDIR:-/tmp}/light-novel-ffmpeg-source-pin.stderr.XXXXXX")"`,
+    `  flags_file="$(mktemp "\${TMPDIR:-/tmp}/light-novel-ffmpeg-flags.XXXXXX")"`,
+    `  work_dir="$(mktemp -d "\${TMPDIR:-/tmp}/light-novel-ffmpeg.XXXXXX")"`,
+  ])
+})
+
 test('the Bash 3.2 build path uses only the manifest ordered configure flags', () => {
   const baseline = manifest.builds['darwin-arm64'].configureFlags
   const variants = [

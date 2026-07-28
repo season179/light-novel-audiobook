@@ -35,8 +35,8 @@ ffmpeg_read_source_pin() {
 ffmpeg_load_source_pin() {
   local repository_root="$1"
   local pin_file error_file error_line loaded_url loaded_sha loaded_version
-  pin_file="$(mktemp -t light-novel-ffmpeg-source-pin)"
-  error_file="$pin_file.error"
+  pin_file="$(mktemp "${TMPDIR:-/tmp}/light-novel-ffmpeg-source-pin.stdout.XXXXXX")"
+  error_file="$(mktemp "${TMPDIR:-/tmp}/light-novel-ffmpeg-source-pin.stderr.XXXXXX")"
 
   if ! ffmpeg_read_source_pin "$repository_root" > "$pin_file" 2> "$error_file"; then
     while IFS= read -r error_line || [[ -n "${error_line:-}" ]]; do
@@ -70,7 +70,7 @@ ffmpeg_configure_source() {
   local flags_file flag
   local -a configure_flags=()
 
-  flags_file="$(mktemp -t light-novel-ffmpeg-flags)"
+  flags_file="$(mktemp "${TMPDIR:-/tmp}/light-novel-ffmpeg-flags.XXXXXX")"
   if ! node "$repository_root/scripts/ffmpeg-build-manifest.mjs" flags \
     "$repository_root/config/ffmpeg-artifacts.json" > "$flags_file"; then
     rm -f "$flags_file"
@@ -153,7 +153,7 @@ ffmpeg_main() {
   printf '  install:  %s\n' "$install_prefix"
 
   local work_dir archive download
-  work_dir="$(mktemp -d -t light-novel-ffmpeg)"
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/light-novel-ffmpeg.XXXXXX")"
   FFMPEG_CLEANUP_WORK_DIR="$work_dir"
   FFMPEG_CLEANUP_INSTALL_PREFIX="$install_prefix"
   trap ffmpeg_cleanup EXIT
