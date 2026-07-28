@@ -161,9 +161,68 @@ export interface DirectionRunResult {
   readonly rawResponseSha256: string | null
   readonly dispatchToFirstTokenMs: number | null
   readonly dispatchToCompleteMs: number
+  /** True only if the --cancel-after-ms timer callback actually fired during this run. */
+  readonly cancelTimerFired: boolean
+  /** True only if the request timeout actually fired during this run. */
+  readonly timedOut: boolean
 }
 
-const SSE_TAIL_LIMIT_BYTES = 256 * 1024
+/** Bounded structural summary of one consumed stream event — type/code/name only, no payloads. */
+export interface FailureEventSummary {
+  readonly type: string | null
+  readonly code: string | null
+  readonly name: string | null
+}
+
+/**
+ * Diagnostics captured during a direction run that failed at a client-side gate
+ * (malformed/schema/stream/undefined-output) or via cancellation/timeout. These are the fields
+ * the normal {@link DirectionRunResult} would carry, but that object is never built on the
+ * failure paths; this context is returned alongside the classified error so spike.ts finalize
+ * can emit it. Every field is stable and deterministically bounded.
+ *
+ * Privacy: {@link FailureContext.sseTail} is a bounded slice of the raw SSE RESPONSE body and
+ * may contain generated or source-like text. It must live only in the cache-local, gitignored
+ * evidence directory and must never be committed or shared. Request BODY text is never
+ * persisted (only its sha256 in {@link TransmittedRequestRecord.bodySha256}).
+ */
+export interface FailureContext {
+  readonly responseStatus: number | null
+  readonly rawResponseBytes: number
+  readonly rawResponseSha256: string | null
+  readonly sseTail: string
+  readonly sseTailBytes: number
+  readonly sseTailLimitBytes: number
+  readonly eventSequence: readonly FailureEventSummary[]
+  readonly eventSequenceLimit: number
+  readonly eventSequenceTruncated: boolean
+  readonly terminalEvent: FailureEventSummary | null
+  readonly transmitted: TransmittedRequestRecord
+  readonly requestPayloadSha256: string
+  readonly cancelRequested: boolean
+  readonly cancelTimerFired: boolean
+  readonly timeoutFired: boolean
+  readonly callerSignalAborted: boolean
+  readonly dispatchToFirstTokenMs: number | null
+  readonly elapsedMs: number
+}
+
+/**
+ * runDirection never throws for director/protocol/cancellation failures: it returns a union so
+ * the captured diagnostics survive to the caller even when the normal result is unreachable.
+ * The `failed.error` is always a real {@link DirectorError} (never a wrapper), so
+ * `error instanceof DirectorError` checks in spike.ts keep working.
+ */
+export type RunDirectionOutcome =
+  | { readonly kind: 'ok'; readonly result: DirectionRunResult }
+  | {
+      readonly kind: 'failed'
+      readonly error: DirectorError
+      readonly failureContext: FailureContext
+    }
+
+const SSE_TAIL_LIMIT_BYTES = 64 * 1024
+const EVENT_SEQUENCE_LIMIT = 64
 
 /**
  * Wire-level view of the TanStack AI stream events this driver consumes. The library's own
@@ -220,6 +279,19 @@ export interface RunDirectionOptions {
   readonly signal?: AbortSignal | undefined
 }
 
+function fallbackTransmitted(baseUrl: string): TransmittedRequestRecord {
+  return {
+    url: `${baseUrl}/chat/completions`,
+    bodySha256: '',
+    model: null,
+    stream: null,
+    streamOptions: null,
+    responseFormat: null,
+    responseFormatSha256: null,
+    sampling: { temperature: null, seed: null, topP: null, maxTokens: null },
+  }
+}
+
 /**
  * Drives one representative direction through the exact production-shaped path: TanStack AI
  * chat() with a streaming outputSchema (which places the strict JSON-schema response_format on
@@ -228,7 +300,7 @@ export interface RunDirectionOptions {
  * transmitted request body and tees the SSE stream so token usage is auditable independent of
  * the SDK's own parsing.
  */
-export async function runDirection(options: RunDirectionOptions): Promise<DirectionRunResult> {
+export async function runDirection(options: RunDirectionOptions): Promise<RunDirectionOutcome> {
   const { request } = options
   const payload = requestPayload(request)
   const requestPayloadSha256 = canonicalSha256({
@@ -247,7 +319,10 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
   let responseStatus: number | null = null
   const rawResponseHash = createHash('sha256')
   let rawResponseBytes = 0
-  let sseTail = ''
+  // Byte-true tail: the last SSE_TAIL_LIMIT_BYTES raw response BYTES (not UTF-16 code units), so
+  // the persisted tail cannot exceed the documented cap for multibyte (e.g. CJK) output.
+  let sseTailRaw: Uint8Array = new Uint8Array(0)
+  const decodeTailText = (): string => new TextDecoder().decode(sseTailRaw)
 
   const capturingFetch: typeof globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input)
@@ -280,12 +355,17 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
       }
     }
     if (response.body === null) return response
-    const decoder = new TextDecoder()
     const tap = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         rawResponseHash.update(chunk)
         rawResponseBytes += chunk.length
-        sseTail = (sseTail + decoder.decode(chunk, { stream: true })).slice(-SSE_TAIL_LIMIT_BYTES)
+        // Append raw bytes and keep only the last SSE_TAIL_LIMIT_BYTES. Operating on bytes (not
+        // decoded text) means the cap holds for multibyte output and a split/dangling sequence is
+        // represented faithfully when the tail is decoded once at the end with a fresh decoder.
+        const combined = new Uint8Array(sseTailRaw.length + chunk.length)
+        combined.set(sseTailRaw, 0)
+        combined.set(chunk, sseTailRaw.length)
+        sseTailRaw = combined.subarray(Math.max(0, combined.length - SSE_TAIL_LIMIT_BYTES))
         controller.enqueue(chunk)
       },
     })
@@ -307,7 +387,13 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
 
   const controller = new AbortController()
   const onCallerAbort = (): void => controller.abort(options.signal?.reason)
-  options.signal?.addEventListener('abort', onCallerAbort, { once: true })
+  if (options.signal?.aborted === true) {
+    // Honor a caller signal that was already aborted before this run started (e.g. a SIGTERM that
+    // landed during startup), instead of starting a run evidence would later claim ran under it.
+    controller.abort(options.signal.reason)
+  } else {
+    options.signal?.addEventListener('abort', onCallerAbort, { once: true })
+  }
   let timedOut = false
   let cancelledByDriver = false
   const timeoutTimer = setTimeout(() => {
@@ -328,6 +414,48 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
   let firstTokenMs: number | null = null
   let output: DirectionWireOutput | undefined
   let runFinishedUsage: unknown = null
+  const eventSequence: FailureEventSummary[] = []
+  let eventSequenceTruncated = false
+  let terminalEvent: FailureEventSummary | null = null
+  const summarize = (event: StreamWireEvent): FailureEventSummary => ({
+    type: typeof event.type === 'string' ? event.type : null,
+    code: typeof event.code === 'string' ? event.code : null,
+    name: typeof event.name === 'string' ? event.name : null,
+  })
+  const recordEvent = (event: StreamWireEvent): void => {
+    // Keep the LAST EVENT_SEQUENCE_LIMIT events (a ring buffer): the events nearest the failure
+    // matter more for triage than the stream opening. Once the cap is reached, drop the oldest.
+    if (eventSequence.length >= EVENT_SEQUENCE_LIMIT) {
+      eventSequenceTruncated = true
+      eventSequence.shift()
+    }
+    eventSequence.push(summarize(event))
+  }
+  const buildFailureContext = (): FailureContext => ({
+    responseStatus,
+    rawResponseBytes,
+    rawResponseSha256: rawResponseBytes > 0 ? rawResponseHash.digest('hex') : null,
+    sseTail: decodeTailText(),
+    sseTailBytes: sseTailRaw.length,
+    sseTailLimitBytes: SSE_TAIL_LIMIT_BYTES,
+    eventSequence: [...eventSequence],
+    eventSequenceLimit: EVENT_SEQUENCE_LIMIT,
+    eventSequenceTruncated,
+    terminalEvent,
+    transmitted: transmitted ?? fallbackTransmitted(options.baseUrl),
+    requestPayloadSha256,
+    cancelRequested: options.cancelAfterMs !== undefined,
+    cancelTimerFired: cancelledByDriver,
+    timeoutFired: timedOut,
+    callerSignalAborted: options.signal?.aborted === true,
+    dispatchToFirstTokenMs: firstTokenMs,
+    elapsedMs: Math.round(performance.now() - dispatchAt),
+  })
+  const failed = (error: DirectorError): RunDirectionOutcome => ({
+    kind: 'failed',
+    error,
+    failureContext: buildFailureContext(),
+  })
   try {
     const stream = chat({
       adapter,
@@ -345,6 +473,7 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
       },
     })
     for await (const event of stream as AsyncIterable<StreamWireEvent>) {
+      recordEvent(event)
       if (event.type === 'TEXT_MESSAGE_CONTENT' && firstTokenMs === null) {
         firstTokenMs = Math.round(performance.now() - dispatchAt)
       }
@@ -352,22 +481,29 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
         runFinishedUsage = event.usage ?? null
       }
       if (event.type === 'RUN_ERROR') {
+        terminalEvent = summarize(event)
         if (event.code === 'structured-output-parse-failed') {
-          throw new DirectorError('malformed_output', 'MLX spike returned malformed JSON', false, {
-            cause: event,
-          })
-        }
-        if (event.code === 'structured-output-validation-failed') {
-          throw new DirectorError(
-            'schema_validation',
-            'MLX spike output failed schema validation',
-            false,
-            { cause: event },
+          return failed(
+            new DirectorError('malformed_output', 'MLX spike returned malformed JSON', false, {
+              cause: event,
+            }),
           )
         }
-        throw new DirectorError('stream', 'MLX spike response stream failed', true, {
-          cause: event,
-        })
+        if (event.code === 'structured-output-validation-failed') {
+          return failed(
+            new DirectorError(
+              'schema_validation',
+              'MLX spike output failed schema validation',
+              false,
+              { cause: event },
+            ),
+          )
+        }
+        return failed(
+          new DirectorError('stream', 'MLX spike response stream failed', true, {
+            cause: event,
+          }),
+        )
       }
       if (event.type === 'CUSTOM' && event.name === 'structured-output.complete') {
         output = outputSchema.parse(event.value?.object) as DirectionWireOutput
@@ -377,53 +513,52 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
       throw controller.signal.reason ?? new DOMException('Aborted', 'AbortError')
     }
     if (output === undefined) {
-      throw new DirectorError('malformed_output', 'MLX spike response did not complete')
+      return failed(new DirectorError('malformed_output', 'MLX spike response did not complete'))
+    }
+
+    const dispatchToCompleteMs = Math.round(performance.now() - dispatchAt)
+    // Production gate order (gemma-director-model.ts): mechanical source-echo repair first, then
+    // deterministic validateDirectionOutput as the final authority. Both run inside the try so a
+    // fidelity/schema failure (DirectorFidelityError, code 'fidelity') or a thrown repair is
+    // classified and returned as a failed outcome WITH full failure_context, instead of escaping
+    // runDirection and losing every response diagnostic.
+    const repaired = repairMechanicalSourceEcho(output, request)
+    const rawOutputSha256 = canonicalSha256(output)
+    const validatedOutputSha256 = canonicalSha256(repaired.output)
+    const validated = validateDirectionOutput(repaired.output, request, options.confidenceThreshold)
+
+    return {
+      kind: 'ok',
+      result: {
+        validated,
+        output: repaired.output,
+        repairs: repaired.repairs,
+        requestPayloadSha256,
+        rawOutputSha256,
+        validatedOutputSha256,
+        transmitted: transmitted ?? fallbackTransmitted(options.baseUrl),
+        responseStatus,
+        usage: extractSseUsage(decodeTailText()),
+        runFinishedUsage,
+        rawResponseSha256: rawResponseBytes > 0 ? rawResponseHash.digest('hex') : null,
+        dispatchToFirstTokenMs: firstTokenMs,
+        dispatchToCompleteMs,
+        cancelTimerFired: cancelledByDriver,
+        timedOut,
+      },
     }
   } catch (error: unknown) {
-    throw classifyDirectorError(error, {
-      timedOut,
-      callerCancelled: cancelledByDriver || options.signal?.aborted === true,
-      operation: 'MLX spike direction request',
-    })
+    return failed(
+      classifyDirectorError(error, {
+        timedOut,
+        callerCancelled: cancelledByDriver || options.signal?.aborted === true,
+        operation: 'MLX spike direction request',
+      }),
+    )
   } finally {
     clearTimeout(timeoutTimer)
     if (cancelTimer !== undefined) clearTimeout(cancelTimer)
     options.signal?.removeEventListener('abort', onCallerAbort)
-  }
-  const dispatchToCompleteMs = Math.round(performance.now() - dispatchAt)
-
-  // Production gate order (gemma-director-model.ts): mechanical source-echo repair first,
-  // then deterministic validateDirectionOutput as the final authority.
-  const repaired = repairMechanicalSourceEcho(output, request)
-  const rawOutputSha256 = canonicalSha256(output)
-  const validatedOutputSha256 = canonicalSha256(repaired.output)
-  const validated = validateDirectionOutput(repaired.output, request, options.confidenceThreshold)
-
-  return {
-    validated,
-    output: repaired.output,
-    repairs: repaired.repairs,
-    requestPayloadSha256,
-    rawOutputSha256,
-    validatedOutputSha256,
-    transmitted:
-      transmitted ??
-      ({
-        url: `${options.baseUrl}/chat/completions`,
-        bodySha256: '',
-        model: null,
-        stream: null,
-        streamOptions: null,
-        responseFormat: null,
-        responseFormatSha256: null,
-        sampling: { temperature: null, seed: null, topP: null, maxTokens: null },
-      } satisfies TransmittedRequestRecord),
-    responseStatus,
-    usage: extractSseUsage(sseTail),
-    runFinishedUsage,
-    rawResponseSha256: rawResponseBytes > 0 ? rawResponseHash.digest('hex') : null,
-    dispatchToFirstTokenMs: firstTokenMs,
-    dispatchToCompleteMs,
   }
 }
 

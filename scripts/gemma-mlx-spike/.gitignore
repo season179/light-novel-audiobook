@@ -1,0 +1,6 @@
+# Evidence and server logs are cache-local diagnostics and must never be committed:
+# failure_context.sse_tail may contain generated/source-like response text, and
+# mlx-lm-server.log contains full request/response traffic. Defaults already write these
+# outside the repo (~/.cache/light-novel-audiobook/gemma-mlx-spike/...); this guards a local --out.
+/gemma-mlx-spike-evidence.json
+/mlx-lm-server.log

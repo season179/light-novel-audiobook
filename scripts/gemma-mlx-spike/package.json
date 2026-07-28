@@ -6,7 +6,8 @@
   "description": "Self-contained issue #106 macOS spike driver: SuperGemma MLX direction through the production-shaped OpenAI-compatible client gates. Installs locally with npm; never touches the workspace pnpm lockfile or preinstall gate.",
   "scripts": {
     "spike": "tsx src/spike.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test"
   },
   "dependencies": {
     "@tanstack/ai": "0.42.0",

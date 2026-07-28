@@ -9,18 +9,22 @@ import { canonicalSha256 } from '../../../packages/gemma-director/src/canonical-
 import { DirectorError } from '../../../packages/gemma-director/src/errors.js'
 import { DirectorFidelityError } from '../../../packages/gemma-director/src/validation.js'
 import { parseArgs, SPIKE_HOST, SPIKE_PORT, type SpikeConfig } from './args.js'
+import { cancellationEvidence } from './cancellation-evidence.js'
 import {
   collectHostMemoryFacts,
   type Metric,
   metric,
   portIsFree,
+  type RssPeak,
   RssSampler,
 } from './collectors.js'
 import { prepareOutDir, type SpikeEvidence, writeEvidence } from './evidence.js'
 import {
   type DirectionRunResult,
+  type FailureContext,
   loadRequest,
   PROMPT_VERSION,
+  type RunDirectionOutcome,
   requestPayload,
   runDirection,
   SAMPLING,
@@ -218,6 +222,53 @@ function errorSection(error: unknown): Record<string, unknown> {
   return { name: 'unknown', message: String(error) }
 }
 
+/**
+ * Stable, documented evidence shape for a preserved direction failure. Keeps the bounded raw
+ * SSE tail (privacy-sensitive) separate from the always-shareable event sequence, and makes
+ * request vs response, and observed-error vs terminal-event-code, directly comparable so model
+ * output can be told apart from an adapter parsing defect.
+ */
+function serializeFailureContext(fc: FailureContext): Record<string, unknown> {
+  return {
+    response_status: fc.responseStatus,
+    raw_response_bytes: fc.rawResponseBytes,
+    raw_response_sha256: fc.rawResponseSha256,
+    sse_tail: {
+      bytes: fc.sseTailBytes,
+      limit_bytes: fc.sseTailLimitBytes,
+      truncated: fc.rawResponseBytes > fc.sseTailLimitBytes,
+      text: fc.sseTail,
+      privacy_note:
+        'Bounded raw SSE response tail (last <= limit_bytes window). MAY contain generated or ' +
+        'source-like text. Lives only in the cache-local, gitignored evidence directory and must ' +
+        'never be committed or shared. Request body text is never persisted (only its sha256).',
+    },
+    event_sequence: {
+      events: fc.eventSequence,
+      limit: fc.eventSequenceLimit,
+      truncated: fc.eventSequenceTruncated,
+      collector: 'type/code/name of each consumed @tanstack/ai stream event; no deltas or payloads',
+    },
+    terminal_event: fc.terminalEvent,
+    transmitted: fc.transmitted,
+    request_payload_sha256: fc.requestPayloadSha256,
+    cancellation_state: {
+      cancel_requested: fc.cancelRequested,
+      cancel_timer_fired: fc.cancelTimerFired,
+      timeout_fired: fc.timeoutFired,
+      caller_signal_aborted: fc.callerSignalAborted,
+    },
+    timing: {
+      dispatch_to_first_token_ms: fc.dispatchToFirstTokenMs,
+      elapsed_ms: fc.elapsedMs,
+    },
+    purpose:
+      'Preserved across the runDirection failure path so model/protocol output can be ' +
+      'distinguished from adapter parsing failure (compare observed_error_code and ' +
+      'terminal_event.code against raw_response_bytes/sha256 and the event sequence).',
+  }
+}
+
 async function main(): Promise<void> {
   const config: SpikeConfig = parseArgs(process.argv.slice(2))
   const startedAt = new Date().toISOString()
@@ -387,12 +438,28 @@ async function main(): Promise<void> {
           {
             schema: 'gemma-mlx-spike-evidence@1',
             issue: 106,
-            phase: config.cancelAfterMs === undefined ? 'measurement' : 'cancellation',
+            // Crash-path phase is derived only from a recorded terminating signal, never from
+            // --cancel-after-ms being supplied; in a crash the cancel-timer fired state is
+            // genuinely unknowable, so it is reported as null rather than inferred.
+            phase: terminatingSignal !== null ? 'cancellation' : 'measurement',
             result: 'error',
             startedAt,
             completedAt: new Date().toISOString(),
             ...baseEvidence,
             error: errorSection(error),
+            cancellation: {
+              cancel_requested: config.cancelAfterMs !== undefined,
+              cancel_after_ms: config.cancelAfterMs ?? null,
+              cancel_timer_fired: null,
+              request_cancellation_signal_fired: terminatingSignal !== null,
+              terminating_signal: terminatingSignal,
+              exercised: terminatingSignal !== null,
+              observed_error_code: null,
+              note:
+                'Best-effort synchronous write from the uncaughtException handler; the cancel ' +
+                'timer fired state is unknown here (null), so exercised reflects only a known ' +
+                'terminating signal.',
+            },
             note:
               'Written synchronously from the uncaughtException handler after a best-effort ' +
               'process-group SIGKILL; cleanup was NOT verified in this path.',
@@ -416,24 +483,114 @@ async function main(): Promise<void> {
   process.once('SIGTERM', () => onSignal('SIGTERM'))
 
   let sampler: RssSampler | undefined
+  let serverPid: number | undefined
+  let listenerReadyMs: number | null = null
+  let healthFirstOkMs: number | null = null
+
+  // Centralizes every run/protocol/cancel/startup failure path so the preserved failure_context
+  // (when a direction run failed) plus truthful cancellation state and verified cleanup always
+  // reach finalize, even though runDirection no longer throws for gate/cancel failures. Note: if
+  // this itself throws (e.g. writeEvidence fails) the outer catch re-invokes it; server.shutdown()
+  // is idempotent (#shutdownPromise ??=) so that benign re-entrancy is safe by design.
+  const recordRunFailure = async (
+    error: unknown,
+    failureContext: FailureContext | null,
+  ): Promise<never> => {
+    sampler?.stop()
+    let peak: RssPeak | null = null
+    try {
+      await sampler?.sample()
+      peak = sampler?.peak ?? null
+    } catch {
+      peak = null
+    }
+    let cleanup: unknown = null
+    try {
+      cleanup = await server.shutdown()
+    } catch (cleanupError: unknown) {
+      cleanup = { failed: errorSection(cleanupError) }
+    }
+    const cancelled = error instanceof DirectorError && error.code === 'cancelled'
+    const cancelTimerFired = failureContext?.cancelTimerFired ?? false
+    const { phase, cancellation } = cancellationEvidence({
+      cancelAfterMs: config.cancelAfterMs,
+      cancelTimerFired,
+      terminatingSignal,
+      observedErrorCode: error instanceof DirectorError ? error.code : null,
+    })
+    const cleanupVerified =
+      typeof cleanup === 'object' &&
+      cleanup !== null &&
+      (cleanup as { cleanupVerified?: boolean }).cleanupVerified === true
+    // A rejected client-side gate is a measurement outcome (NO-GO evidence), not a driver error.
+    const gateFailure =
+      error instanceof DirectorError &&
+      (error.code === 'malformed_output' ||
+        error.code === 'schema_validation' ||
+        error.code === 'fidelity')
+    const result: SpikeEvidence['result'] =
+      cancelled && cleanupVerified
+        ? 'cancelled-clean'
+        : cancelled
+          ? 'error' // cancellation fired but cleanup could not be verified — never report clean
+          : gateFailure
+            ? 'client-gates-failed'
+            : 'error'
+    const extra: Record<string, unknown> = {
+      error: errorSection(error),
+      cancellation,
+      cleanup,
+      // Partial startup/RSS context so a gate/cancel failure remains auditable without the full
+      // runs/gates/memory sections (those are emitted only on a clean measurement completion).
+      startup_partial: {
+        server_pid: serverPid ?? null,
+        listener_ready_ms: listenerReadyMs,
+        health_first_ok_ms: healthFirstOkMs,
+        note:
+          'Partial startup timing preserved on failure; full runs/gates/memory_at_peak are only ' +
+          'emitted when both requests complete cleanly.',
+      },
+      memory_at_failure:
+        peak === null
+          ? { sampled: false }
+          : {
+              sampled: true,
+              server_family_peak_rss_bytes: peak.rssBytes,
+              peak_observed_at_monotonic_ms: peak.observedAtMonotonicMs,
+              samples: peak.samples,
+            },
+      note:
+        cancelled && cleanupVerified
+          ? 'Cancellation fired and owned-server cleanup verified: no descendant, port free.'
+          : gateFailure
+            ? 'Client-side gate rejected the model output; failure_context preserves the raw response diagnostics.'
+            : 'Run failed before clean measurement completion; see error and cleanup.',
+    }
+    if (failureContext !== null) {
+      extra.failure_context = serializeFailureContext(failureContext)
+    }
+    return await finalize(phase, result, extra)
+  }
+
   try {
     const spawnAt = performance.now()
     server.start()
-    const serverPid = server.processId
+    serverPid = server.processId
     if (serverPid === undefined) throw new Error('Owned mlx_lm.server has no process ID')
     sampler = new RssSampler(serverPid)
     sampler.start()
 
-    const { listenerReadyMs } = await server.waitForListener(config.startupTimeoutMs)
+    const listener = await server.waitForListener(config.startupTimeoutMs)
+    listenerReadyMs = listener.listenerReadyMs
     // /health answers unconditionally and proves nothing about model load; it is recorded only
     // to make the lazy-load delta explicit next to the first-request measurement.
     const healthResponse = await fetch(`http://${SPIKE_HOST}:${SPIKE_PORT}/health`, {
       signal: AbortSignal.timeout(5_000),
     })
-    const healthFirstOkMs = healthResponse.ok ? Math.round(performance.now() - spawnAt) : null
+    healthFirstOkMs = healthResponse.ok ? Math.round(performance.now() - spawnAt) : null
 
     const baseUrl = `http://${SPIKE_HOST}:${SPIKE_PORT}/v1`
-    const runOnce = (name: string): Promise<DirectionRunResult> =>
+    const runOnce = (name: string): Promise<RunDirectionOutcome> =>
       runDirection({
         baseUrl,
         request,
@@ -445,11 +602,18 @@ async function main(): Promise<void> {
 
     // Request 1 is cold: mlx_lm.server loads weights lazily on this first request, so its
     // dispatch-to-first-token time is the cold model load measurement (not /health).
-    const coldResult = await runOnce('cold')
-    const runs: RunSection[] = [{ name: 'cold', result: coldResult }]
+    const coldOutcome = await runOnce('cold')
+    if (coldOutcome.kind === 'failed') {
+      return await recordRunFailure(coldOutcome.error, coldOutcome.failureContext)
+    }
+    const runs: RunSection[] = [{ name: 'cold', result: coldOutcome.result }]
     // Request 2 is warm: representative prompt/generation throughput without load conflation.
     if (config.cancelAfterMs === undefined) {
-      runs.push({ name: 'warm', result: await runOnce('warm') })
+      const warmOutcome = await runOnce('warm')
+      if (warmOutcome.kind === 'failed') {
+        return await recordRunFailure(warmOutcome.error, warmOutcome.failureContext)
+      }
+      runs.push({ name: 'warm', result: warmOutcome.result })
     }
 
     const pressureAtPeak = (await collectHostMemoryFacts()).memoryPressureFreePercent
@@ -460,90 +624,53 @@ async function main(): Promise<void> {
 
     const sections: Record<string, unknown> = {}
     for (const run of runs) sections[run.name] = runSection(run)
-    await finalize(
-      config.cancelAfterMs === undefined ? 'measurement' : 'cancellation',
-      cleanup.cleanupVerified ? 'client-gates-passed' : 'client-gates-failed',
-      {
-        startup: {
-          listener_ready: metric(
-            listenerReadyMs,
-            'TCP connect poll to the owned 127.0.0.1:8090 listener',
-            'ms',
-          ),
-          health_first_ok: metric(
-            healthFirstOkMs,
-            'GET /health after listener ready',
-            'ms',
-            'mlx_lm.server answers /health unconditionally; this is NOT model load. Cold model ' +
-              'load is the cold run dispatch-to-first-token measurement.',
-          ),
-          server_pid: serverPid,
-        },
-        runs: sections,
-        gates: gateSection(runs),
-        memory_at_peak: {
-          server_family_peak_rss: metric(
-            peak.rssBytes,
-            'ps -axo pid,ppid,rss family walk, 250 ms sampler',
-            'bytes',
-            `peak observed ${peak.observedAtMonotonicMs} ms after sampler start across ${peak.samples} samples; ` +
-              `family pids at peak: ${peak.familyPids.join(', ')}`,
-          ),
-          memory_pressure_free_percent_at_peak: pressureAtPeak,
-        },
-        cleanup: {
-          ...cleanup,
-          port_free_after: metric(cleanup.portFree, 'node:net bind test after shutdown', 'boolean'),
-          collector:
-            'process-group SIGTERM, bounded SIGKILL fallback, ps family check, port bind test',
-        },
-      },
-    )
-  } catch (error: unknown) {
-    sampler?.stop()
-    let cleanup: unknown = null
-    try {
-      cleanup = await server.shutdown()
-    } catch (cleanupError: unknown) {
-      cleanup = { failed: errorSection(cleanupError) }
-    }
-    const cancelled = error instanceof DirectorError && error.code === 'cancelled'
-    const phase =
-      config.cancelAfterMs !== undefined || terminatingSignal !== null
-        ? 'cancellation'
-        : 'measurement'
-    const cleanupVerified =
-      typeof cleanup === 'object' &&
-      cleanup !== null &&
-      (cleanup as { cleanupVerified?: boolean }).cleanupVerified === true
-    // A rejected client-side gate is a measurement outcome (NO-GO evidence), not a driver error.
-    const gateFailure =
-      error instanceof DirectorError &&
-      (error.code === 'malformed_output' ||
-        error.code === 'schema_validation' ||
-        error.code === 'fidelity')
-    const result =
-      cancelled && cleanupVerified
-        ? 'cancelled-clean'
-        : cancelled
-          ? 'error' // cancellation was requested but cleanup could not be verified — never report clean
-          : gateFailure
-            ? 'client-gates-failed'
-            : 'error'
-    await finalize(phase, result, {
-      error: errorSection(error),
-      cancellation: {
-        exercised: config.cancelAfterMs !== undefined || terminatingSignal !== null,
-        cancel_after_ms: config.cancelAfterMs ?? null,
-        terminating_signal: terminatingSignal,
-        observed_error_code: error instanceof DirectorError ? error.code : null,
-      },
-      cleanup: cleanup,
-      note:
-        cancelled && cleanupVerified
-          ? 'Cancellation exercised and owned-server cleanup verified: no descendant, port free.'
-          : undefined,
+    // A completed (ok) run cannot have had its cancel timer or timeout fire — either would have
+    // aborted it into the failed path — so phase here is driven by the run's own cancelTimerFired
+    // and any terminating signal, never by the mere presence of --cancel-after-ms.
+    const { phase, cancellation } = cancellationEvidence({
+      cancelAfterMs: config.cancelAfterMs,
+      cancelTimerFired: coldOutcome.result.cancelTimerFired,
+      terminatingSignal,
+      observedErrorCode: null,
     })
+    await finalize(phase, cleanup.cleanupVerified ? 'client-gates-passed' : 'client-gates-failed', {
+      startup: {
+        listener_ready: metric(
+          listenerReadyMs,
+          'TCP connect poll to the owned 127.0.0.1:8090 listener',
+          'ms',
+        ),
+        health_first_ok: metric(
+          healthFirstOkMs,
+          'GET /health after listener ready',
+          'ms',
+          'mlx_lm.server answers /health unconditionally; this is NOT model load. Cold model ' +
+            'load is the cold run dispatch-to-first-token measurement.',
+        ),
+        server_pid: serverPid,
+      },
+      runs: sections,
+      gates: gateSection(runs),
+      cancellation,
+      memory_at_peak: {
+        server_family_peak_rss: metric(
+          peak.rssBytes,
+          'ps -axo pid,ppid,rss family walk, 250 ms sampler',
+          'bytes',
+          `peak observed ${peak.observedAtMonotonicMs} ms after sampler start across ${peak.samples} samples; ` +
+            `family pids at peak: ${peak.familyPids.join(', ')}`,
+        ),
+        memory_pressure_free_percent_at_peak: pressureAtPeak,
+      },
+      cleanup: {
+        ...cleanup,
+        port_free_after: metric(cleanup.portFree, 'node:net bind test after shutdown', 'boolean'),
+        collector:
+          'process-group SIGTERM, bounded SIGKILL fallback, ps family check, port bind test',
+      },
+    })
+  } catch (error: unknown) {
+    return await recordRunFailure(error, null)
   }
 }
 
