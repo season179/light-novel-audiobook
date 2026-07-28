@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "paths": {
+      "@light-novel-audiobook/application": ["./src/workspace-type-shims/application"],
+      "@light-novel-audiobook/domain": ["./src/workspace-type-shims/domain"],
+      "zod": ["./node_modules/zod"],
+      "@tanstack/ai": ["./node_modules/@tanstack/ai"],
+      "@tanstack/ai/*": ["./node_modules/@tanstack/ai/*"],
+      "@tanstack/ai-openai": ["./node_modules/@tanstack/ai-openai"],
+      "@tanstack/ai-openai/*": ["./node_modules/@tanstack/ai-openai/*"]
+    },
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
