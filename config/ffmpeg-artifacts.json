@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "version": "7.0.2",
+  "description": "Pinned FFmpeg/ffprobe 7.0.2 sources for reproducible installs. The linux-amd64 entry mirrors the value used by the Ubuntu CI lane; the darwin-arm64 entry pins the upstream source tarball and ordered configureFlags consumed directly by scripts/build-ffmpeg-macos.sh. The macOS CI lane verifies the source archive sha256 and resulting binary version; each local sidecar records the effective configureFlags and their canonical JSON SHA-256. The referenceBuild block records one known-good binary hash for audit and is not asserted in CI because Apple toolchain versions drift between runner images.",
+  "builds": {
+    "linux-amd64": {
+      "distribution": "johnvansickle.com static release archive (no macOS build is published)",
+      "source": {
+        "url": "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
+        "archiveSha256": "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67",
+        "stripComponents": 1
+      },
+      "installDirectory": "~/.local/share/light-novel-audiobook/tools/ffmpeg/current",
+      "verification": "The Ubuntu CI lane downloads this archive, checks its sha256, and extracts ffmpeg/ffprobe directly into installDirectory."
+    },
+    "darwin-arm64": {
+      "distribution": "local build from the pinned upstream FFmpeg source tarball",
+      "source": {
+        "url": "https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.xz",
+        "archiveSha256": "8646515b638a3ad303e23af6a3587734447cb8fc0a0c064ecdb8e95c4fd8b389"
+      },
+      "buildScript": "scripts/build-ffmpeg-macos.sh",
+      "configureFlags": [
+        "--disable-debug",
+        "--disable-doc",
+        "--disable-x86asm",
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-static",
+        "--disable-shared",
+        "--enable-pic"
+      ],
+      "configureFlagsNote": "No --prefix is needed because ffmpeg and ffprobe are copied directly from the build tree into the install root. --enable-static plus --disable-shared keeps libav* linked into the binaries (while macOS still links libSystem dynamically), and --disable-x86asm avoids a nasm/yasm dependency for the arm64 build.",
+      "installDirectory": "~/.local/share/light-novel-audiobook/tools/ffmpeg/current",
+      "toolchain": {
+        "platform": "darwin/arm64",
+        "macos": "26.5.2",
+        "xcode": "Xcode 26.6",
+        "appleClang": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "sdkPath": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+        "sdkVersion": "26.5",
+        "make": "GNU Make 3.81",
+        "note": "Captured by scripts/build-ffmpeg-macos.sh via sw_vers, xcodebuild, clang, and xcrun. A different Xcode/SDK image produces a different binary hash; the macOS CI lane therefore pins the source archive and the 7.0.2 version, not this exact binary hash."
+      },
+      "referenceBuild": {
+        "status": "recorded",
+        "note": "One known-good build of the pinned source on the recorded toolchain. Reproduce by running scripts/build-ffmpeg-macos.sh, which writes source, ordered configureFlags plus their canonical JSON SHA-256, toolchain, and binary hashes to a .ffmpeg-build-manifest.json sidecar in installDirectory. Verify independently with: shasum -a 256 \"<installDirectory>/ffmpeg\" and shasum -a 256 \"<installDirectory>/ffprobe\".",
+        "binaries": {
+          "ffmpeg": {
+            "sha256": "ad69f717b6e96058b93a0704169998fcd26fddd580dafba19db277bdd2fe3904"
+          },
+          "ffprobe": {
+            "sha256": "872d82e596733574542b7a5d012810df591bd3863cfff798ddbdf0811955eb60"
+          }
+        }
+      }
+    }
+  }
+}
