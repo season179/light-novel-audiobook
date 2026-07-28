@@ -145,7 +145,7 @@ in the same manifest is the value the Ubuntu lane verifies and is kept beside th
 
 ### Portable macOS CI gate
 
-The `validate-macos` lane (runs-on `macos-15-arm64`) is the portable install/toolchain gate owned
+The `validate-macos` lane (runs-on `macos-15`, GitHub's macOS 15 arm64 label) is the portable install/toolchain gate owned
 by issue #108. It runs this exact ordered command set, pinned by
 [`config/macos-ci-gate.json`](../config/macos-ci-gate.json) and its policy test:
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "jobId": "validate-macos",
-  "runner": "macos-15-arm64",
+  "runner": "macos-15",
   "purpose": "Portable macOS arm64 install/toolchain gate for issue #108; this is not an equivalent or substitute for the Linux/WSL2 pnpm check gate.",
   "ubuntuJobSha256": "cd0be4a93ea05db097328bed9fc58f92d74d7ad8fe8c68a165227174d4d96da7",
   "setupSteps": [

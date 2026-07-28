@@ -223,7 +223,7 @@ printf '%s\\n%s\\n' "$ffmpeg_version" "$ffprobe_version"
 test('the committed gate is the exact amended issue #108 command set', () => {
   assert.equal(gate.schemaVersion, 1)
   assert.equal(gate.jobId, 'validate-macos')
-  assert.equal(gate.runner, 'macos-15-arm64')
+  assert.equal(gate.runner, 'macos-15')
   assert.deepEqual(gate.setupSteps, exactMacosSetupSteps)
   assert.deepEqual(gate.steps, exactIssue108Steps)
   assert.equal(
