@@ -122,6 +122,22 @@ export interface ProcessFamilySnapshot {
 }
 
 /**
+ * Pids still belonging to the owned process group. More robust than a ppid walk for cleanup
+ * verification: a descendant forked between sampler ticks remains in the group and is caught
+ * here even though the family walk never observed it.
+ */
+export async function processGroupMembers(pgid: number): Promise<readonly number[]> {
+  const output = await commandOutput('ps', ['-axo', 'pid=,pgid='])
+  if (output === null) return []
+  const members: number[] = []
+  for (const line of output.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    if (match !== null && Number(match[2]) === pgid) members.push(Number(match[1]))
+  }
+  return members
+}
+
+/**
  * Sums resident memory for the owned server process family by walking the ppid table from
  * `ps`. RSS is process memory only — it is never labeled as per-process Metal allocation.
  */

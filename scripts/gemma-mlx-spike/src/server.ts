@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { createWriteStream, type WriteStream } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
-import { processFamilySnapshot, waitForPortFree } from './collectors.js'
+import { processGroupMembers, waitForPortFree } from './collectors.js'
 
 export interface OwnedMlxServerOptions {
   readonly serverBin: string
@@ -21,6 +21,9 @@ export interface CleanupReport {
   readonly exitCode: number | null
   readonly exitSignal: string | null
   readonly shutdownMs: number
+  /** Process-group members observed at shutdown start, before any signal was sent. */
+  readonly processGroupAtShutdown: readonly number[]
+  /** Process-group members still alive after exit settled; must be empty for a clean run. */
   readonly descendantsRemaining: readonly number[]
   readonly portFree: boolean
   readonly cleanupVerified: boolean
@@ -172,9 +175,13 @@ export class OwnedMlxServer {
   async #shutdownOnce(): Promise<CleanupReport> {
     const startedAt = performance.now()
     const child = this.#child
+    const pid = child?.pid
+    // Snapshot the owned process group BEFORE signaling. After the root exits it leaves the ps
+    // table, so a post-exit family walk alone would report an empty family even with live
+    // orphans; group membership survives reparenting and is the auditable descendant proof.
+    const groupAtShutdown = pid === undefined ? [] : await processGroupMembers(pid)
     let terminatedWith: CleanupReport['terminatedWith'] = 'already-exited'
     if (child !== undefined && !childExited(child)) {
-      const pid = child.pid
       const signalGroup = (signal: 'SIGTERM' | 'SIGKILL'): void => {
         if (pid === undefined) return
         try {
@@ -194,9 +201,7 @@ export class OwnedMlxServer {
         }
       }
     }
-    const pid = child?.pid
-    const descendants =
-      pid === undefined ? [] : (await processFamilySnapshot(pid)).pids
+    const descendants = pid === undefined ? [] : await processGroupMembers(pid)
     const portFree = await waitForPortFree(
       this.options.host,
       this.options.port,
@@ -207,6 +212,7 @@ export class OwnedMlxServer {
       exitCode: this.#exitCode,
       exitSignal: this.#exitSignal,
       shutdownMs: Math.round(performance.now() - startedAt),
+      processGroupAtShutdown: groupAtShutdown,
       descendantsRemaining: descendants,
       portFree,
       cleanupVerified: descendants.length === 0 && portFree,

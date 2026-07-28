@@ -1,7 +1,8 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { canonicalSha256 } from '../../../packages/gemma-director/src/canonical-json.js'
@@ -299,6 +300,11 @@ async function main(): Promise<void> {
       sampling_provenance: 'production SELECTED_GEMMA_PROFILE generation parameters',
       passage_count: request.passages.length,
       speaker_count: request.speakers.length,
+      two_request_design:
+        'The representative request is sent twice: the cold request measures lazy model load ' +
+        '(dispatch-to-first-token), the warm request measures representative throughput without ' +
+        'load conflation. The warm run is a deterministic replay (same requestId, seed 42, ' +
+        'temperature 0) — do not double-count it as independent output validation.',
     },
     memory: {
       physical_memory: memory.physicalMemoryBytes,
@@ -360,11 +366,36 @@ async function main(): Promise<void> {
     portFreeTimeoutMs: config.portFreeTimeoutMs,
   })
 
-  // Crash paths must never leave the owned server behind.
+  // Crash paths must never leave the owned server behind, and must still leave evidence.
   const shutdownController = new AbortController()
   let terminatingSignal: string | null = null
   process.once('uncaughtException', (error) => {
     server.forceKillGroupSync()
+    try {
+      writeFileSync(
+        join(config.outDir, 'gemma-mlx-spike-evidence.json'),
+        `${JSON.stringify(
+          {
+            schema: 'gemma-mlx-spike-evidence@1',
+            issue: 106,
+            phase: config.cancelAfterMs === undefined ? 'measurement' : 'cancellation',
+            result: 'error',
+            startedAt,
+            completedAt: new Date().toISOString(),
+            ...baseEvidence,
+            error: errorSection(error),
+            note:
+              'Written synchronously from the uncaughtException handler after a best-effort ' +
+              'process-group SIGKILL; cleanup was NOT verified in this path.',
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      console.error(`evidence: ${join(config.outDir, 'gemma-mlx-spike-evidence.json')}`)
+    } catch {
+      // The crash itself is reported below regardless of evidence-write failure.
+    }
     console.error(error)
     process.exit(70)
   })
