@@ -3,7 +3,10 @@ import { readFile } from 'node:fs/promises'
 import { chat } from '@tanstack/ai'
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
 import { canonicalSha256 } from '../../../packages/gemma-director/src/canonical-json.js'
-import { DirectorError, classifyDirectorError } from '../../../packages/gemma-director/src/errors.js'
+import {
+  classifyDirectorError,
+  DirectorError,
+} from '../../../packages/gemma-director/src/errors.js'
 import {
   type MechanicalSourceRepair,
   repairMechanicalSourceEcho,
@@ -264,8 +267,7 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
           stream: typeof body.stream === 'boolean' ? body.stream : null,
           streamOptions: body.stream_options ?? null,
           responseFormat,
-          responseFormatSha256:
-            responseFormat === null ? null : canonicalSha256(responseFormat),
+          responseFormatSha256: responseFormat === null ? null : canonicalSha256(responseFormat),
           sampling: {
             temperature: typeof body.temperature === 'number' ? body.temperature : null,
             seed: typeof body.seed === 'number' ? body.seed : null,
@@ -310,7 +312,9 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
   let cancelledByDriver = false
   const timeoutTimer = setTimeout(() => {
     timedOut = true
-    controller.abort(new DOMException('gemma-mlx-spike direction request timed out', 'TimeoutError'))
+    controller.abort(
+      new DOMException('gemma-mlx-spike direction request timed out', 'TimeoutError'),
+    )
   }, options.timeoutMs)
   const cancelTimer =
     options.cancelAfterMs === undefined
@@ -393,11 +397,7 @@ export async function runDirection(options: RunDirectionOptions): Promise<Direct
   const repaired = repairMechanicalSourceEcho(output, request)
   const rawOutputSha256 = canonicalSha256(output)
   const validatedOutputSha256 = canonicalSha256(repaired.output)
-  const validated = validateDirectionOutput(
-    repaired.output,
-    request,
-    options.confidenceThreshold,
-  )
+  const validated = validateDirectionOutput(repaired.output, request, options.confidenceThreshold)
 
   return {
     validated,

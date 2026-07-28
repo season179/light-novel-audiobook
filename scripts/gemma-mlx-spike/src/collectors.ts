@@ -35,7 +35,11 @@ export async function portIsFree(host: string, port: number): Promise<boolean> {
   })
 }
 
-export async function waitForPortFree(host: string, port: number, timeoutMs: number): Promise<boolean> {
+export async function waitForPortFree(
+  host: string,
+  port: number,
+  timeoutMs: number,
+): Promise<boolean> {
   const startedAt = performance.now()
   while (performance.now() - startedAt < timeoutMs) {
     if (await portIsFree(host, port)) return true
@@ -44,10 +48,7 @@ export async function waitForPortFree(host: string, port: number, timeoutMs: num
   return false
 }
 
-async function commandOutput(
-  command: string,
-  args: readonly string[],
-): Promise<string | null> {
+async function commandOutput(command: string, args: readonly string[]): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(command, [...args], { timeout: 30_000 })
     return stdout

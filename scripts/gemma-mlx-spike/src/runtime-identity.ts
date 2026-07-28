@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { constants, createReadStream } from 'node:fs'
 import { access, readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { constants } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 export interface ServerBinFacts {

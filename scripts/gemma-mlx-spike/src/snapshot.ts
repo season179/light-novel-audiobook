@@ -36,7 +36,12 @@ async function sha256File(path: string): Promise<string> {
 
 function hfRepoCacheDirName(repository: string): string {
   const [namespace, name] = repository.split('/')
-  if (namespace === undefined || name === undefined || namespace.length === 0 || name.length === 0) {
+  if (
+    namespace === undefined ||
+    name === undefined ||
+    namespace.length === 0 ||
+    name.length === 0
+  ) {
     throw new Error(`HF repository must be <namespace>/<name>, got: ${repository}`)
   }
   return `models--${namespace}--${name}`
@@ -47,9 +52,11 @@ function hfRepoCacheDirName(repository: string): string {
  * passed to the server: with multiple cached revisions the run fails closed unless --revision
  * selects one, and the selected path is always the snapshots/<revision> directory itself.
  */
-export async function resolveSnapshotPath(
-  config: SpikeConfig,
-): Promise<{ snapshotPath: string; revision: string | null; resolution: 'explicit-path' | 'hf-cache' }> {
+export async function resolveSnapshotPath(config: SpikeConfig): Promise<{
+  snapshotPath: string
+  revision: string | null
+  resolution: 'explicit-path' | 'hf-cache'
+}> {
   if (config.snapshotPath !== undefined) {
     const snapshotPath = await realpath(config.snapshotPath).catch(() => {
       throw new Error(`Snapshot path does not exist: ${config.snapshotPath}`)
@@ -102,8 +109,7 @@ interface ModelConfigFacts {
 
 function readModelConfigFacts(config: Record<string, unknown>): ModelConfigFacts {
   const nested = config.text_config as Record<string, unknown> | undefined
-  const maxPosition =
-    config.max_position_embeddings ?? nested?.max_position_embeddings ?? null
+  const maxPosition = config.max_position_embeddings ?? nested?.max_position_embeddings ?? null
   return {
     maxPositionEmbeddings: typeof maxPosition === 'number' ? maxPosition : null,
     modelType: typeof config.model_type === 'string' ? config.model_type : null,
@@ -117,7 +123,11 @@ function readModelConfigFacts(config: Record<string, unknown>): ModelConfigFacts
  * config/tokenizer file, so a dry-run stays fast beside concurrent measurement work.
  */
 export async function verifySnapshot(
-  resolved: { snapshotPath: string; revision: string | null; resolution: 'explicit-path' | 'hf-cache' },
+  resolved: {
+    snapshotPath: string
+    revision: string | null
+    resolution: 'explicit-path' | 'hf-cache'
+  },
   hfRepository: string,
   options: { readonly hashWeights: boolean },
 ): Promise<VerifiedSnapshot> {
@@ -149,7 +159,10 @@ export async function verifySnapshot(
   }
 
   const configFacts = readModelConfigFacts(
-    JSON.parse(await readFile(join(snapshotPath, 'config.json'), 'utf8')) as Record<string, unknown>,
+    JSON.parse(await readFile(join(snapshotPath, 'config.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >,
   )
 
   const files: SnapshotFileRecord[] = []
@@ -160,8 +173,7 @@ export async function verifySnapshot(
     if (!fileStat.isFile()) continue
     totalSizeBytes += fileStat.size
     const isWeight = name.endsWith('.safetensors')
-    const shouldHash =
-      !isWeight ? fileStat.size <= SMALL_HASH_LIMIT_BYTES : options.hashWeights
+    const shouldHash = !isWeight ? fileStat.size <= SMALL_HASH_LIMIT_BYTES : options.hashWeights
     files.push({
       relativePath: name,
       sizeBytes: fileStat.size,

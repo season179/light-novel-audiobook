@@ -87,7 +87,7 @@ export function parseArgs(argv: readonly string[]): SpikeConfig {
   let requestTimeoutMs = 900_000
   let terminateTimeoutMs = 15_000
   let killTimeoutMs = 10_000
-  let portFreeTimeoutMs = 10_000
+  const portFreeTimeoutMs = 10_000
   let confidenceThreshold = 0.8
   let cancelAfterMs: number | undefined
   let dryRun = false
@@ -105,7 +105,7 @@ export function parseArgs(argv: readonly string[]): SpikeConfig {
     switch (arg) {
       case '--help':
         console.log(USAGE)
-        process.exit(0)
+        return process.exit(0)
       case '--snapshot':
         snapshotPath = expandHome(takeValue(arg, index))
         index += 1

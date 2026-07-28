@@ -11,13 +11,14 @@ import { DirectorFidelityError } from '../../../packages/gemma-director/src/vali
 import { parseArgs, SPIKE_HOST, SPIKE_PORT, type SpikeConfig } from './args.js'
 import {
   collectHostMemoryFacts,
+  type Metric,
   metric,
   portIsFree,
   RssSampler,
-  type Metric,
 } from './collectors.js'
-import { prepareOutDir, writeEvidence, type SpikeEvidence } from './evidence.js'
+import { prepareOutDir, type SpikeEvidence, writeEvidence } from './evidence.js'
 import {
+  type DirectionRunResult,
   loadRequest,
   PROMPT_VERSION,
   requestPayload,
@@ -26,7 +27,6 @@ import {
   SCHEMA_VERSION,
   SPIKE_WIRE_MODEL_ID,
   SYSTEM_PROMPT,
-  type DirectionRunResult,
 } from './request.js'
 import { mlxRuntimeIdentity, serverBinFacts } from './runtime-identity.js'
 import { OwnedMlxServer, serverLogPath } from './server.js'
@@ -104,8 +104,7 @@ interface RunSection {
 function runMetrics(run: RunSection): Record<string, Metric> {
   const { result } = run
   const firstTokenMs = result.dispatchToFirstTokenMs
-  const generationMs =
-    firstTokenMs === null ? null : result.dispatchToCompleteMs - firstTokenMs
+  const generationMs = firstTokenMs === null ? null : result.dispatchToCompleteMs - firstTokenMs
   return {
     end_to_end_elapsed: metric(
       result.dispatchToCompleteMs,
@@ -164,7 +163,8 @@ function gateSection(runs: readonly RunSection[]): Record<string, unknown> {
     },
     fidelity_validation: {
       passed: true, // reaching this section means validateDirectionOutput did not throw
-      collector: 'deterministic validateDirectionOutput (packages/gemma-director/src/validation.ts)',
+      collector:
+        'deterministic validateDirectionOutput (packages/gemma-director/src/validation.ts)',
     },
     server_enforced_json_schema: {
       value: false,
@@ -207,7 +207,12 @@ function errorSection(error: unknown): Record<string, unknown> {
     }
   }
   if (error instanceof DirectorError) {
-    return { name: error.name, code: error.code, message: error.message, retryable: error.retryable }
+    return {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+    }
   }
   if (error instanceof Error) return { name: error.name, message: error.message }
   return { name: 'unknown', message: String(error) }
@@ -335,7 +340,11 @@ async function main(): Promise<void> {
     const path = await writeEvidence(config.outDir, evidence)
     console.log(`evidence: ${path}`)
     console.log(`result: ${result}`)
-    process.exit(result === 'client-gates-passed' || result === 'dry-run-ok' || result === 'cancelled-clean' ? 0 : 1)
+    process.exit(
+      result === 'client-gates-passed' || result === 'dry-run-ok' || result === 'cancelled-clean'
+        ? 0
+        : 1,
+    )
   }
 
   if (config.dryRun) {
@@ -421,9 +430,7 @@ async function main(): Promise<void> {
     const healthResponse = await fetch(`http://${SPIKE_HOST}:${SPIKE_PORT}/health`, {
       signal: AbortSignal.timeout(5_000),
     })
-    const healthFirstOkMs = healthResponse.ok
-      ? Math.round(performance.now() - spawnAt)
-      : null
+    const healthFirstOkMs = healthResponse.ok ? Math.round(performance.now() - spawnAt) : null
 
     const baseUrl = `http://${SPIKE_HOST}:${SPIKE_PORT}/v1`
     const runOnce = (name: string): Promise<DirectionRunResult> =>
@@ -453,45 +460,45 @@ async function main(): Promise<void> {
 
     const sections: Record<string, unknown> = {}
     for (const run of runs) sections[run.name] = runSection(run)
-    await finalize(config.cancelAfterMs === undefined ? 'measurement' : 'cancellation', 
-      cleanup.cleanupVerified ? 'client-gates-passed' : 'client-gates-failed', {
-      startup: {
-        listener_ready: metric(
-          listenerReadyMs,
-          'TCP connect poll to the owned 127.0.0.1:8090 listener',
-          'ms',
-        ),
-        health_first_ok: metric(
-          healthFirstOkMs,
-          'GET /health after listener ready',
-          'ms',
-          'mlx_lm.server answers /health unconditionally; this is NOT model load. Cold model ' +
-            'load is the cold run dispatch-to-first-token measurement.',
-        ),
-        server_pid: serverPid,
+    await finalize(
+      config.cancelAfterMs === undefined ? 'measurement' : 'cancellation',
+      cleanup.cleanupVerified ? 'client-gates-passed' : 'client-gates-failed',
+      {
+        startup: {
+          listener_ready: metric(
+            listenerReadyMs,
+            'TCP connect poll to the owned 127.0.0.1:8090 listener',
+            'ms',
+          ),
+          health_first_ok: metric(
+            healthFirstOkMs,
+            'GET /health after listener ready',
+            'ms',
+            'mlx_lm.server answers /health unconditionally; this is NOT model load. Cold model ' +
+              'load is the cold run dispatch-to-first-token measurement.',
+          ),
+          server_pid: serverPid,
+        },
+        runs: sections,
+        gates: gateSection(runs),
+        memory_at_peak: {
+          server_family_peak_rss: metric(
+            peak.rssBytes,
+            'ps -axo pid,ppid,rss family walk, 250 ms sampler',
+            'bytes',
+            `peak observed ${peak.observedAtMonotonicMs} ms after sampler start across ${peak.samples} samples; ` +
+              `family pids at peak: ${peak.familyPids.join(', ')}`,
+          ),
+          memory_pressure_free_percent_at_peak: pressureAtPeak,
+        },
+        cleanup: {
+          ...cleanup,
+          port_free_after: metric(cleanup.portFree, 'node:net bind test after shutdown', 'boolean'),
+          collector:
+            'process-group SIGTERM, bounded SIGKILL fallback, ps family check, port bind test',
+        },
       },
-      runs: sections,
-      gates: gateSection(runs),
-      memory_at_peak: {
-        server_family_peak_rss: metric(
-          peak.rssBytes,
-          'ps -axo pid,ppid,rss family walk, 250 ms sampler',
-          'bytes',
-          `peak observed ${peak.observedAtMonotonicMs} ms after sampler start across ${peak.samples} samples; ` +
-            `family pids at peak: ${peak.familyPids.join(', ')}`,
-        ),
-        memory_pressure_free_percent_at_peak: pressureAtPeak,
-      },
-      cleanup: {
-        ...cleanup,
-        port_free_after: metric(
-          cleanup.portFree,
-          'node:net bind test after shutdown',
-          'boolean',
-        ),
-        collector: 'process-group SIGTERM, bounded SIGKILL fallback, ps family check, port bind test',
-      },
-    })
+    )
   } catch (error: unknown) {
     sampler?.stop()
     let cleanup: unknown = null
@@ -500,8 +507,7 @@ async function main(): Promise<void> {
     } catch (cleanupError: unknown) {
       cleanup = { failed: errorSection(cleanupError) }
     }
-    const cancelled =
-      error instanceof DirectorError && error.code === 'cancelled'
+    const cancelled = error instanceof DirectorError && error.code === 'cancelled'
     const phase =
       config.cancelAfterMs !== undefined || terminatingSignal !== null
         ? 'cancellation'
