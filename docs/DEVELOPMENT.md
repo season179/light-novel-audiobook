@@ -1,8 +1,10 @@
-# WSL2 development setup
+# Development setup
 
-The supported local environment is WSL2 with native Linux Node.js 24 and pnpm 11. The
-repository may live under `/mnt/c`, but its tools must not resolve to Windows executables.
-Never reuse `node_modules` between Windows and WSL2.
+The supported local environments are **WSL2** (primary, with native Linux Node.js 24 and pnpm 11)
+and **macOS arm64** (Apple Silicon). Both run the same frozen `pnpm install`, Biome checks, strict
+TypeScript 7 typecheck, and workspace build. In WSL2 the repository may live under `/mnt/c`, but
+its tools must not resolve to Windows executables. Never reuse `node_modules` across Windows and
+WSL2. See the [macOS arm64 setup](#macos-arm64-setup) section for the Mac toolchain entry points.
 
 ## Fresh clone
 
@@ -86,6 +88,68 @@ workspace package, and runs the test suite. CI repeats these commands on native 
 24 and a frozen lockfile.
 
 Neither normal project setup nor CI downloads books, model weights, voices, or generated audio.
+
+## macOS arm64 setup
+
+Native macOS arm64 (Apple Silicon) is a supported install target alongside WSL2. `pnpm preflight`
+now accepts Darwin arm64 and verifies the native `@biomejs/cli-darwin-arm64`,
+`@typescript/typescript-darwin-arm64` (the TypeScript 7 native binary), `@rolldown/binding-darwin-arm64`,
+`@esbuild/darwin-arm64`, and `lightningcss-darwin-arm64` packages are present and that no foreign
+platform package contaminated the tree. Intel (x64) macOS is out of scope.
+
+### Required entry points
+
+| Tool | Version | How to provide it |
+| --- | --- | --- |
+| Node.js | 24 or newer (the `.node-version` pin) | nvm/fnm/volta, or the official arm64 installer from nodejs.org |
+| pnpm | the exact `packageManager` pin in `package.json` (11.17.0) | `corepack enable && corepack prepare pnpm@11.17.0 --activate` |
+| Apple clang | any recent Xcode or Command Line Tools | `xcode-select --install`; the FFmpeg build needs `clang`, `make`, and `xcrun` |
+| `shasum` | ships with macOS | macOS has no `sha256sum`; the build script and CI use `shasum -a 256` |
+| `curl`, `tar` (xz) | ship with macOS | the FFmpeg source tarball is `.tar.xz` |
+| uv | the Qwen3-TTS spike uses uv/CPython 3.12 | `brew install uv` or the standalone installer; the lock already carries darwin-arm64 wheels. Spike runtimes remain owned by their own issues. |
+
+`nasm`/`yasm` are **not** required: the macOS FFmpeg configure passes `--disable-x86asm` because
+the build targets arm64.
+
+### Fresh clone (macOS)
+
+```sh
+git clone https://github.com/season179/light-novel-audiobook.git
+cd light-novel-audiobook
+corepack enable
+pnpm install --frozen-lockfile
+pnpm preflight
+bash scripts/build-ffmpeg-macos.sh
+```
+
+### Pinned FFmpeg 7.0.2
+
+The johnvansickle.com static build that Linux uses publishes no macOS binaries, so macOS compiles
+FFmpeg/ffprobe 7.0.2 from the pinned upstream source tarball tracked in
+[`config/ffmpeg-artifacts.json`](../config/ffmpeg-artifacts.json). `scripts/build-ffmpeg-macos.sh`
+downloads and sha256-checks that tarball, configures with a recorded flag set, builds, and installs
+both binaries into `~/.local/share/light-novel-audiobook/tools/ffmpeg/current` — the same default
+path `packages/audio-assembly/src/ffmpeg-toolchain.ts` resolves, so no environment override is
+needed. The script also writes a `.ffmpeg-build-manifest.json` sidecar recording the exact
+Xcode/clang/SDK toolchain and the resulting binary sha256 values; those are mirrored in the
+committed manifest's `darwin-arm64.referenceBuild` block.
+
+A different Xcode/SDK image produces a different binary hash, so the macOS CI lane pins the
+**source archive sha256** and the **7.0.2 version**, not an exact binary hash. The Linux amd64 pin
+in the same manifest is the value the Ubuntu lane verifies and is kept beside the darwin entry.
+
+### What runs on the macOS CI lane
+
+The `validate-macos` lane (runs-on `macos-15-arm64`) runs: the frozen install, the generalized
+preflight, Biome checks, the workspace typecheck (every package, strict TypeScript 7), the portable
+preflight and manifest node tests, the workspace build (every package), and exact FFmpeg/ffprobe
+7.0.2 version probes after building from source. It does **not** run the `vitest` runtime suite or
+the WSL2 topology / WSL installer tests — those assert Linux/WSL-only behavior (file `flock`/
+`fcntl` durability, process-group signalling, GPU-lease holder reaping, the Qwen worker's
+`prctl(PR_SET_PDEATHSIG)`, ext4/DrvFS filesystem facts, `/proc/version`, `sha256sum`) that are
+category errors on Darwin and are owned by the runtime-topology track (#107/#111). Workspace
+TypeScript correctness and buildability are still covered on macOS by the typecheck and build
+steps. No model weights, voices, books, or generated audio are downloaded in CI.
 
 ## VoxCPM2 runtime spike
 
