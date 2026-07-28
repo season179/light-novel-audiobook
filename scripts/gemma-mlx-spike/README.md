@@ -19,11 +19,20 @@ Darwin before #108; it is deliberately self-contained.
   `repairMechanicalSourceEcho` from `fidelity-recovery.ts`). It never imports
   `OwnedLlamaLifecycle`, `SELECTED_GEMMA_PROFILE`, `llamaServerArgs`, or the CUDA
   `hostManifestSchema`; it owns the MLX spawn, sampling, cancellation, and cleanup itself.
-- The type-only workspace imports in `port.ts` are erased at transpile. For `tsc --noEmit`
-  they are satisfied by `src/workspace-type-shims.d.ts`, which mirrors the real
-  domain/application port shapes, and by `tsconfig.json` `paths` entries that point bare
-  specifiers (`zod`, `@tanstack/*`) at this directory's `node_modules` — the same `paths`
-  are what let tsx resolve `zod` from the gemma-director sources at runtime.
+- The type-only workspace imports in `port.ts` are erased at transpile, so tsx never
+  resolves them at runtime. For `tsc --noEmit` they are satisfied by local direct-export
+  declaration modules under `src/workspace-type-shims/` (`application.d.ts`,
+  `domain.d.ts`), which mirror the real application/domain port shapes. `tsconfig.json`
+  maps the bare specifiers `@light-novel-audiobook/application` and
+  `@light-novel-audiobook/domain` to those files through `paths`; because `paths` takes
+  precedence over the node_modules walk, tsc resolves them locally whether or not the
+  pnpm workspace links exist at the repo root, so the spike typecheck can never traverse
+  `packages/application` or `packages/domain`. The remaining `paths` entries (`zod`,
+  `@tanstack/*`) point at this directory's `node_modules` — the same `paths` are what let
+  tsx resolve `zod` from the gemma-director sources at runtime.
+- `./verify-typecheck-isolation.sh` is the regression for that isolation: it runs
+  `npm run typecheck` with the workspace links present and then with them removed, and
+  leaves the worktree in the isolated (no root workspace node_modules) state.
 
 ## Install (exact)
 

@@ -6,6 +6,8 @@
     "lib": ["ES2024"],
     "types": ["node"],
     "paths": {
+      "@light-novel-audiobook/application": ["./src/workspace-type-shims/application"],
+      "@light-novel-audiobook/domain": ["./src/workspace-type-shims/domain"],
       "zod": ["./node_modules/zod"],
       "@tanstack/ai": ["./node_modules/@tanstack/ai"],
       "@tanstack/ai/*": ["./node_modules/@tanstack/ai/*"],
