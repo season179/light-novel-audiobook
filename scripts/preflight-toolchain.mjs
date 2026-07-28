@@ -19,6 +19,14 @@ export function isMountedWindowsPath(value) {
   return /^\/mnt\/[a-z](?:\/|$)/i.test(value) || /^[a-z]:[\\/]/i.test(value)
 }
 
+export function isSafeToSpawnPnpm(pnpmRealPath) {
+  return (
+    Boolean(pnpmRealPath) &&
+    !isMountedWindowsPath(pnpmRealPath) &&
+    !/\.(?:cmd|exe)$/i.test(pnpmRealPath)
+  )
+}
+
 // Native optional-dependency families. Each `matches` predicate recognizes every platform variant
 // of its family so a foreign-platform package left in node_modules is flagged as contamination,
 // while `marker` is the exact entry the current host must have present.
@@ -169,12 +177,7 @@ export function collectHostFacts() {
   const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)$/.exec(packageManager)
   let pnpmVersion = ''
   let pnpmExecutionError = ''
-  if (
-    pnpmRealPath &&
-    packageManagerMatch &&
-    !isMountedWindowsPath(pnpmRealPath) &&
-    !/\.(?:cmd|exe)$/i.test(pnpmRealPath)
-  ) {
+  if (packageManagerMatch && isSafeToSpawnPnpm(pnpmRealPath)) {
     const result = spawnSync(pnpmRealPath, ['--version'], { encoding: 'utf8', env: process.env })
     pnpmVersion = result.status === 0 ? result.stdout.trim() : ''
     pnpmExecutionError = result.error?.message ?? ''
@@ -245,10 +248,7 @@ export function inspectToolchainFacts(facts, { requireDependencies = false } = {
     errors.push(`pnpm path cannot be resolved: ${facts.pnpmResolutionError}`)
   }
 
-  if (
-    facts.pnpmRealPath &&
-    (isMountedWindowsPath(facts.pnpmRealPath) || /\.(?:cmd|exe)$/i.test(facts.pnpmRealPath))
-  ) {
+  if (facts.pnpmRealPath && !isSafeToSpawnPnpm(facts.pnpmRealPath)) {
     errors.push(
       `pnpm resolves to a Windows tool instead of native WSL2 pnpm: ${facts.pnpmRealPath}`,
     )

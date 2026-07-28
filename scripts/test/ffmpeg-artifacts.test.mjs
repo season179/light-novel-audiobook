@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -134,6 +135,9 @@ test('the darwin-arm64 entry pins the upstream source archive and a recorded ref
   assert.equal(darwin.buildScript, 'scripts/build-ffmpeg-macos.sh')
   assert.deepEqual(validateConfigureFlags(darwin.configureFlags), darwin.configureFlags)
   assert.match(configureFlagsSha256(darwin.configureFlags), HEX64)
+  assert.match(darwin.configureFlagsNote, /No --prefix.*copied directly/u)
+  assert.match(darwin.configureFlagsNote, /--enable-static.*--disable-shared.*libav/u)
+  assert.match(darwin.configureFlagsNote, /--disable-x86asm.*nasm\/yasm/u)
   assert.equal(
     darwin.referenceBuild.status,
     'recorded',
@@ -166,6 +170,67 @@ test('the Bash 3.2 build path uses only the manifest ordered configure flags', (
   const script = readFileSync(buildScriptPath, 'utf8')
   for (const flag of baseline) {
     assert.equal(script.includes(flag), false, `${flag} must not be duplicated in the Bash script`)
+  }
+  assert.equal(script.match(/\.\/configure/gu)?.length, 1)
+  assert.deepEqual(script.match(/^ {4}\.\/configure .*$/gmu), [
+    `    ./configure "\${configure_flags[@]}"`,
+  ])
+  assert.equal(script.match(/\bffmpeg_configure_source\b/gu)?.length, 2)
+  assert.deepEqual(script.match(/^ {2}ffmpeg_configure_source .*$/gmu), [
+    '  ffmpeg_configure_source "$source_dir" "$repository_root"',
+  ])
+})
+
+test('source-pin loading surfaces explicit Node/JSON read failures', () => {
+  const success = spawnSync(
+    '/bin/bash',
+    [
+      '-c',
+      'source "$1"; ffmpeg_load_source_pin "$2"; printf \'%s\\t%s\\t%s\\n\' "$FFMPEG_SOURCE_URL" "$FFMPEG_SOURCE_SHA" "$FFMPEG_SOURCE_VERSION"',
+      '_',
+      buildScriptPath,
+      repositoryRoot,
+    ],
+    { encoding: 'utf8' },
+  )
+  assert.equal(success.status, 0, success.stderr)
+  assert.equal(
+    success.stdout,
+    `${manifest.builds['darwin-arm64'].source.url}\t${manifest.builds['darwin-arm64'].source.archiveSha256}\t${manifest.version}\n`,
+  )
+
+  const root = mkdtempSync(join(tmpdir(), 'lna-ffmpeg-source-pin-'))
+  try {
+    const emptyPath = join(root, 'bin')
+    mkdirSync(emptyPath)
+    symlinkSync('/usr/bin/mktemp', join(emptyPath, 'mktemp'))
+    symlinkSync('/bin/rm', join(emptyPath, 'rm'))
+    const missingNode = spawnSync(
+      '/bin/bash',
+      ['-c', 'source "$1"; ffmpeg_load_source_pin "$2"', '_', buildScriptPath, root],
+      { encoding: 'utf8', env: { ...process.env, PATH: emptyPath } },
+    )
+    assert.notEqual(missingNode.status, 0)
+    assert.match(
+      missingNode.stderr,
+      /could not read the darwin-arm64 source pin.*Node\.js or JSON read failed/,
+    )
+
+    mkdirSync(join(root, 'config'))
+    writeFileSync(join(root, 'config', 'ffmpeg-artifacts.json'), '{ malformed json\n')
+    const malformedJson = spawnSync(
+      '/bin/bash',
+      ['-c', 'source "$1"; ffmpeg_load_source_pin "$2"', '_', buildScriptPath, root],
+      { encoding: 'utf8' },
+    )
+    assert.notEqual(malformedJson.status, 0)
+    assert.match(malformedJson.stderr, /SyntaxError|Unexpected token/)
+    assert.match(
+      malformedJson.stderr,
+      /could not read the darwin-arm64 source pin.*Node\.js or JSON read failed/,
+    )
+  } finally {
+    rmSync(root, { force: true, recursive: true })
   }
 })
 

@@ -1,5 +1,5 @@
 {
-  "packageManager": "pnpm@11.17.0",
+  "packageManagerNote": "The characterization test derives packageManager from the repository root package.json.",
   "completeEntries": [
     "@biomejs+cli-linux-x64@2.5.5",
     "@typescript+typescript-linux-x64@7.0.2",

@@ -11,10 +11,12 @@ import {
   formatPreflightResult,
   inspectToolchainFacts,
   isMountedWindowsPath,
+  isSafeToSpawnPnpm,
   parseVersion,
 } from '../preflight-toolchain.mjs'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const rootPackageJson = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'))
 const fixture = JSON.parse(
   readFileSync(
     join(repositoryRoot, 'scripts/test/fixtures/preflight-toolchain/linux-x64-gnu.json'),
@@ -61,6 +63,15 @@ test('identifies Windows tools exposed through WSL', () => {
   assert.equal(isMountedWindowsPath('C:\\Program Files\\nodejs\\node.exe'), true)
   assert.equal(isMountedWindowsPath('/home/user/.local/bin/node'), false)
   assert.equal(isMountedWindowsPath('/Users/season/.nvm/versions/node/v24.18.0/bin/node'), false)
+})
+
+test('only native pnpm paths are safe to spawn', () => {
+  assert.equal(isSafeToSpawnPnpm(''), false)
+  assert.equal(isSafeToSpawnPnpm('/mnt/c/Users/season/pnpm'), false)
+  assert.equal(isSafeToSpawnPnpm('/usr/local/bin/pnpm.cmd'), false)
+  assert.equal(isSafeToSpawnPnpm('C:\\Users\\season\\pnpm.exe'), false)
+  assert.equal(isSafeToSpawnPnpm('/home/season/.local/bin/pnpm'), true)
+  assert.equal(isSafeToSpawnPnpm('/Users/season/.nvm/bin/pnpm'), true)
 })
 
 test('accepts every current native Linux x64 dependency family', () => {
@@ -330,7 +341,7 @@ test('real inspectToolchain and CLI preserve the committed Ubuntu characterizati
   )
   writeFileSync(
     join(fixtureRoot, 'package.json'),
-    `${JSON.stringify({ packageManager: fixture.packageManager }, null, 2)}\n`,
+    `${JSON.stringify({ packageManager: rootPackageJson.packageManager }, null, 2)}\n`,
   )
 
   populateVirtualStore(fixtureRoot, fixture.completeEntries)

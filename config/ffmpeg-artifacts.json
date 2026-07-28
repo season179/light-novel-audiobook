@@ -30,6 +30,7 @@
         "--disable-shared",
         "--enable-pic"
       ],
+      "configureFlagsNote": "No --prefix is needed because ffmpeg and ffprobe are copied directly from the build tree into the install root. --enable-static plus --disable-shared keeps libav* linked into the binaries (while macOS still links libSystem dynamically), and --disable-x86asm avoids a nasm/yasm dependency for the arm64 build.",
       "installDirectory": "~/.local/share/light-novel-audiobook/tools/ffmpeg/current",
       "toolchain": {
         "platform": "darwin/arm64",

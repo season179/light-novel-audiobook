@@ -37,7 +37,7 @@
     "build": "pnpm --recursive --if-present build",
     "typecheck": "pnpm verify:toolchain && pnpm --recursive typecheck",
     "test": "pnpm test:toolchain && pnpm test:launcher && pnpm test:topology && pnpm test:voxcpm2 && pnpm test:voices && pnpm test:qwen3-tts && pnpm test:qwen-tts-engine-python && vitest run",
-    "test:toolchain": "node --test scripts/test/preflight-toolchain.test.mjs && bash scripts/test/install-wsl-toolchain.test.sh",
+    "test:toolchain": "node --test scripts/test/preflight-toolchain.test.mjs scripts/test/ffmpeg-artifacts.test.mjs scripts/test/macos-ci-gate.test.mjs && bash scripts/test/install-wsl-toolchain.test.sh",
     "test:launcher": "bash scripts/test/lna-process-tree.test.sh",
     "test:watch": "vitest",
     "lint": "biome lint .",

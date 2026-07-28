@@ -134,7 +134,10 @@ manifest under stock macOS Bash 3.2, builds, and installs both binaries into
 The script also writes a `.ffmpeg-build-manifest.json` sidecar recording the effective ordered
 flags, the SHA-256 of canonical `JSON.stringify(configureFlags)`, the exact Xcode/clang/SDK
 toolchain, and the resulting binary sha256 values. The known-good binary hashes are mirrored in
-the committed manifest's `darwin-arm64.referenceBuild` block.
+the committed manifest's `darwin-arm64.referenceBuild` block. The flag rationale is deliberate:
+the binaries are copied directly from the build tree, so no `--prefix` is needed; static plus
+no-shared keeps `libav*` linked into them while macOS still links libSystem dynamically; and
+`--disable-x86asm` avoids requiring nasm/yasm for the arm64 build.
 
 A different Xcode/SDK image produces a different binary hash, so the macOS CI lane pins the
 **source archive sha256** and the **7.0.2 version**, not an exact binary hash. The Linux amd64 pin
@@ -159,11 +162,14 @@ pnpm build
 
 This gate is explicitly **not equivalent to `pnpm check`**. Root `pnpm check` remains the
 Linux/WSL2 gate until #107 and #111–#113 provide portable Darwin contracts. The excluded surfaces
-are WSL2 installer behavior, `flock`, `/proc` process identity, ext4/DrvFS qualification and
+are WSL2 installer validation, `flock`, `/proc` process identity, ext4/DrvFS qualification and
 `findmnt`, Bash 4 process-tree assumptions, Linux process-group/reaper semantics, and Python
-`prctl` parent-death signalling. The committed policy fails if the macOS commands are missing,
-reordered, replaced, or supplemented by an unnamed substitute, and it pins the existing Ubuntu
-job bytes separately. No model weights, voices, books, or generated audio are downloaded in CI.
+`prctl` parent-death signalling. The committed policy pins the approved setup actions and Bash
+shell declarations and fails if the macOS commands are missing, reordered, replaced, or
+supplemented by an unnamed substitute. It pins the existing Ubuntu job bytes separately. All
+three policy files also run through root `test:toolchain`, so the unchanged Ubuntu `pnpm check`
+lane enforces these guards itself. No model weights, voices, books, or generated audio are
+downloaded in CI.
 
 ## VoxCPM2 runtime spike
 

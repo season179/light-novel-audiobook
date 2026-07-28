@@ -2,7 +2,7 @@
 # Builds FFmpeg/ffprobe 7.0.2 for macOS arm64 from the pinned upstream source tarball tracked in
 # config/ffmpeg-artifacts.json, installs the two binaries beside the Linux layout that
 # packages/audio-assembly/src/ffmpeg-toolchain.ts resolves by default, and writes a sidecar
-# manifest recording the exact toolchain and binary sha256 values.
+# manifest recording the source, ordered configure flags/hash, exact toolchain, and binary hashes.
 #
 # This script is deliberately bash 3.2-compatible so it runs under /bin/bash on stock macOS as
 # well as the Homebrew bash used by GitHub's macos-*-arm64 runners.
@@ -30,6 +30,38 @@ ffmpeg_read_source_pin() {
     const build = manifest.builds["darwin-arm64"];
     process.stdout.write(`${build.source.url}\t${build.source.archiveSha256}\t${manifest.version}\n`);
   '
+}
+
+ffmpeg_load_source_pin() {
+  local repository_root="$1"
+  local pin_file error_file error_line loaded_url loaded_sha loaded_version
+  pin_file="$(mktemp -t light-novel-ffmpeg-source-pin)"
+  error_file="$pin_file.error"
+
+  if ! ffmpeg_read_source_pin "$repository_root" > "$pin_file" 2> "$error_file"; then
+    while IFS= read -r error_line || [[ -n "${error_line:-}" ]]; do
+      printf '%s\n' "$error_line" >&2
+    done < "$error_file"
+    rm -f "$pin_file" "$error_file"
+    ffmpeg_error 'could not read the darwin-arm64 source pin from config/ffmpeg-artifacts.json (Node.js or JSON read failed).'
+    return 1
+  fi
+
+  if ! IFS=$'\t' read -r loaded_url loaded_sha loaded_version < "$pin_file"; then
+    rm -f "$pin_file" "$error_file"
+    ffmpeg_error 'could not read the darwin-arm64 source pin from config/ffmpeg-artifacts.json (empty helper output).'
+    return 1
+  fi
+  rm -f "$pin_file" "$error_file"
+
+  if [[ -z "$loaded_url" || -z "$loaded_sha" || -z "$loaded_version" ]]; then
+    ffmpeg_error 'could not read the darwin-arm64 source pin from config/ffmpeg-artifacts.json (incomplete helper output).'
+    return 1
+  fi
+
+  FFMPEG_SOURCE_URL="$loaded_url"
+  FFMPEG_SOURCE_SHA="$loaded_sha"
+  FFMPEG_SOURCE_VERSION="$loaded_version"
 }
 
 ffmpeg_configure_source() {
@@ -108,11 +140,12 @@ ffmpeg_main() {
     fi
   done
 
-  IFS=$'\t' read -r source_url source_sha version < <(ffmpeg_read_source_pin "$repository_root")
-  if [[ -z "$source_url" || -z "$source_sha" || -z "$version" ]]; then
-    ffmpeg_error 'could not read the darwin-arm64 source pin from config/ffmpeg-artifacts.json.'
+  if ! ffmpeg_load_source_pin "$repository_root"; then
     return 1
   fi
+  source_url="$FFMPEG_SOURCE_URL"
+  source_sha="$FFMPEG_SOURCE_SHA"
+  version="$FFMPEG_SOURCE_VERSION"
 
   printf 'Building FFmpeg %s for darwin/arm64\n' "$version"
   printf '  source:   %s\n' "$source_url"

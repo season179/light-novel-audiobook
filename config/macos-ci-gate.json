@@ -4,9 +4,24 @@
   "runner": "macos-15-arm64",
   "purpose": "Portable macOS arm64 install/toolchain gate for issue #108; this is not an equivalent or substitute for the Linux/WSL2 pnpm check gate.",
   "ubuntuJobSha256": "cd0be4a93ea05db097328bed9fc58f92d74d7ad8fe8c68a165227174d4d96da7",
+  "setupSteps": [
+    {
+      "name": "Check out repository",
+      "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    },
+    {
+      "name": "Install pinned pnpm",
+      "uses": "pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320"
+    },
+    {
+      "name": "Install pinned Node.js",
+      "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
+    }
+  ],
   "steps": [
     {
       "name": "Build and install pinned FFmpeg/ffprobe 7.0.2 from source",
+      "shell": "bash",
       "run": "bash scripts/build-ffmpeg-macos.sh"
     },
     {
@@ -35,11 +50,12 @@
     },
     {
       "name": "Probe installed FFmpeg/ffprobe 7.0.2 exactly",
+      "shell": "bash",
       "run": "install_directory=\"$HOME/.local/share/light-novel-audiobook/tools/ffmpeg/current\"\nffmpeg_output=\"$(\"$install_directory/ffmpeg\" -hide_banner -version)\"\nffprobe_output=\"$(\"$install_directory/ffprobe\" -hide_banner -version)\"\nffmpeg_version=\"${ffmpeg_output%%$'\\n'*}\"\nffprobe_version=\"${ffprobe_output%%$'\\n'*}\"\nprintf '%s\\n%s\\n' \"$ffmpeg_version\" \"$ffprobe_version\"\n[[ \"$ffmpeg_version\" == \"ffmpeg version 7.0.2\"* ]]\n[[ \"$ffprobe_version\" == \"ffprobe version 7.0.2\"* ]]"
     }
   ],
   "excludedLinuxOnlyContracts": [
-    { "primitive": "WSL2 installer behavior", "owners": [107] },
+    { "primitive": "WSL2 installer validation", "owners": [107] },
     { "primitive": "flock", "owners": [111] },
     { "primitive": "/proc process identity", "owners": [111, 112] },
     { "primitive": "ext4/DrvFS qualification and findmnt", "owners": [107] },

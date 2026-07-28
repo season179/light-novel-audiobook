@@ -84,7 +84,7 @@ jobs:
   validate-macos:
     # Portable Apple Silicon install/toolchain gate for issue #108, pinned by
     # config/macos-ci-gate.json. It is not equivalent to the Linux/WSL2 `pnpm check` gate.
-    # Excluded Linux-only contracts remain owned by #107/#111-#113: WSL2 installer behavior,
+    # Excluded Linux-only contracts remain owned by #107/#111-#113: WSL2 installer validation,
     # flock, /proc identity, ext4/DrvFS and findmnt, Bash 4 process-tree assumptions, Linux
     # process-group/reaper semantics, and Python prctl parent-death signalling.
     name: Node 24 validation (macOS arm64)
