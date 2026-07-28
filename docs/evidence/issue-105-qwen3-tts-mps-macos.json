@@ -1,0 +1,665 @@
+{
+  "schemaVersion": 1,
+  "issue": 105,
+  "kind": "Apple Silicon MPS technical evaluation of the pinned Qwen3-TTS CustomVoice runtime (macOS evidence; not a human listening decision)",
+  "decisionScope": "Technical GO/NO-GO for the protocol-preserving PyTorch MPS route. Coherence and distinctness remain subject to human listening of the assembled bundle, matching the issue-8/issue-92 evidence pattern.",
+  "heldConstant": {
+    "transcript": "The market square was quiet at dawn, and the fountain held the first light. Then the bells began, every tower at once, and she knew the long wait was over.",
+    "transcriptSha256": "aeb5b4748c172d24acd66c3ae7462ef5dad5d68fb6eaad62b48ca62b7315fcb1",
+    "instruction": "Speak clearly and naturally, as though reading a line from an audiobook to a single listener.",
+    "instructionSha256": "e05d0f709d96e865e731df2709cb845456f6dc036d66a8cb6fc776dd7d1b1756",
+    "seed": 2072318748,
+    "language": "English",
+    "samplingParameters": {
+      "doSample": true,
+      "topK": 50,
+      "topP": 1.0,
+      "temperature": 0.9,
+      "repetitionPenalty": 1.05,
+      "subtalkerDoSample": true,
+      "subtalkerTopK": 50,
+      "subtalkerTopP": 1.0,
+      "subtalkerTemperature": 0.9,
+      "maxNewTokens": 8192
+    },
+    "samplingNote": "Identical to the issue-92 approved audition parameters (lock stock-seeded profile); enables direct comparison with committed CUDA audition evidence.",
+    "nonStreamingMode": true,
+    "attentionImplementation": "sdpa",
+    "dtype": "float32",
+    "device": "mps",
+    "referenceAudioAllowed": false,
+    "modelLoads": 1,
+    "wavFormat": "RIFF/WAVE PCM 24000 Hz mono 16-bit"
+  },
+  "model": {
+    "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "verifiedFiles": 13,
+    "revisionPayloadBytes": 4520218951,
+    "snapshotVerification": "all 13 files re-verified for exact size and SHA-256 against config/qwen3-tts-custom-voice.lock.json before load; no symlinks; file set exact",
+    "loadedFromLocalPath": true
+  },
+  "runtime": {
+    "python": "3.12.13",
+    "package": "qwen-tts",
+    "version": "0.1.1",
+    "torch": "2.9.1",
+    "torchaudio": "2.9.1",
+    "uvLockSha256": "6a7d989924871b408ed0e6eea86ce21ff399033e1272c5fa19bf9a5e38c3bbd9",
+    "uvSyncMode": "uv sync --locked against the existing universal lock; lock not re-resolved, regenerated, or edited",
+    "attentionImplementation": "sdpa",
+    "flashAttentionInstalled": false
+  },
+  "host": {
+    "os": "Darwin 25.5.0 arm64",
+    "model": "Mac16,8 (M4 Pro)",
+    "unifiedMemoryBytes": 25769803776,
+    "metal": {
+      "recommendedMaxMemoryBytes": 19069665280,
+      "recommendedMaxMemoryNote": "torch.mps.recommended_max_memory(); advisory ceiling, ~74% of unified memory",
+      "iogpuWiredLimitMb": 0,
+      "iogpuWiredLwmMb": 0,
+      "wiredLimitNote": "0 = no kernel-enforced wired cap; kern.memorystatus_level stayed 76-82 (normal) throughout; no jetsam pressure events"
+    }
+  },
+  "capabilities": {
+    "mpsBackendBuiltAndAvailable": true,
+    "attention": {
+      "requested": "sdpa",
+      "modelConfig": "sdpa",
+      "speechTokenizerConfig": "sdpa"
+    },
+    "residency": {
+      "parameterDevice": "mps:0",
+      "parameterDtype": "float32"
+    },
+    "supportedSpeakers": [
+      "aiden",
+      "dylan",
+      "eric",
+      "ono_anna",
+      "ryan",
+      "serena",
+      "sohee",
+      "uncle_fu",
+      "vivian"
+    ],
+    "englishPresent": true,
+    "referenceAudioUsed": false
+  },
+  "outputs": [
+    {
+      "sequence": 1,
+      "file": "wavs/01-aiden.wav",
+      "speaker": "aiden",
+      "durationSeconds": 9.76,
+      "bytes": 468524,
+      "sha256": "d669a2f9531d3b251abbcb2bc00ea251b95eb62be0fa93ebf026a97d515a4a49",
+      "renderSeconds": 23.697526459000073,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7889344262295082,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.3253333333333333,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 9.76,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -2.919486418827702,
+        "rmsDbfs": -19.713957530671646
+      }
+    },
+    {
+      "sequence": 2,
+      "file": "wavs/02-dylan.wav",
+      "speaker": "dylan",
+      "durationSeconds": 12.56,
+      "bytes": 602924,
+      "sha256": "f84268dadf0337e01641aa9fefdb74b5ace769a4eb91a1ba8f254df28c2fc2d2",
+      "renderSeconds": 28.150873541948386,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7484076433121019,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.4186666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 12.56,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -8.56331087011913,
+        "rmsDbfs": -27.92874937957603
+      }
+    },
+    {
+      "sequence": 3,
+      "file": "wavs/03-eric.wav",
+      "speaker": "eric",
+      "durationSeconds": 22.56,
+      "bytes": 1082924,
+      "sha256": "37d32b0877a8f92efc15a380002991fa251da07d3fd3774bd6af8135ec31951d",
+      "renderSeconds": 56.69664420897607,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.5328014184397163,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.752,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 22.56,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -10.6671939132785,
+        "rmsDbfs": -34.94681238491548
+      }
+    },
+    {
+      "sequence": 4,
+      "file": "wavs/04-ono_anna.wav",
+      "speaker": "ono_anna",
+      "durationSeconds": 10.16,
+      "bytes": 487724,
+      "sha256": "1b8e104a9a40282120fc607261724579300b6b8f8b8cb03955fa891b9a0833b1",
+      "renderSeconds": 26.89135516702663,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7440944881889764,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.33866666666666667,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 10.16,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -8.055558356851714,
+        "rmsDbfs": -25.12401553484091
+      }
+    },
+    {
+      "sequence": 5,
+      "file": "wavs/05-ryan.wav",
+      "speaker": "ryan",
+      "durationSeconds": 11.12,
+      "bytes": 533804,
+      "sha256": "43e933febdddc1c3b82ecaf1a1c89ca344791cdc5098d472725ab405f29dec04",
+      "renderSeconds": 25.040464833029546,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.8507194244604317,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.37066666666666664,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 11.12,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -7.922560969914816,
+        "rmsDbfs": -24.89207647203369
+      }
+    },
+    {
+      "sequence": 6,
+      "file": "wavs/06-serena.wav",
+      "speaker": "serena",
+      "durationSeconds": 17.44,
+      "bytes": 837164,
+      "sha256": "c144262db44a59680016c91803b76689d899821e30b960d5d76e036db824c7f0",
+      "renderSeconds": 41.58184783300385,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.75,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.5813333333333334,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 17.44,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -7.901469104305678,
+        "rmsDbfs": -25.7530869335094
+      }
+    },
+    {
+      "sequence": 7,
+      "file": "wavs/07-sohee.wav",
+      "speaker": "sohee",
+      "durationSeconds": 16.24,
+      "bytes": 779564,
+      "sha256": "c8072491b69d33c059fd9768cabbbcf2de1c16f8e2b66c53706afd5ea81c02ee",
+      "renderSeconds": 34.43179312499706,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.6539408866995073,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.5413333333333333,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 16.24,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -4.40733751416123,
+        "rmsDbfs": -22.611318087825776
+      }
+    },
+    {
+      "sequence": 8,
+      "file": "wavs/08-uncle_fu.wav",
+      "speaker": "uncle_fu",
+      "durationSeconds": 11.2,
+      "bytes": 537644,
+      "sha256": "d2ded01163f99c4fbfa04ed95b9a298af3694eb592280933c338fd81cd23a700",
+      "renderSeconds": 23.898159041069448,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.8035714285714286,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.3733333333333333,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 11.2,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -6.197874585316015,
+        "rmsDbfs": -23.73991541047215
+      }
+    },
+    {
+      "sequence": 9,
+      "file": "wavs/09-vivian.wav",
+      "speaker": "vivian",
+      "durationSeconds": 13.12,
+      "bytes": 629804,
+      "sha256": "87e584f7e0092a53f455c9b3c4f6c75769f44a40980ba7761fb35288c860d343",
+      "renderSeconds": 30.133497500093654,
+      "gates": {
+        "checks": {
+          "clippedSampleFraction": {
+            "value": 0.0,
+            "bound": 0.001,
+            "pass": true
+          },
+          "activeFrameFraction": {
+            "value": 0.7301829268292683,
+            "bound": 0.15,
+            "pass": true
+          },
+          "secondsPerWord": {
+            "value": 0.4373333333333333,
+            "bound": [
+              0.08,
+              2.0
+            ],
+            "pass": true
+          },
+          "durationSeconds": {
+            "value": 13.12,
+            "bound": [
+              2.4,
+              30.0
+            ],
+            "pass": true
+          },
+          "format": {
+            "value": [
+              24000,
+              1,
+              16
+            ],
+            "bound": [
+              24000,
+              1,
+              16
+            ],
+            "pass": true
+          }
+        },
+        "allBoundsPassed": true,
+        "peakDbfs": -11.316320223209111,
+        "rmsDbfs": -28.50580083602095
+      }
+    }
+  ],
+  "gateBounds": {
+    "maximumClippedSampleFraction": 0.001,
+    "minimumActiveFrameFraction": 0.15,
+    "minimumSecondsPerWord": 0.08,
+    "maximumSecondsPerWord": 2.0,
+    "maximumDurationSeconds": 30.0,
+    "requiredSampleRateHz": 24000,
+    "requiredChannels": 1,
+    "requiredBitsPerSample": 16
+  },
+  "timing": {
+    "modelLoadSeconds": 1.6202855840092525,
+    "totalRenderSeconds": 290.5221617091447,
+    "perRenderSecondsRange": [
+      23.7,
+      56.7
+    ],
+    "cudaComparison": "issue-92 CUDA audition rendered the same 9 clips in 242.56 s; this MPS run took 290.52 s (~1.2x), far below any silent-CPU-fallback signature",
+    "clock": "time.perf_counter (monotonic)"
+  },
+  "resources": {
+    "sampler": "in-process psutil + torch.mps counters at 5 Hz over the whole render window",
+    "sampleCount": 1425,
+    "peakProcessRssBytes": 1276395520,
+    "peakProcessRssNote": "MPS heap lives in Metal shared GPU memory largely outside process RSS; the mps counters are the authoritative working-set figures",
+    "peakMpsCurrentAllocatedBytes": 10285074176,
+    "peakMpsCurrentVsRecommended": 0.5393,
+    "peakMpsDriverAllocatedBytes": 14541029376,
+    "peakMpsDriverVsRecommended": 0.7625,
+    "headroom": "peak current allocation 53.9% of the Metal recommended working set (46.1% headroom); peak driver allocation 76.2% (23.8% headroom); both within the ceiling with >=20% reserve",
+    "cleanup": {
+      "ok": true,
+      "afterCleanup": {
+        "currentAllocatedBytes": 16777216,
+        "driverAllocatedBytes": 7813840896
+      },
+      "sysctlsAfter": {
+        "kern.memorystatus_level": "76",
+        "iogpu.wired_limit_mb": "0",
+        "iogpu.wired_lwm_mb": "0",
+        "debug.iogpu.wired_limit": "0",
+        "hw.memsize": "25769803776",
+        "hw.model": "Mac16,8"
+      }
+    }
+  },
+  "determinism": {
+    "crossProcessRepeatability": "two independent process runs of the same bounded set produced byte-identical WAVs for all 9 speakers (e.g. aiden=d669a2f9531d3b251abbcb2bc00ea251b95eb62be0fa93ebf026a97d515a4a49 in both runs); claim is limited to this machine, backend, and pinned runtime"
+  },
+  "failures": {
+    "oom": false,
+    "operatorFallbackWarnings": [],
+    "operatorFallbackNote": "Python warnings channel captured across load and every render; zero MPS CPU-fallback or unsupported-operator warnings; render times corroborate no silent fallback",
+    "renderFailures": 0
+  },
+  "serialization": {
+    "concurrentModelWorkloads": "none observed before or during the run (process scan); spike-local exclusive flock held for the whole run; production GPU lease paths are WSL-only by design, so the flock is spike-scoped and does not pretend to be the production lease"
+  },
+  "storage": "9 numbered WAVs plus README.md, manifest.json, and manual-review.json in a private create-new directory outside Git; absolute path deliberately omitted from committed evidence",
+  "decision": {
+    "result": "GO (technical) for the protocol-preserving PyTorch MPS route",
+    "basis": "pinned snapshot + runtime load on MPS/float32/SDPA; all 9 approved speakers rendered healthy audio passing every WAV gate; 9 distinct outputs; zero failures, zero OOM, zero operator-fallback warnings; peak Metal allocation within the recommended working-set ceiling with reserve; byte-identical cross-process repeatability",
+    "humanListeningPending": "coherence and speaker distinctness are human judgments; the assembled listening bundle (same parameters as the issue-92 approved audition) is the review artifact; production use waits on that decision, as in issues #8 and #92",
+    "mlx": "MLX fallback investigation NOT triggered; MPS did not fail",
+    "outOfScopeReminders": "no production worker changes, no server/streaming/concurrency approval, no bulk rendering"
+  },
+  "wsl2StaysGreen": {
+    "cudaFilesTouched": false,
+    "locksTouched": false,
+    "existingEvidenceTouched": false,
+    "note": "only new macOS-suffixed evidence added; uv.lock byte-identical (sha256 unchanged); TypeScript suite not run on Darwin per issue scope"
+  },
+  "redaction": {
+    "absolutePaths": "omitted",
+    "processIds": "omitted",
+    "audio": "external only",
+    "sourceText": "none; audition transcript was written for the audition and is from no book"
+  }
+}
