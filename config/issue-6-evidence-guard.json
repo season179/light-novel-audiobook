@@ -3,9 +3,16 @@
   "implementationCommit": "49cb60e754ed55fdccfb44751fbb723153c3aea3",
   "authorizedMigrationPatches": {
     "packages/gemma-benchmark/package.json": "fb7d0f5342d55767ddcf26b53b989fbe792c13aa050549ca6bbf0e856f60d2dc",
-    "packages/gemma-benchmark/scripts/verify-evidence.ts": "4926bdf5a9c9376ac89f42fb97fac66631a46c68bd0f3fee5a6359a2eddc9b86",
-    "packages/gemma-benchmark/src/runtime.ts": "cf2a0eb2f49087a60ed5f6a292ac630b5961e64ef78c07ee0e859fee9281b19c",
-    "packages/gemma-benchmark/test/runtime-safety.test.ts": "760e6dc6f7267115685c6edc6a49ab2a16f64194153c08f76a19c679dcde1bc5",
+    "packages/gemma-benchmark/scripts/verify-evidence.ts": "3f6ffb93469a62a55ee5a5bd0c1600327dd775b2bc6f7196809489f50f539518",
+    "packages/gemma-benchmark/src/evidence.ts": "429d3425581fb9db20b63bcb897f4f3976647a41271c2a05a309baec7cd45113",
+    "packages/gemma-benchmark/src/index.ts": "b035b9c4053f6e1186f382395fa6bc2dfcbda92720f46571d860ece1f602fb6f",
+    "packages/gemma-benchmark/src/orchestrator.ts": "a4b81e99386ca3cb2f191926e7b86d8b464665ca20b548477ce079fc0f868ddb",
+    "packages/gemma-benchmark/src/path-safety.ts": "935e0fa8cb718619bbf01c4a438b52e5abba7d575823640ae2002a4eeef3e43e",
+    "packages/gemma-benchmark/src/runtime.ts": "676e7ddd92ecc1a8ecae6ad55e24b9a0166b424ae9159bb34d69889841fd854a",
+    "packages/gemma-benchmark/test/benchmark.test.ts": "d3f316005e4f86b787772c42bcdff06a563e3efe27967d6c45d4237c86d352f9",
+    "packages/gemma-benchmark/test/evidence.test.ts": "866358b09e2dc1845416eadf82153a23579c3389cd388c0c53a37f82ef2349ec",
+    "packages/gemma-benchmark/test/platform-manifest.test.ts": "edf0bd28a76d283c5d18c8d7647c2458e8f8810d6c38fbcfc8249b68ac3e6638",
+    "packages/gemma-benchmark/test/runtime-safety.test.ts": "5ce384dca26721c0c4b156c4c700f299530051129b94e1d6bf2f6cf40ad96e4b",
     "packages/scoring-harness/package.json": "e543b14ee82f356770a338c03123bdaf63203753961e0b2774d95a759c58c0d2"
   }
 }
