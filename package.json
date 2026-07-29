@@ -27,7 +27,7 @@
     "qwen3-tts:setup": "bash scripts/qwen3-tts-extension.sh setup",
     "qwen3-tts:probe": "bash scripts/qwen3-tts-extension.sh probe",
     "test:qwen3-tts": "python3 scripts/test/qwen3-tts-extension.test.py",
-    "test:qwen-tts-engine-python": "python3 -m py_compile packages/qwen-tts/python/qwen_batch_worker.py",
+    "test:qwen-tts-engine-python": "python3 -m py_compile packages/qwen-tts/python/qwen_batch_worker.py && python3 -m unittest discover -s packages/qwen-tts/test -p 'qwen_batch_worker_test.py'",
     "qwen3-tts:smoke:real": "pnpm --filter @light-novel-audiobook/qwen-tts smoke:real",
     "dev": "pnpm dev:direct",
     "dev:direct": "pnpm --parallel --filter @light-novel-audiobook/web --filter @light-novel-audiobook/worker dev",

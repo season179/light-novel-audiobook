@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { SELECTED_VOICE_PROFILE_IDS } from '@light-novel-audiobook/qwen-tts'
+import { SELECTED_VOICE_PROFILE_IDS, VOICE_PROFILE_IDS } from '@light-novel-audiobook/qwen-tts'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   createM1VoiceCast,
@@ -35,11 +35,13 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
   const cast = createM1VoiceCast(loaded)
   const profiles = [cast.narrator, cast.fallback, cast.profile('character-alice-ryan-energetic')]
 
-  it('reads every approved profile out of the config', () => {
-    // A literal, not `SELECTED_VOICE_PROFILE_IDS.length`: the count is a tripwire, and comparing the
-    // lock against itself would let a profile be added to both lists with nothing to notice.
+  it('retains the technical inventory while exposing only the MPS MVP selection', () => {
     expect(loaded.profiles.size).toBe(10)
-    expect([...loaded.profiles.keys()].sort()).toEqual([...SELECTED_VOICE_PROFILE_IDS].sort())
+    expect([...loaded.profiles.keys()].sort()).toEqual([...VOICE_PROFILE_IDS].sort())
+    expect(loaded.selectedProfiles.size).toBe(8)
+    expect([...loaded.selectedProfiles.keys()].sort()).toEqual(
+      [...SELECTED_VOICE_PROFILE_IDS].sort(),
+    )
   })
 
   it.each(profiles.map((profile) => [profile.id, profile] as const))(
@@ -94,8 +96,8 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
     expect(loaded.profiles.get('aiden-calm-narrator')?.role).toBe('narrator')
     expect(loaded.profiles.get('ryan-energetic-baseline')?.role).toBe('character')
     expect(loaded.profiles.get('ryan-low-weary')?.role).toBe('character-or-fallback')
-    // Ryan twice is deliberate — energetic and weary are two instructions on one speaker. The seven
-    // lowercase entries are the issue-92 audition speakers, spelled the way the model reports them.
+    // Ryan twice is deliberate — energetic and weary are two instructions on one speaker. This is
+    // the technical issue-92 inventory; the MPS MVP selection excludes Serena and holds Eric conditional.
     expect([...loaded.profiles.values()].map((profile) => profile.speaker).sort()).toEqual([
       'Aiden',
       'Ryan',
@@ -115,7 +117,9 @@ describe('the M1 cast resolves against the pinned Qwen configuration', () => {
 
   it('exposes exactly the approved material the fake engine checks against', () => {
     const material = pinnedVoiceMaterial(loaded)
-    expect(material).toHaveLength(10)
+    expect(material).toHaveLength(8)
+    expect(material.map((entry) => entry.syntheticSpeaker)).not.toContain('eric')
+    expect(material.map((entry) => entry.syntheticSpeaker)).not.toContain('serena')
     for (const entry of material) {
       expect(resolvesAgainstPinnedConfig(entry)).toBe(true)
     }

@@ -87,9 +87,11 @@ describe('the shipped production config satisfies both guards', () => {
     ).toHaveProperty('size', 9)
   })
 
-  it('approves exactly the nine speakers the listening decision covers', async () => {
+  it('selects exactly the seven speakers the MPS MVP listening decision approves', async () => {
     const loaded = await loadProductionConfig(PRODUCTION_CONFIG.pathname)
-    const speakers = [...loaded.profiles.values()].map((profile) => profile.speaker.toLowerCase())
+    const speakers = [...loaded.selectedProfiles.values()].map((profile) =>
+      profile.speaker.toLowerCase(),
+    )
     expect([...new Set(speakers)].sort()).toEqual(
       [...APPROVED_SPEAKERS].map((speaker) => speaker.toLowerCase()).sort(),
     )

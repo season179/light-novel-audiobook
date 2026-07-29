@@ -144,6 +144,67 @@
       "listeningEvidenceOutputSha256": "7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e"
     }
   ],
+  "mpsMvpVoicePolicy": {
+    "decision": "approved-with-exclusions",
+    "sourceIssue": 105,
+    "sourceCommentUrl": "https://github.com/season179/light-novel-audiobook/issues/105#issuecomment-5114531236",
+    "reviewedSpeakers": [
+      {
+        "speaker": "Aiden",
+        "status": "approved",
+        "reviewedOutputSha256": "d669a2f9531d3b251abbcb2bc00ea251b95eb62be0fa93ebf026a97d515a4a49",
+        "reason": null
+      },
+      {
+        "speaker": "dylan",
+        "status": "approved",
+        "reviewedOutputSha256": "f84268dadf0337e01641aa9fefdb74b5ace769a4eb91a1ba8f254df28c2fc2d2",
+        "reason": null
+      },
+      {
+        "speaker": "eric",
+        "status": "conditional",
+        "reviewedOutputSha256": "37d32b0877a8f92efc15a380002991fa251da07d3fd3774bd6af8135ec31951d",
+        "reason": "unwanted sound-effect-like intro; requires a clean separately reviewed render"
+      },
+      {
+        "speaker": "ono_anna",
+        "status": "approved",
+        "reviewedOutputSha256": "1b8e104a9a40282120fc607261724579300b6b8f8b8cb03955fa891b9a0833b1",
+        "reason": null
+      },
+      {
+        "speaker": "Ryan",
+        "status": "approved",
+        "reviewedOutputSha256": "43e933febdddc1c3b82ecaf1a1c89ca344791cdc5098d472725ab405f29dec04",
+        "reason": null
+      },
+      {
+        "speaker": "serena",
+        "status": "excluded",
+        "reviewedOutputSha256": "c144262db44a59680016c91803b76689d899821e30b960d5d76e036db824c7f0",
+        "reason": "robotic in the reviewed MPS profile"
+      },
+      {
+        "speaker": "sohee",
+        "status": "approved",
+        "reviewedOutputSha256": "c8072491b69d33c059fd9768cabbbcf2de1c16f8e2b66c53706afd5ea81c02ee",
+        "reason": null
+      },
+      {
+        "speaker": "uncle_fu",
+        "status": "approved",
+        "reviewedOutputSha256": "d2ded01163f99c4fbfa04ed95b9a298af3694eb592280933c338fd81cd23a700",
+        "reason": null
+      },
+      {
+        "speaker": "vivian",
+        "status": "approved",
+        "reviewedOutputSha256": "87e584f7e0092a53f455c9b3c4f6c75769f44a40980ba7761fb35288c860d343",
+        "reason": null
+      }
+    ]
+  },
   "fallbackVoiceProfileId": "ryan-low-weary",
   "seedStrategy": "sha256-profile-segment-v1",
   "evidence": {

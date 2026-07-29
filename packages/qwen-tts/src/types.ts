@@ -1,9 +1,7 @@
-export const SELECTED_VOICE_PROFILE_IDS = [
+export const VOICE_PROFILE_IDS = [
   'aiden-calm-narrator',
   'ryan-energetic-baseline',
   'ryan-low-weary',
-  // Approved by the issue-92 listening decision: seven more of the model's built-in speakers, each at
-  // the auditioned instruction. Character material only — the narrator and fallback roles are unchanged.
   'dylan-neutral-read',
   'eric-neutral-read',
   'ono-anna-neutral-read',
@@ -13,14 +11,24 @@ export const SELECTED_VOICE_PROFILE_IDS = [
   'vivian-neutral-read',
 ] as const
 
+export type VoiceProfileId = (typeof VOICE_PROFILE_IDS)[number]
+
+/** The fail-closed Mac-local MVP selection after issue #105 human listening. */
+export const SELECTED_VOICE_PROFILE_IDS = [
+  'aiden-calm-narrator',
+  'ryan-energetic-baseline',
+  'ryan-low-weary',
+  'dylan-neutral-read',
+  'ono-anna-neutral-read',
+  'sohee-neutral-read',
+  'uncle-fu-neutral-read',
+  'vivian-neutral-read',
+] as const satisfies readonly VoiceProfileId[]
+
 export type SelectedVoiceProfileId = (typeof SELECTED_VOICE_PROFILE_IDS)[number]
 
-/**
- * Every speaker a human has approved for English, exactly as the pinned config spells it. The two
- * capitalised entries predate the issue-92 audition and are left as written: their approved audio was
- * rendered with those strings, and the model accepts either case.
- */
-export const APPROVED_SPEAKERS = [
+/** Every technically auditioned built-in speaker retained in the evidence inventory. */
+export const AUDITIONED_SPEAKERS = [
   'Aiden',
   'Ryan',
   'dylan',
@@ -31,6 +39,19 @@ export const APPROVED_SPEAKERS = [
   'uncle_fu',
   'vivian',
 ] as const
+
+export type AuditionedSpeaker = (typeof AUDITIONED_SPEAKERS)[number]
+
+/** Seven speakers approved for the first MPS MVP; Eric is conditional and Serena is excluded. */
+export const APPROVED_SPEAKERS = [
+  'Aiden',
+  'Ryan',
+  'dylan',
+  'ono_anna',
+  'sohee',
+  'uncle_fu',
+  'vivian',
+] as const satisfies readonly AuditionedSpeaker[]
 
 export type ApprovedSpeaker = (typeof APPROVED_SPEAKERS)[number]
 

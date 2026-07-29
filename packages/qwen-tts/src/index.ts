@@ -19,7 +19,10 @@ export {
 export {
   type LoadedProductionConfig,
   loadProductionConfig,
+  type MpsMvpVoiceDecision,
+  type MpsMvpVoicePolicy,
   type QwenProductionConfig,
+  type SelectedVoiceProfile,
   type VoiceProfile,
 } from './config.js'
 export {
@@ -37,6 +40,10 @@ export {
 export { prepareEmptySmokeOutputRoot } from './smoke-output.js'
 export { createQwenSpeechEngineFactory } from './speech-engine-factory.js'
 export {
+  APPROVED_SPEAKERS,
+  type ApprovedSpeaker,
+  AUDITIONED_SPEAKERS,
+  type AuditionedSpeaker,
   type ExclusiveGpuGate,
   type FallbackApproval,
   SELECTED_VOICE_PROFILE_IDS,
@@ -50,6 +57,8 @@ export {
   type SpeechRenderOptions,
   type SpeechSegmentRequest,
   type SpeechSegmentResult,
+  VOICE_PROFILE_IDS,
+  type VoiceProfileId,
 } from './types.js'
 export {
   type CanonicalWavHeader,

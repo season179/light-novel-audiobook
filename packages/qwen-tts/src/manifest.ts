@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { LoadedProductionConfig, VoiceProfile, WavRequirements } from './config.js'
+import type {
+  LoadedProductionConfig,
+  SelectedVoiceProfile,
+  VoiceProfile,
+  WavRequirements,
+} from './config.js'
 import {
   AFFINE_WAV_GATE_REUSE_MIGRATION,
   type QwenWorkerRuntimeIdentity,
@@ -29,7 +34,7 @@ export interface RenderIdentity {
   readonly workerRuntime: QwenWorkerRuntimeIdentity
   readonly text: { readonly value: string; readonly sha256: string }
   readonly applicationInputIdentity: string | null
-  readonly voice: VoiceProfile & {
+  readonly voice: SelectedVoiceProfile & {
     readonly usedFallback: boolean
     readonly fallbackApproval: FallbackApproval | null
     readonly effectiveInstruction: string
@@ -45,7 +50,7 @@ export interface RenderIdentity {
 export interface SegmentPlan {
   readonly sequence: number
   readonly request: SpeechSegmentRequest
-  readonly profile: VoiceProfile
+  readonly profile: SelectedVoiceProfile
   readonly usedFallback: boolean
   readonly delivery: SpeechDeliveryDirection
   readonly effectiveInstruction: string
@@ -110,7 +115,7 @@ export function createSegmentPlan(
 ): SegmentPlan {
   const usedFallback = request.voiceProfileId === undefined
   const profileId = request.voiceProfileId ?? config.value.fallbackVoiceProfileId
-  const profile = config.profiles.get(profileId)
+  const profile = config.selectedProfiles.get(profileId)
   if (!profile) throw new Error(`Missing configured voice profile: ${profileId}`)
   const seed = deriveSeed(profile, request.segmentId)
   const delivery = request.delivery ?? DEFAULT_DELIVERY

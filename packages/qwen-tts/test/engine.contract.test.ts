@@ -285,6 +285,23 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     expect(gate.releases).toBe(1)
   })
 
+  it('rejects Eric and Serena at the TypeScript selection boundary before Python starts', async () => {
+    const fixture = await makeEngine()
+    const instruction =
+      'Speak clearly and naturally, as though reading a line from an audiobook to a single listener.'
+
+    expect(
+      fixture.engine.selectedVoiceProfile({ syntheticSpeaker: 'dylan', instruction, seed: 9210 }),
+    ).toBe('dylan-neutral-read')
+    expect(() =>
+      fixture.engine.selectedVoiceProfile({ syntheticSpeaker: 'eric', instruction, seed: 9211 }),
+    ).toThrow(/does not match an approved pinned Qwen profile/)
+    expect(() =>
+      fixture.engine.selectedVoiceProfile({ syntheticSpeaker: 'serena', instruction, seed: 9213 }),
+    ).toThrow(/does not match an approved pinned Qwen profile/)
+    expect(fixture.gate.acquisitions).toBe(0)
+  })
+
   it('reuses validated WAVs on restart without launching Python', async () => {
     const fixture = await makeEngine()
     const request = [

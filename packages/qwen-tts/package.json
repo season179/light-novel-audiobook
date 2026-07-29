@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "python3 -m py_compile python/qwen_batch_worker.py && vitest run --root ../.. packages/qwen-tts/test",
+    "test": "python3 -m py_compile python/qwen_batch_worker.py && python3 -m unittest discover -s test -p 'qwen_batch_worker_test.py' && vitest run --root ../.. packages/qwen-tts/test",
     "smoke:real": "tsx scripts/real-smoke.ts"
   },
   "dependencies": {
