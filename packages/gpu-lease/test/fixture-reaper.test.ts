@@ -363,7 +363,8 @@ describe('fixture holder registry (#67)', () => {
     // service, and on a CPU-starved hosted runner (bare `vitest run`, several workers sharing
     // slow cores) that fixed cost, compounded with the lock-retry process spawns, blew the 60 s
     // default timeout. Bundling once removes the loader entirely; four plain-node writers still
-    // race the kernel flock for real.
+    // race the kernel flock for real. Bundle the neutral workspace kernel-lock dependency too,
+    // since this file lives in /tmp where plain Node cannot resolve workspace package links.
     const requireFromTsx = createRequire(
       realpathSync(join(REPO_ROOT, 'node_modules/tsx/package.json')),
     )
@@ -373,7 +374,6 @@ describe('fixture holder registry (#67)', () => {
         bundle: boolean
         format: string
         platform: string
-        packages: string
         outfile: string
       }): Promise<unknown>
     }
@@ -384,7 +384,6 @@ describe('fixture holder registry (#67)', () => {
       bundle: true,
       format: 'esm',
       platform: 'node',
-      packages: 'external',
       outfile: bundlePath,
     })
     const moduleUrl = pathToFileURL(bundlePath).href

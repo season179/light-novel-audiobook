@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "jobId": "validate-macos",
   "runner": "macos-15",
-  "purpose": "Portable macOS arm64 install/toolchain gate for issue #108; this is not an equivalent or substitute for the Linux/WSL2 pnpm check gate.",
+  "purpose": "Portable macOS arm64 install/toolchain and kernel-lock gate for issues #108 and #109; this is not an equivalent or substitute for the Linux/WSL2 pnpm check gate.",
   "ubuntuJobSha256": "cd0be4a93ea05db097328bed9fc58f92d74d7ad8fe8c68a165227174d4d96da7",
   "setupSteps": [
     {
@@ -39,6 +39,10 @@
       "run": "pnpm install --frozen-lockfile"
     },
     {
+      "name": "Build and verify pinned Darwin kernel-lock helper",
+      "run": "pnpm --filter @light-novel-audiobook/kernel-lock build:helper:darwin"
+    },
+    {
       "name": "Run native macOS toolchain preflight",
       "run": "pnpm preflight"
     },
@@ -59,6 +63,10 @@
       "run": "pnpm build"
     },
     {
+      "name": "Run Darwin kernel-lock, EPUB, GPU lease, and fake-pipeline tests",
+      "run": "pnpm exec vitest run packages/kernel-lock/test/darwin-held-kernel-lock.test.ts packages/epub-ingestion/test/book-lock.darwin.test.ts packages/epub-ingestion/test/book-lock.unref-ordering.test.ts packages/gpu-lease/test/darwin-file-gpu-lease.test.ts packages/gemma-benchmark/test/benchmark-lock.darwin.test.ts packages/pipeline-driver/test/driver.fake-transports.test.ts"
+    },
+    {
       "name": "Probe installed FFmpeg/ffprobe 7.0.2 exactly",
       "shell": "bash",
       "run": "install_directory=\"$HOME/.local/share/light-novel-audiobook/tools/ffmpeg/current\"\nffmpeg_output=\"$(\"$install_directory/ffmpeg\" -hide_banner -version)\"\nffprobe_output=\"$(\"$install_directory/ffprobe\" -hide_banner -version)\"\nffmpeg_version=\"${ffmpeg_output%%$'\\n'*}\"\nffprobe_version=\"${ffprobe_output%%$'\\n'*}\"\nprintf '%s\\n%s\\n' \"$ffmpeg_version\" \"$ffprobe_version\"\n[[ \"$ffmpeg_version\" == \"ffmpeg version 7.0.2\"* ]]\n[[ \"$ffprobe_version\" == \"ffprobe version 7.0.2\"* ]]"
@@ -66,7 +74,6 @@
   ],
   "excludedLinuxOnlyContracts": [
     { "primitive": "WSL2 installer validation", "owners": [107] },
-    { "primitive": "flock", "owners": [111] },
     { "primitive": "/proc process identity", "owners": [111, 112] },
     { "primitive": "ext4/DrvFS qualification and findmnt", "owners": [107] },
     { "primitive": "Bash 4 process-tree assumptions", "owners": [111] },

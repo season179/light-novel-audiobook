@@ -191,13 +191,17 @@ const exactMacosSetupSteps = [
   },
 ]
 
-const exactIssue108Steps = [
+const exactMacosGateSteps = [
   {
     name: 'Build and install pinned FFmpeg/ffprobe 7.0.2 from source',
     shell: 'bash',
     run: 'bash scripts/build-ffmpeg-macos.sh',
   },
   { name: 'Install dependencies', run: 'pnpm install --frozen-lockfile' },
+  {
+    name: 'Build and verify pinned Darwin kernel-lock helper',
+    run: 'pnpm --filter @light-novel-audiobook/kernel-lock build:helper:darwin',
+  },
   { name: 'Run native macOS toolchain preflight', run: 'pnpm preflight' },
   { name: 'Run formatting, linting, and import checks', run: 'pnpm exec biome check .' },
   { name: 'Typecheck workspace', run: 'pnpm typecheck' },
@@ -206,6 +210,10 @@ const exactIssue108Steps = [
     run: 'node --test scripts/test/preflight-toolchain.test.mjs scripts/test/ffmpeg-artifacts.test.mjs scripts/test/macos-ci-gate.test.mjs',
   },
   { name: 'Build workspace', run: 'pnpm build' },
+  {
+    name: 'Run Darwin kernel-lock, EPUB, GPU lease, and fake-pipeline tests',
+    run: 'pnpm exec vitest run packages/kernel-lock/test/darwin-held-kernel-lock.test.ts packages/epub-ingestion/test/book-lock.darwin.test.ts packages/epub-ingestion/test/book-lock.unref-ordering.test.ts packages/gpu-lease/test/darwin-file-gpu-lease.test.ts packages/gemma-benchmark/test/benchmark-lock.darwin.test.ts packages/pipeline-driver/test/driver.fake-transports.test.ts',
+  },
   {
     name: 'Probe installed FFmpeg/ffprobe 7.0.2 exactly',
     shell: 'bash',
@@ -220,12 +228,12 @@ printf '%s\\n%s\\n' "$ffmpeg_version" "$ffprobe_version"
   },
 ]
 
-test('the committed gate is the exact amended issue #108 command set', () => {
+test('the committed gate is the exact amended issue #108/#109 command set', () => {
   assert.equal(gate.schemaVersion, 1)
   assert.equal(gate.jobId, 'validate-macos')
   assert.equal(gate.runner, 'macos-15')
   assert.deepEqual(gate.setupSteps, exactMacosSetupSteps)
-  assert.deepEqual(gate.steps, exactIssue108Steps)
+  assert.deepEqual(gate.steps, exactMacosGateSteps)
   assert.equal(
     gate.steps.some(({ run }) => run === 'pnpm check'),
     false,
@@ -235,7 +243,6 @@ test('the committed gate is the exact amended issue #108 command set', () => {
     gate.excludedLinuxOnlyContracts.map(({ primitive }) => primitive),
     [
       'WSL2 installer validation',
-      'flock',
       '/proc process identity',
       'ext4/DrvFS qualification and findmnt',
       'Bash 4 process-tree assumptions',
