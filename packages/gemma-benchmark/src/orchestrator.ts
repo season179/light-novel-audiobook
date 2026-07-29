@@ -338,11 +338,12 @@ async function releaseExperimentLock(
 
 async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
   const lockPath = join(experimentRoot, LOCK_NAME)
-  const exclusion = await acquireBenchmarkExclusion(lockPath)
-  let owner: ExperimentLockOwner
+  let exclusion: BenchmarkExclusion | undefined
+  let owner: ExperimentLockOwner | undefined
   try {
-    // Host identity remains Linux-only until #110. Acquisition comes first so the benchmark's
-    // exclusion already routes through the Darwin provider without weakening that fail-closed gate.
+    // Darwin selects and proves its exclusion provider before #110 supplies portable host identity.
+    // Linux deliberately retains its historical order: establish owner identity before flock.
+    if (process.platform === 'darwin') exclusion = await acquireBenchmarkExclusion(lockPath)
     const identity = await linuxProcessIdentity(process.pid)
     if (!identity) throw new Error('Current Linux process identity is unavailable')
     owner = {
@@ -352,10 +353,14 @@ async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<
       executable: identity.executable,
       owner_token: randomBytes(32).toString('hex'),
     }
+    if (exclusion === undefined) exclusion = await acquireBenchmarkExclusion(lockPath)
     await writeLockOwner(lockPath, owner)
   } catch (error: unknown) {
-    await exclusion.release()
+    await exclusion?.release()
     throw error
+  }
+  if (owner === undefined || exclusion === undefined) {
+    throw new Error('Experiment lock initialization did not complete')
   }
   try {
     return await run()

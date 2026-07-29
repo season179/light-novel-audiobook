@@ -102,6 +102,18 @@ describeDarwin('Darwin held kernel lock on real APFS paths', () => {
     await expect(
       resolveVerifiedDarwinHelper({ artifactDirectory: manifestDriftDirectory }),
     ).rejects.toThrow(/binary manifest\/hash verification failed/)
+
+    const missingCompilerDirectory = join(directory, 'missing-compiler')
+    await resolveVerifiedDarwinHelper({ artifactDirectory: missingCompilerDirectory })
+    const missingCompilerManifestPath = join(missingCompilerDirectory, 'manifest.json')
+    const missingCompiler = JSON.parse(
+      await readFile(missingCompilerManifestPath, 'utf8'),
+    ) as Record<string, unknown>
+    delete missingCompiler.compiler
+    await writeFile(missingCompilerManifestPath, `${JSON.stringify(missingCompiler)}\n`)
+    await expect(
+      resolveVerifiedDarwinHelper({ artifactDirectory: missingCompilerDirectory }),
+    ).rejects.toThrow(/binary manifest\/hash verification failed/)
   })
 
   it('provides nonblocking contention, bounded timeout, cancellation, release, and a persistent inode', async () => {

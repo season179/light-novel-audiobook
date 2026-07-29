@@ -74,10 +74,10 @@
   ],
   "excludedLinuxOnlyContracts": [
     { "primitive": "WSL2 installer validation", "owners": [107] },
-    { "primitive": "/proc process identity", "owners": [111, 112] },
+    { "primitive": "/proc process identity", "owners": [110] },
     { "primitive": "ext4/DrvFS qualification and findmnt", "owners": [107] },
-    { "primitive": "Bash 4 process-tree assumptions", "owners": [111] },
-    { "primitive": "Linux process-group and reaper semantics", "owners": [111, 112] },
-    { "primitive": "Python prctl parent-death signalling", "owners": [113] }
+    { "primitive": "Bash 4 process-tree assumptions", "owners": [109, 110, 116] },
+    { "primitive": "Linux process-group and reaper semantics", "owners": [109, 110, 116] },
+    { "primitive": "Python prctl parent-death signalling", "owners": [112] }
   ]
 }

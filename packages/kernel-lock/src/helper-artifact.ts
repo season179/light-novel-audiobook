@@ -139,7 +139,9 @@ async function verify(pin: ArtifactPin, directory: string): Promise<string> {
     manifest.protocol !== pin.protocol ||
     manifest.source?.path !== pin.source.path ||
     manifest.source.sha256 !== pin.source.sha256 ||
-    manifest.compiler?.path.length === 0 ||
+    typeof manifest.compiler?.path !== 'string' ||
+    manifest.compiler.path.length === 0 ||
+    typeof manifest.compiler.identity !== 'string' ||
     manifest.compiler.identity.length === 0 ||
     JSON.stringify(manifest.compileArguments) !== JSON.stringify(COMPILE_ARGUMENTS) ||
     resolve(manifest.binary?.path ?? '') !== resolve(binaryPath) ||

@@ -239,17 +239,14 @@ test('the committed gate is the exact amended issue #108/#109 command set', () =
     false,
   )
   assert.match(gate.purpose, /not an equivalent or substitute for the Linux\/WSL2 pnpm check gate/)
-  assert.deepEqual(
-    gate.excludedLinuxOnlyContracts.map(({ primitive }) => primitive),
-    [
-      'WSL2 installer validation',
-      '/proc process identity',
-      'ext4/DrvFS qualification and findmnt',
-      'Bash 4 process-tree assumptions',
-      'Linux process-group and reaper semantics',
-      'Python prctl parent-death signalling',
-    ],
-  )
+  assert.deepEqual(gate.excludedLinuxOnlyContracts, [
+    { primitive: 'WSL2 installer validation', owners: [107] },
+    { primitive: '/proc process identity', owners: [110] },
+    { primitive: 'ext4/DrvFS qualification and findmnt', owners: [107] },
+    { primitive: 'Bash 4 process-tree assumptions', owners: [109, 110, 116] },
+    { primitive: 'Linux process-group and reaper semantics', owners: [109, 110, 116] },
+    { primitive: 'Python prctl parent-death signalling', owners: [112] },
+  ])
 })
 
 test('validate-macos matches every approved uses/run step and shell in exact order', () => {
