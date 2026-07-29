@@ -116,6 +116,7 @@ function parseEvidenceGuard(value: unknown): EvidenceGuard {
     `${benchmarkRoot}/src/orchestrator.ts`,
     `${benchmarkRoot}/src/path-safety.ts`,
     `${benchmarkRoot}/src/runtime.ts`,
+    `${benchmarkRoot}/test/benchmark-lock.darwin.test.ts`,
     `${benchmarkRoot}/test/benchmark.test.ts`,
     `${benchmarkRoot}/test/evidence.test.ts`,
     `${benchmarkRoot}/test/platform-manifest.test.ts`,
