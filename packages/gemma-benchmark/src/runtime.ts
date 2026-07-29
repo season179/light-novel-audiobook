@@ -16,21 +16,53 @@ import {
   runtimeCleanupEvidenceSchema,
 } from './schemas.js'
 
-export const hostManifestSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+const hostManifestFields = {
   llamaCommit: z.string().regex(/^[a-f0-9]{40}$/),
   binarySha256: z.string().regex(/^[a-f0-9]{64}$/),
   modelRevision: z.string().regex(/^[a-f0-9]{40}$/),
   modelSha256: z.string().regex(/^[a-f0-9]{64}$/),
   modelSizeBytes: z.number().int().positive(),
-  cudaCompiler: z.string().min(1),
   cmakeConfigurationSha256: z.string().regex(/^[a-f0-9]{64}$/),
   cleanSourceCheckout: z.literal(true),
   cleanRebuild: z.literal(true),
   textModelOnly: z.literal(true),
+} as const
+
+const legacyCudaHostManifestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ...hostManifestFields,
+  cudaCompiler: z.string().min(1),
 })
 
+const cudaBuildRecordSchema = z.strictObject({
+  backend: z.literal('cuda'),
+  cudaCompiler: z.string().min(1),
+})
+
+const metalBuildRecordSchema = z.strictObject({
+  backend: z.literal('metal'),
+  target: z.literal('darwin-arm64'),
+  compiler: z.string().min(1),
+})
+
+const platformHostManifestSchema = z.strictObject({
+  schemaVersion: z.literal(2),
+  ...hostManifestFields,
+  buildRecord: z.discriminatedUnion('backend', [cudaBuildRecordSchema, metalBuildRecordSchema]),
+})
+
+export const hostManifestSchema = z.discriminatedUnion('schemaVersion', [
+  legacyCudaHostManifestSchema,
+  platformHostManifestSchema,
+])
+
 export type HostManifest = z.infer<typeof hostManifestSchema>
+
+export function requireCudaCompiler(host: HostManifest): string {
+  if (host.schemaVersion === 1) return host.cudaCompiler
+  if (host.buildRecord.backend === 'cuda') return host.buildRecord.cudaCompiler
+  throw new Error('Host manifest is not a CUDA build')
+}
 
 async function sha256File(path: string): Promise<string> {
   const hash = createHash('sha256')

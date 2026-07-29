@@ -22,7 +22,9 @@ export {
 } from './implementation-identity.js'
 export { operationalRunSetPassed, runExactlyThree } from './orchestrator.js'
 export {
+  classifyExternalBrainFilesystem,
   defaultTtsProtectedRoots,
+  type ExternalBrainFilesystem,
   type ExternalBrainProof,
   rejectSymlinkComponents,
   validateExternalBrainPaths,
@@ -40,6 +42,7 @@ export {
   type PinnedRuntimeContext,
   type PinnedRuntimeResult,
   readChildExitEvidence,
+  requireCudaCompiler,
   runtimeConfigurationSha256,
   stopOwnedChild,
   waitForPortRelease,

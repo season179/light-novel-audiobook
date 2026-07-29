@@ -48,6 +48,62 @@ describe('committed issue #6 synthetic evidence', () => {
     }
   })
   it.skipIf(!existsSync(evidencePath))(
+    'reads the committed legacy CUDA manifest and ext4 proof without rewriting them',
+    async () => {
+      const raw = JSON.parse(await readFile(evidencePath, 'utf8')) as {
+        runtime: { host_manifest: unknown; external_root_proof: unknown }
+      }
+      const parsed = syntheticEvidenceSchema.parse(raw)
+      expect(parsed.runtime.host_manifest).toEqual(raw.runtime.host_manifest)
+      expect(parsed.runtime.external_root_proof).toEqual(raw.runtime.external_root_proof)
+      expect(parsed.runtime.host_manifest.schemaVersion).toBe(1)
+      expect(parsed.runtime.external_root_proof).toMatchObject({ ext4: true })
+    },
+  )
+  it.skipIf(!existsSync(evidencePath))(
+    'accepts schema-v2 Metal host and APFS proof records without CUDA fields',
+    async () => {
+      const raw = JSON.parse(await readFile(evidencePath, 'utf8')) as {
+        runtime: {
+          host_manifest: Record<string, unknown>
+          external_root_proof: Record<string, unknown>
+        }
+      }
+      const host = raw.runtime.host_manifest
+      const { cudaCompiler: _, ...hostWithoutCuda } = host
+      raw.runtime.host_manifest = {
+        ...hostWithoutCuda,
+        schemaVersion: 2,
+        buildRecord: {
+          backend: 'metal',
+          target: 'darwin-arm64',
+          compiler: 'Apple clang 17.0.0',
+        },
+      }
+      const proof = raw.runtime.external_root_proof
+      const { ext4: __, ...proofWithoutExt4 } = proof
+      raw.runtime.external_root_proof = {
+        ...proofWithoutExt4,
+        schemaVersion: 2,
+        filesystem: 'apfs',
+      }
+
+      expect(() => syntheticEvidenceSchema.parse(raw)).not.toThrow()
+      expect(() =>
+        syntheticEvidenceSchema.parse({
+          ...raw,
+          runtime: {
+            ...raw.runtime,
+            host_manifest: {
+              ...raw.runtime.host_manifest,
+              cudaCompiler: 'fabricated CUDA',
+            },
+          },
+        }),
+      ).toThrow()
+    },
+  )
+  it.skipIf(!existsSync(evidencePath))(
     'rejects an annotation substitution that recomputes every former outer binding',
     async () => {
       const original = syntheticEvidenceSchema.parse(
