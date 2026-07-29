@@ -23,6 +23,7 @@ interface HolderExit {
 export interface DarwinHeldKernelLockStrategyConfig {
   readonly artifactDirectory?: string
   readonly compiler?: string
+  readonly repositoryRoot?: string
   readonly releaseGraceMs?: number
   readonly killGraceMs?: number
 }
