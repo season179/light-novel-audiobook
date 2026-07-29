@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "protocol": "darwin-flock2-held-helper@1",
+  "description": "The committed source SHA-256 pins the audited helper input. Each build remains outside Git and writes a local manifest containing this source hash, compiler identity, ordered compile arguments, output path, and the locally produced binary SHA-256. Runtime verification checks both the source pin and local binary digest before every execution and fails closed on drift; a source hash alone is not a binary pin.",
+  "source": {
+    "path": "packages/kernel-lock/native/darwin-held-lock.c",
+    "sha256": "1120b5f408ffa282c79f980a11c914a278025718db075703e239637fec02af50"
+  },
+  "compileArguments": ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"],
+  "artifactDirectory": "~/.local/share/light-novel-audiobook/tools/kernel-lock/darwin-arm64/<source-sha256>",
+  "localManifest": "manifest.json"
+}

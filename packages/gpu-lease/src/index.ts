@@ -3,6 +3,11 @@ import { execFile, spawn } from 'node:child_process'
 import { mkdir, open, readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import {
+  DarwinHeldKernelLockStrategy,
+  KernelLockError,
+  type KernelLockStrategy,
+} from '@light-novel-audiobook/kernel-lock'
 
 const execFileAsync = promisify(execFile)
 const HOLDER_SOURCE = `
@@ -62,6 +67,8 @@ export interface FileGpuLeaseCoordinatorConfig {
   /** Required stable file path shared by Gemma, Qwen, and the final composition root. */
   readonly lockFilePath: string
   readonly flockExecutable?: string
+  /** Provider override for contract tests; normal callers select from the current OS. */
+  readonly kernelLockStrategy?: KernelLockStrategy
   readonly nvidiaSmiExecutable?: string
   /** Diagnostic fail-closed check for uncoordinated pre-existing GPU users; flock is the guarantee. */
   readonly inspectExistingComputeProcesses?: boolean
@@ -233,6 +240,7 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
   readonly #lockFilePath: string
   readonly #quarantineFilePath: string
   readonly #flockExecutable: string
+  readonly #kernelLockStrategy: KernelLockStrategy | undefined
   readonly #nvidiaSmiExecutable: string
   readonly #inspectExistingComputeProcesses: boolean
   readonly #residentGpuMemoryThresholdMiB: number
@@ -245,6 +253,15 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
     this.#lockFilePath = resolve(config.lockFilePath)
     this.#quarantineFilePath = `${this.#lockFilePath}.quarantined`
     this.#flockExecutable = config.flockExecutable ?? 'flock'
+    this.#kernelLockStrategy =
+      config.kernelLockStrategy ??
+      (process.platform === 'darwin' && config.flockExecutable === undefined
+        ? new DarwinHeldKernelLockStrategy({
+            ...(config.releaseGraceMs === undefined
+              ? {}
+              : { releaseGraceMs: config.releaseGraceMs }),
+          })
+        : undefined)
     this.#nvidiaSmiExecutable = config.nvidiaSmiExecutable ?? 'nvidia-smi'
     if (config.flockExecutable !== undefined && config.onHolderStarted === undefined) {
       // A custom flock executable exists only so tests can run hostile or stubborn holders:
@@ -256,7 +273,8 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
         'A custom flock executable requires onHolderStarted so the holder can be registered',
       )
     }
-    this.#inspectExistingComputeProcesses = config.inspectExistingComputeProcesses ?? true
+    this.#inspectExistingComputeProcesses =
+      config.inspectExistingComputeProcesses ?? process.platform === 'linux'
     this.#residentGpuMemoryThresholdMiB =
       config.residentGpuMemoryThresholdMiB ?? DEFAULT_RESIDENT_GPU_MEMORY_THRESHOLD_MIB
     this.#releaseGraceMs = config.releaseGraceMs ?? 5_000
@@ -274,6 +292,9 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
 
   async acquire(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
     if (signal?.aborted) throw new GpuLeaseError('cancelled', 'GPU lease acquisition was cancelled')
+    if (this.#kernelLockStrategy !== undefined) {
+      return await this.#acquireThroughKernelLock(owner, signal)
+    }
     await mkdir(dirname(this.#lockFilePath), { recursive: true, mode: 0o700 })
     const file = await open(this.#lockFilePath, 'a', 0o600)
     await file.close()
@@ -403,6 +424,57 @@ export class FileGpuLeaseCoordinator implements ExclusiveGpuLeaseCoordinator {
       })
     } finally {
       signal?.removeEventListener('abort', cancel)
+    }
+  }
+
+  async #acquireThroughKernelLock(owner: GpuOwner, signal?: AbortSignal): Promise<GpuLease> {
+    let held: Awaited<ReturnType<KernelLockStrategy['acquire']>> | undefined
+    try {
+      held = await this.#kernelLockStrategy?.acquire({
+        lockFilePath: this.#lockFilePath,
+        acquisition: { kind: 'nonblocking' },
+        conflictExitCode: 75,
+        ...(signal === undefined ? {} : { signal }),
+      })
+      if (held === undefined)
+        throw new GpuLeaseError('unavailable', 'GPU kernel-lock strategy is unavailable')
+      await this.#assertNotQuarantined()
+      if (this.#inspectExistingComputeProcesses) await this.#diagnoseExistingCompute(signal)
+      let released = false
+      let quarantined = false
+      return {
+        owner,
+        lockFilePath: this.#lockFilePath,
+        quarantine: async (reason: string) => {
+          if (released)
+            throw new GpuLeaseError('unavailable', 'A released GPU lease cannot be quarantined')
+          if (quarantined) return
+          await this.#writeQuarantine(owner, reason)
+          quarantined = true
+        },
+        release: async () => {
+          if (released || quarantined) return
+          released = true
+          try {
+            await held?.release()
+          } catch (error) {
+            throw new GpuLeaseError('unavailable', 'GPU kernel lease release failed', {
+              cause: error,
+            })
+          }
+        },
+      }
+    } catch (error) {
+      await held?.release().catch(() => undefined)
+      if (error instanceof GpuLeaseError) throw error
+      if (error instanceof KernelLockError) {
+        const code =
+          error.code === 'busy' ? 'busy' : error.code === 'cancelled' ? 'cancelled' : 'unavailable'
+        throw new GpuLeaseError(code, error.message, { cause: error })
+      }
+      throw new GpuLeaseError('unavailable', 'Could not acquire the cross-process GPU lease', {
+        cause: error,
+      })
     }
   }
 

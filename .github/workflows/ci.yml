@@ -82,11 +82,11 @@ jobs:
         run: pnpm build
 
   validate-macos:
-    # Portable Apple Silicon install/toolchain gate for issue #108, pinned by
+    # Portable Apple Silicon install/toolchain and kernel-lock gate for issues #108/#109, pinned by
     # config/macos-ci-gate.json. It is not equivalent to the Linux/WSL2 `pnpm check` gate.
-    # Excluded Linux-only contracts remain owned by #107/#111-#113: WSL2 installer validation,
-    # flock, /proc identity, ext4/DrvFS and findmnt, Bash 4 process-tree assumptions, Linux
-    # process-group/reaper semantics, and Python prctl parent-death signalling.
+    # Remaining excluded Linux-only contracts include WSL2 installer validation, /proc identity,
+    # ext4/DrvFS and findmnt, Bash 4 process-tree assumptions, Linux-specific reaper semantics,
+    # and Python prctl parent-death signalling.
     name: Node 24 validation (macOS arm64)
     runs-on: macos-15
     timeout-minutes: 30
@@ -114,6 +114,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build and verify pinned Darwin kernel-lock helper
+        run: pnpm --filter @light-novel-audiobook/kernel-lock build:helper:darwin
+
       - name: Run native macOS toolchain preflight
         run: pnpm preflight
 
@@ -128,6 +131,9 @@ jobs:
 
       - name: Build workspace
         run: pnpm build
+
+      - name: Run Darwin kernel-lock, EPUB, GPU lease, and fake-pipeline tests
+        run: pnpm exec vitest run packages/kernel-lock/test/darwin-held-kernel-lock.test.ts packages/epub-ingestion/test/book-lock.darwin.test.ts packages/epub-ingestion/test/book-lock.unref-ordering.test.ts packages/gpu-lease/test/darwin-file-gpu-lease.test.ts packages/gemma-benchmark/test/benchmark-lock.darwin.test.ts packages/pipeline-driver/test/driver.fake-transports.test.ts
 
       - name: Probe installed FFmpeg/ffprobe 7.0.2 exactly
         shell: bash

@@ -54,6 +54,8 @@ async function runDetachedLockCaller(
   const child = spawn(
     process.execPath,
     [
+      '--import',
+      'tsx',
       '--input-type=module',
       '-e',
       [

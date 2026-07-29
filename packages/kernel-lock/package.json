@@ -1,5 +1,5 @@
 {
-  "name": "@light-novel-audiobook/gpu-lease",
+  "name": "@light-novel-audiobook/kernel-lock",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,10 +8,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
+    "build:helper:darwin": "tsx scripts/build-helper.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --root ../.. packages/gpu-lease/test"
-  },
-  "dependencies": {
-    "@light-novel-audiobook/kernel-lock": "workspace:*"
+    "test": "vitest run --root ../.. packages/kernel-lock/test"
   }
 }

@@ -164,6 +164,8 @@ async function spawnLeaseHoldingCaller(lockFilePath: string): Promise<ChildProce
   const caller = spawn(
     process.execPath,
     [
+      '--import',
+      'tsx',
       '--input-type=module',
       '-e',
       [
@@ -210,6 +212,8 @@ async function runDetachedLeaseCaller(
   const child = spawn(
     process.execPath,
     [
+      '--import',
+      'tsx',
       '--input-type=module',
       '-e',
       [

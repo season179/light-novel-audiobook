@@ -17,6 +17,7 @@
     "evidence:verify": "tsx scripts/verify-evidence.ts"
   },
   "dependencies": {
+    "@light-novel-audiobook/kernel-lock": "workspace:*",
     "@light-novel-audiobook/scoring-harness": "workspace:*",
     "zod": "4.4.3"
   }

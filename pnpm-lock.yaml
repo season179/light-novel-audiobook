@@ -148,6 +148,9 @@ importers:
       '@light-novel-audiobook/domain':
         specifier: workspace:*
         version: link:../domain
+      '@light-novel-audiobook/kernel-lock':
+        specifier: workspace:*
+        version: link:../kernel-lock
       fflate:
         specifier: 0.8.3
         version: 0.8.3
@@ -176,6 +179,9 @@ importers:
 
   packages/gemma-benchmark:
     dependencies:
+      '@light-novel-audiobook/kernel-lock':
+        specifier: workspace:*
+        version: link:../kernel-lock
       '@light-novel-audiobook/scoring-harness':
         specifier: workspace:*
         version: link:../scoring-harness
@@ -204,7 +210,13 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
-  packages/gpu-lease: {}
+  packages/gpu-lease:
+    dependencies:
+      '@light-novel-audiobook/kernel-lock':
+        specifier: workspace:*
+        version: link:../kernel-lock
+
+  packages/kernel-lock: {}
 
   packages/llama-cpp-spike:
     dependencies:

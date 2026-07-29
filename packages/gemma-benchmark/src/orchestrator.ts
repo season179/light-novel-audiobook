@@ -4,6 +4,11 @@ import { constants } from 'node:fs'
 import { chmod, link, lstat, mkdir, open, readdir, readFile, readlink, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  DarwinHeldKernelLockStrategy,
+  type HeldKernelLock,
+  KernelLockError,
+} from '@light-novel-audiobook/kernel-lock'
+import {
   canonicalJson,
   canonicalSha256,
   type EvaluationRun,
@@ -182,8 +187,28 @@ async function initializeAdvisoryLockFile(lockPath: string): Promise<void> {
   }
 }
 
-async function acquireAdvisoryLock(lockPath: string): Promise<ChildProcess> {
+type AdvisoryLock = ChildProcess | HeldKernelLock
+
+export interface BenchmarkExclusion {
+  release(): Promise<void>
+}
+
+async function acquireAdvisoryLock(lockPath: string): Promise<AdvisoryLock> {
   await initializeAdvisoryLockFile(lockPath)
+  if (process.platform === 'darwin') {
+    try {
+      return await new DarwinHeldKernelLockStrategy().acquire({
+        lockFilePath: lockPath,
+        acquisition: { kind: 'nonblocking' },
+        conflictExitCode: 73,
+      })
+    } catch (error) {
+      if (error instanceof KernelLockError && error.code === 'busy') {
+        throw new Error('Experiment is already locked by another process', { cause: error })
+      }
+      throw new Error('Experiment advisory lock failed', { cause: error })
+    }
+  }
   const child = spawn(
     'flock',
     [
@@ -248,7 +273,11 @@ async function writeLockOwner(lockPath: string, owner: ExperimentLockOwner): Pro
   }
 }
 
-async function releaseAdvisoryLock(child: ChildProcess): Promise<void> {
+async function releaseAdvisoryLock(child: AdvisoryLock): Promise<void> {
+  if ('assertHeld' in child) {
+    await child.release()
+    return
+  }
   child.stdin?.end()
   const code = await new Promise<number | null>((resolvePromise, rejectPromise) => {
     if (child.exitCode !== null) {
@@ -277,10 +306,22 @@ async function releaseAdvisoryLock(child: ChildProcess): Promise<void> {
   if (code !== 0) throw new Error('Experiment advisory lock holder exited abnormally')
 }
 
+export async function acquireBenchmarkExclusion(lockPath: string): Promise<BenchmarkExclusion> {
+  const child = await acquireAdvisoryLock(lockPath)
+  let released = false
+  return {
+    release: async () => {
+      if (released) return
+      released = true
+      await releaseAdvisoryLock(child)
+    },
+  }
+}
+
 async function releaseExperimentLock(
   lockPath: string,
   ownerToken: string,
-  child: ChildProcess,
+  exclusion: BenchmarkExclusion,
 ): Promise<void> {
   let ownershipError: Error | undefined
   try {
@@ -291,32 +332,40 @@ async function releaseExperimentLock(
   } catch (error: unknown) {
     ownershipError = error as Error
   }
-  await releaseAdvisoryLock(child)
+  await exclusion.release()
   if (ownershipError) throw ownershipError
 }
 
 async function withExperimentLock<T>(experimentRoot: string, run: () => Promise<T>): Promise<T> {
-  const identity = await linuxProcessIdentity(process.pid)
-  if (!identity) throw new Error('Current Linux process identity is unavailable')
-  const owner: ExperimentLockOwner = {
-    schema_version: 'benchmark-experiment-lock@1',
-    pid: process.pid,
-    linux_start_time_ticks: identity.startTimeTicks,
-    executable: identity.executable,
-    owner_token: randomBytes(32).toString('hex'),
-  }
   const lockPath = join(experimentRoot, LOCK_NAME)
-  const lockChild = await acquireAdvisoryLock(lockPath)
+  let exclusion: BenchmarkExclusion | undefined
+  let owner: ExperimentLockOwner | undefined
   try {
+    // Darwin selects and proves its exclusion provider before #110 supplies portable host identity.
+    // Linux deliberately retains its historical order: establish owner identity before flock.
+    if (process.platform === 'darwin') exclusion = await acquireBenchmarkExclusion(lockPath)
+    const identity = await linuxProcessIdentity(process.pid)
+    if (!identity) throw new Error('Current Linux process identity is unavailable')
+    owner = {
+      schema_version: 'benchmark-experiment-lock@1',
+      pid: process.pid,
+      linux_start_time_ticks: identity.startTimeTicks,
+      executable: identity.executable,
+      owner_token: randomBytes(32).toString('hex'),
+    }
+    if (exclusion === undefined) exclusion = await acquireBenchmarkExclusion(lockPath)
     await writeLockOwner(lockPath, owner)
   } catch (error: unknown) {
-    await releaseAdvisoryLock(lockChild)
+    await exclusion?.release()
     throw error
+  }
+  if (owner === undefined || exclusion === undefined) {
+    throw new Error('Experiment lock initialization did not complete')
   }
   try {
     return await run()
   } finally {
-    await releaseExperimentLock(lockPath, owner.owner_token, lockChild)
+    await releaseExperimentLock(lockPath, owner.owner_token, exclusion)
   }
 }
 

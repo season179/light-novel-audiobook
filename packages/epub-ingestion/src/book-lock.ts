@@ -4,6 +4,11 @@ import { randomUUID } from 'node:crypto'
 import { open } from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import {
+  DarwinHeldKernelLockStrategy,
+  KernelLockError,
+  type KernelLockStrategy,
+} from '@light-novel-audiobook/kernel-lock'
 
 /**
  * Cross-process mutual exclusion for one book, built on a kernel `flock` held for the whole ingest.
@@ -116,6 +121,8 @@ export interface FileBookLockCoordinatorConfig {
   /** How long to wait for a competing holder before reporting `busy`. */
   readonly waitMs?: number
   readonly flockExecutable?: string
+  /** Provider override for contract tests; normal callers select from the current OS. */
+  readonly kernelLockStrategy?: KernelLockStrategy
   /** How long a well-behaved holder gets to exit on stdin EOF before the group is signalled. */
   readonly releaseGraceMs?: number
   /** How long the group gets to disappear after `SIGKILL` before release reports failure. */
@@ -196,6 +203,7 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
   readonly #lockDirectory: string
   readonly #waitMs: number
   readonly #flockExecutable: string
+  readonly #kernelLockStrategy: KernelLockStrategy | undefined
   readonly #releaseGraceMs: number
   readonly #killGraceMs: number
 
@@ -203,6 +211,16 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
     this.#lockDirectory = path.resolve(config.lockDirectory)
     this.#waitMs = config.waitMs ?? 10_000
     this.#flockExecutable = config.flockExecutable ?? 'flock'
+    this.#kernelLockStrategy =
+      config.kernelLockStrategy ??
+      (process.platform === 'darwin' && config.flockExecutable === undefined
+        ? new DarwinHeldKernelLockStrategy({
+            ...(config.releaseGraceMs === undefined
+              ? {}
+              : { releaseGraceMs: config.releaseGraceMs }),
+            ...(config.killGraceMs === undefined ? {} : { killGraceMs: config.killGraceMs }),
+          })
+        : undefined)
     this.#releaseGraceMs = config.releaseGraceMs ?? 5_000
     this.#killGraceMs = config.killGraceMs ?? 5_000
     if (!Number.isFinite(this.#waitMs) || this.#waitMs < 0) {
@@ -212,6 +230,9 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
 
   async acquire(bookId: string): Promise<HeldBookLock> {
     const lockFilePath = path.join(this.#lockDirectory, `${bookId}.lock`)
+    if (this.#kernelLockStrategy !== undefined) {
+      return await this.#acquireThroughKernelLock(bookId, lockFilePath)
+    }
     // Created if absent and then left in place for good; see the note on never unlinking.
     const file = await open(lockFilePath, 'a', 0o600)
     await file.close()
@@ -317,6 +338,63 @@ export class FileBookLockCoordinator implements BookLockCoordinator {
       // Stopping the holder must never replace the cause that made acquisition fail.
       if (acquired) await this.#stopHolderQuietly(child)
       if (error instanceof BookLockError) throw error
+      throw new BookLockError('unavailable', `Could not acquire the EPUB book lock for ${bookId}`, {
+        cause: error,
+      })
+    }
+  }
+
+  async #acquireThroughKernelLock(bookId: string, lockFilePath: string): Promise<HeldBookLock> {
+    const token = `${bookId}-${process.pid}-${randomUUID()}`
+    try {
+      const held = await this.#kernelLockStrategy?.acquire({
+        lockFilePath,
+        acquisition: { kind: 'bounded', waitMs: this.#waitMs },
+        conflictExitCode: CONFLICT_EXIT_CODE,
+      })
+      if (held === undefined)
+        throw new BookLockError('unavailable', 'EPUB kernel-lock strategy is unavailable')
+      let released = false
+      return {
+        bookId,
+        lockFilePath,
+        token,
+        holderGroupPid: undefined,
+        holderPid: undefined,
+        assertHeld: () => {
+          if (released)
+            throw new BookLockError('unavailable', 'EPUB book lock was already released')
+          try {
+            held.assertHeld()
+          } catch (error) {
+            throw new BookLockError(
+              'unavailable',
+              `EPUB book lock holder for ${bookId} is gone; the lock is no longer held`,
+              { cause: error },
+            )
+          }
+        },
+        release: async () => {
+          if (released) return
+          released = true
+          try {
+            await held.release()
+          } catch (error) {
+            throw new BookLockError('unavailable', 'EPUB book lock release failed', {
+              cause: error,
+            })
+          }
+        },
+      }
+    } catch (error) {
+      if (error instanceof BookLockError) throw error
+      if (error instanceof KernelLockError && error.code === 'busy') {
+        throw new BookLockError(
+          'busy',
+          `Timed out after ${this.#waitMs} ms waiting for the EPUB book lock: ${path.basename(lockFilePath)}`,
+          { cause: error },
+        )
+      }
       throw new BookLockError('unavailable', `Could not acquire the EPUB book lock for ${bookId}`, {
         cause: error,
       })

@@ -14,6 +14,7 @@
   "dependencies": {
     "@light-novel-audiobook/application": "workspace:*",
     "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/kernel-lock": "workspace:*",
     "fflate": "0.8.3",
     "saxes": "6.0.0"
   }
