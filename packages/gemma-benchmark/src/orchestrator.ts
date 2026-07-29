@@ -14,7 +14,7 @@ import {
 import type { GatewayCompletion, ModelGateway } from './gateway.js'
 import type { BenchmarkProfile } from './profiles.js'
 import { OUTPUT_SCHEMA_VERSION, PROMPT_VERSION, prepareRequest, SYSTEM_PROMPT } from './prompt.js'
-import { type PinnedRuntimeContext, readChildExitEvidence } from './runtime.js'
+import { type PinnedRuntimeContext, readChildExitEvidence, requireCudaCompiler } from './runtime.js'
 import {
   type BenchmarkRunManifest,
   benchmarkRunManifestSchema,
@@ -453,7 +453,7 @@ function evaluationRun(options: {
         prompt_cache: false,
         llama_cpp_commit: options.runtime.host.llamaCommit,
         llama_cpp_binary_sha256: options.runtime.host.binarySha256,
-        cuda_compiler: options.runtime.host.cudaCompiler,
+        cuda_compiler: requireCudaCompiler(options.runtime.host),
         host_manifest_sha256: options.runtime.hostManifestSha256,
         runtime_configuration_sha256: options.runtime.runtimeConfigurationSha256,
       },

@@ -133,8 +133,9 @@ function runtime(child?: ChildProcess): PinnedRuntimeContext {
     hostManifestSha256: '8'.repeat(64),
     runtimeConfigurationSha256: '9'.repeat(64),
     externalRootProof: {
+      schemaVersion: 2,
       canonicalized: true,
-      ext4: true,
+      filesystem: 'ext4',
       outsideRepository: true,
       outsideGitDirectory: true,
       outsideTtsRoots: true,

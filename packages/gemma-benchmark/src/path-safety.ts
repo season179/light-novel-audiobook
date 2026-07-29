@@ -43,15 +43,37 @@ export function defaultTtsProtectedRoots(): readonly string[] {
   ]
 }
 
+export type ExternalBrainFilesystem = 'ext4' | 'apfs'
+
 export interface ExternalBrainProof {
+  readonly schemaVersion: 2
   readonly canonicalized: true
-  readonly ext4: true
+  readonly filesystem: ExternalBrainFilesystem
   readonly outsideRepository: true
   readonly outsideGitDirectory: true
   readonly outsideTtsRoots: true
   readonly overlapCheckedBothDirections: true
   readonly symlinkComponentsRejected: true
   readonly pathClasses: readonly string[]
+}
+
+const EXT4_MAGIC = 0xef53
+const APFS_MAGIC = 0x1a
+
+export function classifyExternalBrainFilesystem(
+  platform: NodeJS.Platform,
+  filesystemType: number | bigint,
+): ExternalBrainFilesystem {
+  const type = Number(filesystemType)
+  if (platform === 'linux') {
+    if (type !== EXT4_MAGIC) throw new Error('External brain runtime must use ext4')
+    return 'ext4'
+  }
+  if (platform === 'darwin') {
+    if (type !== APFS_MAGIC) throw new Error('External brain runtime must use APFS')
+    return 'apfs'
+  }
+  throw new Error(`Unsupported external brain platform: ${platform}`)
 }
 
 export async function validateExternalBrainPaths(options: {
@@ -82,7 +104,7 @@ export async function validateExternalBrainPaths(options: {
       throw new Error('External brain runtime overlaps protected TTS storage')
     }
   }
-  if ((await statfs(root)).type !== 0xef53) throw new Error('External brain runtime must use ext4')
+  const filesystem = classifyExternalBrainFilesystem(process.platform, (await statfs(root)).type)
 
   const pathClasses = new Set<string>(['runtime'])
   for (const candidate of options.candidates) {
@@ -101,8 +123,9 @@ export async function validateExternalBrainPaths(options: {
   return {
     root,
     proof: {
+      schemaVersion: 2,
       canonicalized: true,
-      ext4: true,
+      filesystem,
       outsideRepository: true,
       outsideGitDirectory: true,
       outsideTtsRoots: true,

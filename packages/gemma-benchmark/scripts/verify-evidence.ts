@@ -111,7 +111,14 @@ function parseEvidenceGuard(value: unknown): EvidenceGuard {
   const expectedPaths = [
     issue6VerifierPath,
     ...issue6PackagingPaths,
+    `${benchmarkRoot}/src/evidence.ts`,
+    `${benchmarkRoot}/src/index.ts`,
+    `${benchmarkRoot}/src/orchestrator.ts`,
+    `${benchmarkRoot}/src/path-safety.ts`,
     `${benchmarkRoot}/src/runtime.ts`,
+    `${benchmarkRoot}/test/benchmark.test.ts`,
+    `${benchmarkRoot}/test/evidence.test.ts`,
+    `${benchmarkRoot}/test/platform-manifest.test.ts`,
     `${benchmarkRoot}/test/runtime-safety.test.ts`,
   ].sort()
   if (

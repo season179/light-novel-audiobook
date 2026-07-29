@@ -214,7 +214,7 @@ describe('owned runtime cleanup', () => {
 })
 
 describe('external brain path guards', () => {
-  it('accepts a distinct ext4 root and rejects Git, TTS, and symlink overlap', async () => {
+  it('accepts the platform filesystem and rejects Git, TTS, and symlink overlap', async () => {
     const external = await root()
     const { stdout } = await execFile('git', ['rev-parse', '--absolute-git-dir'], {
       cwd: repositoryRoot,
@@ -227,7 +227,13 @@ describe('external brain path guards', () => {
         candidates: [{ path: join(external, 'model.gguf'), pathClass: 'model' }],
         ttsRoots: [join(external, '..', 'tts-distinct')],
       }),
-    ).resolves.toMatchObject({ proof: { ext4: true, outsideTtsRoots: true } })
+    ).resolves.toMatchObject({
+      proof: {
+        schemaVersion: 2,
+        filesystem: process.platform === 'darwin' ? 'apfs' : 'ext4',
+        outsideTtsRoots: true,
+      },
+    })
     await expect(
       validateExternalBrainPaths({
         runtimeRoot: repositoryRoot,

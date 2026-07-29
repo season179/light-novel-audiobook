@@ -19,16 +19,27 @@ const gitIdentitySchema = z.strictObject({
   source_files: z.array(z.string().min(1)).min(1),
 })
 
-const externalProofSchema = z.strictObject({
+const externalProofFields = {
   canonicalized: z.literal(true),
-  ext4: z.literal(true),
   outsideRepository: z.literal(true),
   outsideGitDirectory: z.literal(true),
   outsideTtsRoots: z.literal(true),
   overlapCheckedBothDirections: z.literal(true),
   symlinkComponentsRejected: z.literal(true),
   pathClasses: z.array(z.string().min(1)).min(1),
-})
+} as const
+
+const externalProofSchema = z.union([
+  z.strictObject({
+    ...externalProofFields,
+    ext4: z.literal(true),
+  }),
+  z.strictObject({
+    schemaVersion: z.literal(2),
+    ...externalProofFields,
+    filesystem: z.enum(['ext4', 'apfs']),
+  }),
+])
 
 const evidenceRunSchema = z.strictObject({
   run_index: z.int().min(1).max(3),
