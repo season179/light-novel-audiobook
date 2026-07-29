@@ -4,19 +4,29 @@ import {
   assertApprovedSpeakersPresent,
   assertDistinctProfileMaterial,
 } from './cast-distinctness.js'
-import type { ApprovedSpeaker, SelectedVoiceProfileId } from './types.js'
-import { APPROVED_SPEAKERS, SpeechEngineError } from './types.js'
+import type {
+  ApprovedSpeaker,
+  AuditionedSpeaker,
+  SelectedVoiceProfileId,
+  VoiceProfileId,
+} from './types.js'
+import { APPROVED_SPEAKERS, SELECTED_VOICE_PROFILE_IDS, SpeechEngineError } from './types.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
 export interface VoiceProfile {
-  readonly id: SelectedVoiceProfileId
+  readonly id: VoiceProfileId
   readonly role: string
-  readonly speaker: ApprovedSpeaker
+  readonly speaker: AuditionedSpeaker
   readonly instruction: string
   readonly instructionSha256: string
   readonly seedSalt: number
   readonly listeningEvidenceOutputSha256: string
+}
+
+export interface SelectedVoiceProfile extends VoiceProfile {
+  readonly id: SelectedVoiceProfileId
+  readonly speaker: ApprovedSpeaker
 }
 
 export interface GenerationSettings {
@@ -51,6 +61,20 @@ export interface WavRequirements {
   readonly maximumDurationSeconds: number
 }
 
+export interface MpsMvpVoiceDecision {
+  readonly speaker: AuditionedSpeaker
+  readonly status: 'approved' | 'conditional' | 'excluded'
+  readonly reviewedOutputSha256: string
+  readonly reason: string | null
+}
+
+export interface MpsMvpVoicePolicy {
+  readonly decision: 'approved-with-exclusions'
+  readonly sourceIssue: 105
+  readonly sourceCommentUrl: string
+  readonly reviewedSpeakers: ReadonlyArray<MpsMvpVoiceDecision>
+}
+
 export interface QwenProductionConfig {
   readonly schemaVersion: 1
   readonly adapter: {
@@ -80,6 +104,7 @@ export interface QwenProductionConfig {
   readonly generation: GenerationSettings
   readonly wav: WavRequirements
   readonly voiceProfiles: ReadonlyArray<VoiceProfile>
+  readonly mpsMvpVoicePolicy: MpsMvpVoicePolicy
   readonly fallbackVoiceProfileId: SelectedVoiceProfileId
   readonly seedStrategy: 'sha256-profile-segment-v1'
   readonly evidence: {
@@ -91,7 +116,10 @@ export interface QwenProductionConfig {
 export interface LoadedProductionConfig {
   readonly value: QwenProductionConfig
   readonly sha256: string
-  readonly profiles: ReadonlyMap<SelectedVoiceProfileId, VoiceProfile>
+  /** Complete technically auditioned inventory, including conditional/excluded MPS voices. */
+  readonly profiles: ReadonlyMap<VoiceProfileId, VoiceProfile>
+  /** Fail-closed first-MVP selection after issue #105 human listening. */
+  readonly selectedProfiles: ReadonlyMap<SelectedVoiceProfileId, SelectedVoiceProfile>
 }
 
 function fail(message: string): never {
@@ -133,6 +161,7 @@ function validateConfig(value: unknown): QwenProductionConfig {
       'generation',
       'wav',
       'voiceProfiles',
+      'mpsMvpVoicePolicy',
       'fallbackVoiceProfileId',
       'seedStrategy',
       'evidence',
@@ -254,7 +283,7 @@ function validateConfig(value: unknown): QwenProductionConfig {
     expectLocked(wav[key], expected, `wav.${key}`)
 
   if (!Array.isArray(root.voiceProfiles) || root.voiceProfiles.length !== 10)
-    fail('exactly ten selected voice profiles are required')
+    fail('exactly ten technically auditioned voice profiles are required')
   const profileLocks = [
     {
       id: 'aiden-calm-narrator',
@@ -407,6 +436,107 @@ function validateConfig(value: unknown): QwenProductionConfig {
     expectSha(profile.listeningEvidenceOutputSha256, 'listening evidence output hash')
   })
 
+  const policy = record(root.mpsMvpVoicePolicy, 'mpsMvpVoicePolicy')
+  exactKeys(
+    policy,
+    ['decision', 'sourceIssue', 'sourceCommentUrl', 'reviewedSpeakers'],
+    'mpsMvpVoicePolicy',
+  )
+  expectLocked(policy.decision, 'approved-with-exclusions', 'mpsMvpVoicePolicy.decision')
+  expectLocked(policy.sourceIssue, 105, 'mpsMvpVoicePolicy.sourceIssue')
+  expectLocked(
+    policy.sourceCommentUrl,
+    'https://github.com/season179/light-novel-audiobook/issues/105#issuecomment-5114531236',
+    'mpsMvpVoicePolicy.sourceCommentUrl',
+  )
+  const reviewedSpeakerLocks = [
+    {
+      speaker: 'Aiden',
+      status: 'approved',
+      reviewedOutputSha256: 'd669a2f9531d3b251abbcb2bc00ea251b95eb62be0fa93ebf026a97d515a4a49',
+      reason: null,
+    },
+    {
+      speaker: 'dylan',
+      status: 'approved',
+      reviewedOutputSha256: 'f84268dadf0337e01641aa9fefdb74b5ace769a4eb91a1ba8f254df28c2fc2d2',
+      reason: null,
+    },
+    {
+      speaker: 'eric',
+      status: 'conditional',
+      reviewedOutputSha256: '37d32b0877a8f92efc15a380002991fa251da07d3fd3774bd6af8135ec31951d',
+      reason: 'unwanted sound-effect-like intro; requires a clean separately reviewed render',
+    },
+    {
+      speaker: 'ono_anna',
+      status: 'approved',
+      reviewedOutputSha256: '1b8e104a9a40282120fc607261724579300b6b8f8b8cb03955fa891b9a0833b1',
+      reason: null,
+    },
+    {
+      speaker: 'Ryan',
+      status: 'approved',
+      reviewedOutputSha256: '43e933febdddc1c3b82ecaf1a1c89ca344791cdc5098d472725ab405f29dec04',
+      reason: null,
+    },
+    {
+      speaker: 'serena',
+      status: 'excluded',
+      reviewedOutputSha256: 'c144262db44a59680016c91803b76689d899821e30b960d5d76e036db824c7f0',
+      reason: 'robotic in the reviewed MPS profile',
+    },
+    {
+      speaker: 'sohee',
+      status: 'approved',
+      reviewedOutputSha256: 'c8072491b69d33c059fd9768cabbbcf2de1c16f8e2b66c53706afd5ea81c02ee',
+      reason: null,
+    },
+    {
+      speaker: 'uncle_fu',
+      status: 'approved',
+      reviewedOutputSha256: 'd2ded01163f99c4fbfa04ed95b9a298af3694eb592280933c338fd81cd23a700',
+      reason: null,
+    },
+    {
+      speaker: 'vivian',
+      status: 'approved',
+      reviewedOutputSha256: '87e584f7e0092a53f455c9b3c4f6c75769f44a40980ba7761fb35288c860d343',
+      reason: null,
+    },
+  ] as const
+  if (!Array.isArray(policy.reviewedSpeakers) || policy.reviewedSpeakers.length !== 9)
+    fail('mpsMvpVoicePolicy must preserve all nine reviewed speaker decisions')
+  policy.reviewedSpeakers.forEach((item, index) => {
+    const decision = record(item, `mpsMvpVoicePolicy.reviewedSpeakers[${index}]`)
+    exactKeys(
+      decision,
+      ['speaker', 'status', 'reviewedOutputSha256', 'reason'],
+      `mpsMvpVoicePolicy.reviewedSpeakers[${index}]`,
+    )
+    const expected = reviewedSpeakerLocks[index]
+    if (!expected) fail('MPS MVP speaker-decision lock is missing')
+    for (const [key, expectedValue] of Object.entries(expected))
+      expectLocked(
+        decision[key],
+        expectedValue,
+        `mpsMvpVoicePolicy.reviewedSpeakers[${index}].${key}`,
+      )
+    expectSha(decision.reviewedOutputSha256, 'MPS reviewed output hash')
+  })
+  const approvedSpeakers = reviewedSpeakerLocks
+    .filter((decision) => decision.status === 'approved')
+    .map((decision) => decision.speaker)
+    .sort()
+  if (approvedSpeakers.join('\0') !== [...APPROVED_SPEAKERS].sort().join('\0'))
+    fail('MPS approved-speaker policy drifted')
+  const selectedProfileIds = profileLocks
+    .filter((profile) => (approvedSpeakers as readonly string[]).includes(profile.speaker))
+    .map((profile) => profile.id)
+    .sort()
+  if (selectedProfileIds.join('\0') !== [...SELECTED_VOICE_PROFILE_IDS].sort().join('\0'))
+    fail('MPS selected profile policy drifted')
+
   expectLocked(root.fallbackVoiceProfileId, 'ryan-low-weary', 'fallbackVoiceProfileId')
   expectLocked(root.seedStrategy, 'sha256-profile-segment-v1', 'seedStrategy')
   const evidence = record(root.evidence, 'evidence')
@@ -471,9 +601,18 @@ export async function loadProductionConfig(path: string): Promise<LoadedProducti
     )
   }
   const value = validateConfig(parsed)
+  const profiles = new Map(value.voiceProfiles.map((profile) => [profile.id, profile]))
+  const selectedProfiles = new Map(
+    SELECTED_VOICE_PROFILE_IDS.map((id) => {
+      const profile = profiles.get(id)
+      if (profile === undefined) fail(`selected profile ${id} is missing from inventory`)
+      return [id, profile as SelectedVoiceProfile] as const
+    }),
+  )
   return {
     value,
     sha256: createHash('sha256').update(bytes).digest('hex'),
-    profiles: new Map(value.voiceProfiles.map((profile) => [profile.id, profile])),
+    profiles,
+    selectedProfiles,
   }
 }

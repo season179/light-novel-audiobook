@@ -26,6 +26,9 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 MODEL_REVISION = "0c0e3051f131929182e2c023b9537f8b1c68adfe"
 EXPECTED_PROFILE_IDS = ["aiden-calm-narrator", "ryan-energetic-baseline", "ryan-low-weary", "dylan-neutral-read", "eric-neutral-read", "ono-anna-neutral-read", "serena-neutral-read", "sohee-neutral-read", "uncle-fu-neutral-read", "vivian-neutral-read"]
+# Issue #105 keeps all ten technically auditioned profiles above for audit, but the first MPS MVP
+# may select only the eight profiles belonging to its seven human-approved speakers.
+SELECTED_PROFILE_IDS = ["aiden-calm-narrator", "ryan-energetic-baseline", "ryan-low-weary", "dylan-neutral-read", "ono-anna-neutral-read", "sohee-neutral-read", "uncle-fu-neutral-read", "vivian-neutral-read"]
 # The second, independent copy of the production voice lock. It exists so the inventory cannot be
 # widened on the TypeScript side alone: a profile no human approved would then reach the model here.
 EXPECTED_PROFILES = [
@@ -120,8 +123,24 @@ EXPECTED_PROFILES = [
         "listeningEvidenceOutputSha256": "7c08131b9f7826b1f86a92df998df89972177c09261b6f755ed91269526d563e",
     },
 ]
-# Every distinct speaker the lock admits, lowercased the way the model reports them. Derived rather
-# than restated, so a speaker added above cannot be missed by the load-time availability check.
+EXPECTED_MPS_MVP_VOICE_POLICY = {
+    "decision": "approved-with-exclusions",
+    "sourceIssue": 105,
+    "sourceCommentUrl": "https://github.com/season179/light-novel-audiobook/issues/105#issuecomment-5114531236",
+    "reviewedSpeakers": [
+        {"speaker": "Aiden", "status": "approved", "reviewedOutputSha256": "d669a2f9531d3b251abbcb2bc00ea251b95eb62be0fa93ebf026a97d515a4a49", "reason": None},
+        {"speaker": "dylan", "status": "approved", "reviewedOutputSha256": "f84268dadf0337e01641aa9fefdb74b5ace769a4eb91a1ba8f254df28c2fc2d2", "reason": None},
+        {"speaker": "eric", "status": "conditional", "reviewedOutputSha256": "37d32b0877a8f92efc15a380002991fa251da07d3fd3774bd6af8135ec31951d", "reason": "unwanted sound-effect-like intro; requires a clean separately reviewed render"},
+        {"speaker": "ono_anna", "status": "approved", "reviewedOutputSha256": "1b8e104a9a40282120fc607261724579300b6b8f8b8cb03955fa891b9a0833b1", "reason": None},
+        {"speaker": "Ryan", "status": "approved", "reviewedOutputSha256": "43e933febdddc1c3b82ecaf1a1c89ca344791cdc5098d472725ab405f29dec04", "reason": None},
+        {"speaker": "serena", "status": "excluded", "reviewedOutputSha256": "c144262db44a59680016c91803b76689d899821e30b960d5d76e036db824c7f0", "reason": "robotic in the reviewed MPS profile"},
+        {"speaker": "sohee", "status": "approved", "reviewedOutputSha256": "c8072491b69d33c059fd9768cabbbcf2de1c16f8e2b66c53706afd5ea81c02ee", "reason": None},
+        {"speaker": "uncle_fu", "status": "approved", "reviewedOutputSha256": "d2ded01163f99c4fbfa04ed95b9a298af3694eb592280933c338fd81cd23a700", "reason": None},
+        {"speaker": "vivian", "status": "approved", "reviewedOutputSha256": "87e584f7e0092a53f455c9b3c4f6c75769f44a40980ba7761fb35288c860d343", "reason": None},
+    ],
+}
+# Every distinct speaker the inventory admits, lowercased the way the model reports them. Derived
+# rather than restated, so a technically auditioned profile cannot skip availability validation.
 EXPECTED_SPEAKERS = {profile["speaker"].lower() for profile in EXPECTED_PROFILES}
 EXPECTED_WAV = {
     "container": "RIFF/WAVE",
@@ -150,24 +169,7 @@ def handle_termination(_signum: int, _frame: Any) -> None:
 PR_SET_PDEATHSIG = 1
 
 
-def bind_to_parent_lifetime() -> None:
-    """Die with the orchestrating Node parent.
-
-    The parent holds the exclusive cross-process GPU lease and spawns this worker in its own
-    process group, so a SIGKILLed parent would otherwise release the lease while this process is
-    still CUDA-resident and the next owner would load its weights on top of ours. PR_SET_PDEATHSIG
-    makes the kernel kill us the moment the parent goes away. It is a hard exclusivity guarantee,
-    so a platform that cannot arm it must fail rather than render.
-
-    CAUTION for future callers: per prctl(2) the parent-death signal fires when the *thread* that
-    created this process terminates, not when the parent process exits. Today the orchestrator
-    always spawns from its main thread, so the two coincide. If the planned background worker
-    (docs/PLAN.md) ever spawns this process from a Node `worker_thread`, this worker is SIGKILLed
-    the moment that thread finishes -- mid-batch. Spawn from the main thread, or keep the spawning
-    thread alive for the whole batch.
-    """
-    if sys.platform != "linux":
-        raise ValueError("the pinned Qwen worker requires Linux parent-death signalling")
+def _bind_linux_parent_lifetime() -> None:
     import ctypes
 
     parent = os.getppid()
@@ -176,8 +178,70 @@ def bind_to_parent_lifetime() -> None:
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG, SIGKILL) failed")
     if os.getppid() != parent:
         # The parent died inside the arming window, so the signal will never arrive. Leave now
-        # rather than hold the GPU behind a lease nobody owns.
+        # rather than hold the accelerator behind a lease nobody owns.
         os._exit(129)
+
+
+def _bind_darwin_parent_lifetime() -> None:
+    import select
+    import threading
+
+    parent = os.getppid()
+    if parent <= 1:
+        os._exit(129)
+    queue = select.kqueue()
+    parent_exit = select.kevent(
+        parent,
+        filter=select.KQ_FILTER_PROC,
+        flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE | select.KQ_EV_ONESHOT,
+        fflags=select.KQ_NOTE_EXIT,
+    )
+    try:
+        # Register before the second PPID read. If the parent exits before registration, the PPID
+        # changes and the check below catches it; after registration, kqueue catches it.
+        queue.control([parent_exit], 0, 0)
+        if os.getppid() != parent:
+            os._exit(129)
+
+        def die_when_parent_exits() -> None:
+            try:
+                queue.control([], 1, None)
+            finally:
+                # A returned event or a failed watcher both invalidate the parent-lifetime proof.
+                os._exit(129)
+
+        watcher = threading.Thread(
+            target=die_when_parent_exits,
+            name="qwen-parent-lifetime",
+            daemon=True,
+        )
+        watcher.start()
+        # The queue and blocked daemon are intentionally process-lifetime resources. This worker
+        # exits after one batch, while closing the queue early would remove the parent-death proof.
+    except BaseException:
+        queue.close()
+        raise
+
+
+def bind_to_parent_lifetime() -> None:
+    """Die with the orchestrating Node parent on the two approved production hosts.
+
+    The parent holds the shared cross-process model lease and spawns this worker in its own process
+    group. Linux uses PR_SET_PDEATHSIG. Darwin has no equivalent prctl, so an EVFILT_PROC/NOTE_EXIT
+    watcher provides the same fail-closed process-lifetime binding without changing the JSON
+    protocol. A platform that cannot arm its binding must fail before reading the first request.
+
+    CAUTION for future Linux callers: per prctl(2) the parent-death signal is tied to the thread
+    that spawned this process. Spawn from the main thread, or keep the spawning thread alive for
+    the whole batch.
+    """
+    if sys.platform == "linux":
+        _bind_linux_parent_lifetime()
+        return
+    if sys.platform == "darwin":
+        _bind_darwin_parent_lifetime()
+        return
+    raise ValueError(f"the pinned Qwen worker has no parent-death binding on {sys.platform}")
 
 
 def emit(event_type: str, **values: Any) -> None:
@@ -305,7 +369,7 @@ def validate_segment(item: Any, seen: set[str], previous_sequence: int) -> dict[
         raise ValueError("segment ID is unsafe or duplicated")
     if not isinstance(item["text"], str) or not item["text"].strip() or "\0" in item["text"]:
         raise ValueError(f"segment text is invalid: {segment_id}")
-    if item["voiceProfileId"] not in EXPECTED_PROFILE_IDS:
+    if item["voiceProfileId"] not in SELECTED_PROFILE_IDS:
         raise ValueError(f"voice profile is not selected: {segment_id}")
     if not isinstance(item["seed"], int) or not 1 <= item["seed"] <= 0x7FFFFFFF:
         raise ValueError(f"seed is invalid: {segment_id}")
@@ -461,7 +525,9 @@ def validate_production_config(request: dict[str, Any]) -> tuple[dict[str, Any],
         raise ValueError("production WAV validation settings changed")
     profiles = config.get("voiceProfiles", [])
     if profiles != EXPECTED_PROFILES:
-        raise ValueError("selected voice profile identities changed")
+        raise ValueError("voice profile inventory identities changed")
+    if config.get("mpsMvpVoicePolicy") != EXPECTED_MPS_MVP_VOICE_POLICY:
+        raise ValueError("MPS MVP human voice policy changed")
     by_id = {profile["id"]: profile for profile in profiles}
     if config.get("fallbackVoiceProfileId") != "ryan-low-weary" or config.get("seedStrategy") != "sha256-profile-segment-v1":
         raise ValueError("fallback voice or seed strategy changed")
@@ -475,11 +541,82 @@ def validate_production_config(request: dict[str, Any]) -> tuple[dict[str, Any],
     return config, by_id
 
 
-def set_seed(torch: Any, numpy: Any, seed: int) -> None:
-    random.seed(seed)
-    numpy.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+class TorchBackend:
+    def __init__(
+        self,
+        *,
+        name: str,
+        device_map: str,
+        parameter_device_type: str,
+        dtype_attribute: str,
+    ) -> None:
+        self.name = name
+        self.device_map = device_map
+        self.parameter_device_type = parameter_device_type
+        self.dtype_attribute = dtype_attribute
+
+    def model_load_kwargs(self, torch: Any) -> dict[str, Any]:
+        return {
+            "device_map": self.device_map,
+            "dtype": getattr(torch, self.dtype_attribute),
+            "attn_implementation": "sdpa",
+            "local_files_only": True,
+            "use_safetensors": True,
+        }
+
+    def set_seed(self, torch: Any, numpy: Any, seed: int) -> None:
+        random.seed(seed)
+        numpy.random.seed(seed)
+        torch.manual_seed(seed)
+        if self.name == "mps":
+            torch.mps.manual_seed(seed)
+        else:
+            torch.cuda.manual_seed_all(seed)
+
+    def synchronize(self, torch: Any) -> None:
+        getattr(torch, self.name).synchronize()
+
+    def empty_cache(self, torch: Any) -> None:
+        getattr(torch, self.name).empty_cache()
+
+    def assert_model_residency(self, torch: Any, model: Any) -> None:
+        # Issue #105 made this an explicit MPS acceptance check. Do not add a new CUDA rejection
+        # condition to the already-accepted Linux path merely to share this helper.
+        if self.name != "mps":
+            return
+        parameter = next(model.parameters())
+        if (
+            getattr(parameter.device, "type", None) != self.parameter_device_type
+            or parameter.dtype != getattr(torch, self.dtype_attribute)
+        ):
+            raise ValueError("loaded model residency drifted from mps/float32")
+
+
+MPS_BACKEND = TorchBackend(
+    name="mps",
+    device_map="mps",
+    parameter_device_type="mps",
+    dtype_attribute="float32",
+)
+CUDA_BACKEND = TorchBackend(
+    name="cuda",
+    device_map="cuda:0",
+    parameter_device_type="cuda",
+    dtype_attribute="bfloat16",
+)
+
+
+def select_torch_backend(torch: Any, platform_name: str | None = None) -> TorchBackend:
+    platform_name = sys.platform if platform_name is None else platform_name
+    if platform_name == "darwin":
+        if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
+            raise ValueError("MPS backend is unavailable")
+        return MPS_BACKEND
+    if platform_name == "linux":
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA is unavailable")
+        return CUDA_BACKEND
+    raise ValueError(f"the pinned Qwen worker has no supported backend on unsupported platform {platform_name}")
 
 
 def validate_wav(data: bytes, wav_config: dict[str, Any], text: str) -> dict[str, Any]:
@@ -630,6 +767,7 @@ def run() -> int:
     os.umask(0o077)
     tts = None
     torch = None
+    backend: TorchBackend | None = None
     active_segment: str | None = None
     output_directory: Path | None = None
     try:
@@ -661,18 +799,14 @@ def run() -> int:
             from qwen_tts import Qwen3TTSModel
 
         torch = loaded_torch
-        if not torch.cuda.is_available():
-            raise ValueError("CUDA is unavailable")
+        backend = select_torch_backend(torch)
         emit("model-loading")
         tts = Qwen3TTSModel.from_pretrained(
             str(snapshot),
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
-            attn_implementation="sdpa",
-            local_files_only=True,
-            use_safetensors=True,
+            **backend.model_load_kwargs(torch),
         )
-        torch.cuda.synchronize()
+        backend.synchronize(torch)
+        backend.assert_model_residency(torch, tts.model)
         if getattr(tts.model.config, "_attn_implementation", None) != "sdpa":
             raise ValueError("loaded model did not retain SDPA attention")
         tokenizer_attention = getattr(tts.model.speech_tokenizer.model.config, "_attn_implementation", None)
@@ -720,7 +854,7 @@ def run() -> int:
             if is_fallback and item["voiceProfileId"] != config["fallbackVoiceProfileId"]:
                 raise ValueError(f"fallback did not use configured approved profile: {segment_id}")
             emit("segment-started", segmentId=segment_id, sequence=item["sequence"])
-            set_seed(torch, np, item["seed"])
+            backend.set_seed(torch, np, item["seed"])
             wavs, sample_rate = tts.generate_custom_voice(
                 text=item["text"],
                 language=config["generation"]["language"],
@@ -729,7 +863,7 @@ def run() -> int:
                 non_streaming_mode=config["generation"]["nonStreamingMode"],
                 **generation_kwargs(config["generation"]),
             )
-            torch.cuda.synchronize()
+            backend.synchronize(torch)
             if len(wavs) != 1:
                 raise ValueError("single segment generation returned an unexpected batch size")
             analysis = write_wav_atomic(
@@ -752,8 +886,8 @@ def run() -> int:
         del tts
         tts = None
         gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        backend.empty_cache(torch)
+        backend.synchronize(torch)
         emit("gpu-cleanup-complete")
         emit("batch-complete")
         return 0
@@ -771,10 +905,10 @@ def run() -> int:
         if tts is not None:
             del tts
         gc.collect()
-        if torch is not None and torch.cuda.is_available():
+        if torch is not None and backend is not None:
             try:
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
+                backend.empty_cache(torch)
+                backend.synchronize(torch)
             except Exception:
                 pass
 

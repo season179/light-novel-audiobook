@@ -312,6 +312,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
         workerRuntime: waveformProducingRuntimeIdentity(runtimeIdentity),
         generation: production.value.generation,
         seedStrategy: production.value.seedStrategy,
+        mpsMvpVoicePolicy: production.value.mpsMvpVoicePolicy,
       }),
     )
   }
@@ -502,7 +503,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     readonly instruction: string
     readonly seed: number
   }): SpeechSegmentResult['voiceProfileId'] {
-    const match = this.#production.value.voiceProfiles.find(
+    const match = [...this.#production.selectedProfiles.values()].find(
       (profile) =>
         profile.speaker === voice.syntheticSpeaker &&
         profile.instruction === voice.instruction &&

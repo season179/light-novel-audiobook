@@ -9,7 +9,7 @@ const PYTHON_DIRECTORY = join(PACKAGE_ROOT, 'python')
 
 /**
  * Arms the real worker's parent-death binding and then idles, standing in for a worker that is
- * still CUDA-resident inside `generate_custom_voice`.
+ * still accelerator-resident inside `generate_custom_voice`.
  */
 const WORKER = `
 import sys, time

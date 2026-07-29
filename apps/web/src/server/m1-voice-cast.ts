@@ -21,7 +21,8 @@ import { WebApiError } from './errors.js'
  *
  * docs/PLAN.md §7 and the pinned config agree on the roles: `aiden-calm-narrator` is the narrator,
  * `ryan-energetic-baseline` is the character voice, and `ryan-low-weary` is pinned
- * `character-or-fallback`, which is exactly how it is used here. Serena is absent from the pinned set.
+ * `character-or-fallback`, which is exactly how it is used here. Eric and Serena remain in the
+ * technical inventory but are absent from the issue #105 first-MVP selected set.
  */
 export const QWEN_PRODUCTION_CONFIG_ENV_VAR = 'AUDIOBOOK_QWEN_PRODUCTION_CONFIG'
 
@@ -101,7 +102,7 @@ const requirePinned = (
   loaded: LoadedProductionConfig,
   pinnedId: SelectedVoiceProfileId,
 ): PinnedQwenProfile => {
-  const profile = loaded.profiles.get(pinnedId)
+  const profile = loaded.selectedProfiles.get(pinnedId)
   if (profile === undefined) {
     throw new WebApiError(
       'internal',
