@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { Segment, VoiceProfile } from '@light-novel-audiobook/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  canonicalJson,
   deriveSeed,
   type ExclusiveGpuGate,
   type FallbackApprovalRecord,
@@ -27,10 +28,15 @@ import {
   prepareEmptySmokeOutputRoot,
   QwenApplicationSpeechEngine,
   QwenTtsSpeechEngine,
+  sha256,
   SpeechEngineError,
   type SpeechProgressEvent,
   type SpeechSegmentRequest,
 } from '../src/index.js'
+import {
+  loadWorkerRuntimeIdentity,
+  waveformProducingRuntimeIdentity,
+} from '../src/runtime-identity.js'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, '../..')
@@ -288,13 +294,42 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     expect(gate.releases).toBe(1)
   })
 
-  it('pins the compatibility engine and application adapter identities', async () => {
+  it('pins the compatibility engine and application adapter identity composition', async () => {
+    // The runtime identity hashes the real python executable (process.execPath here), so the
+    // final digest is platform-specific and cannot be pinned as a literal. Rebuilding the exact
+    // identity input from its sources pins what #143 must not change: the field set. Folding the
+    // retry bound or salt policy into either identity would break these equalities.
     const fixture = await makeEngine()
+    const config = await loadProductionConfig(PRODUCTION_CONFIG)
+    const runtimeIdentity = await loadWorkerRuntimeIdentity(
+      {
+        workerScriptPath: fixture.workerScriptPath,
+        pythonExecutable: process.execPath,
+        runtimeManifestPath: join(fixture.root, 'runtime-manifest.json'),
+        uvLockPath: UV_LOCK,
+      },
+      config,
+    )
     expect(fixture.engine.identity).toBe(
-      '25c691024e8b7681364d4352e3940f9870ca349dfd63214a46d5129f0276b108',
+      sha256(
+        canonicalJson({
+          adapter: config.value.adapter,
+          model: config.value.model,
+          runtime: config.value.runtime,
+          workerRuntime: waveformProducingRuntimeIdentity(runtimeIdentity),
+          generation: config.value.generation,
+          seedStrategy: config.value.seedStrategy,
+          mpsMvpVoicePolicy: config.value.mpsMvpVoicePolicy,
+        }),
+      ),
     )
     expect(new QwenApplicationSpeechEngine(fixture.engine).identity).toBe(
-      'e53a04582273ccaa1df0dfb25d458e74e42eb934ebef6a125e883edd26ddb119',
+      sha256(
+        canonicalJson({
+          bridge: { id: 'qwen-issue-29-speech-engine', version: 2 },
+          engine: fixture.engine.identity,
+        }),
+      ),
     )
     expect(fixture.gate.acquisitions).toBe(0)
   })
