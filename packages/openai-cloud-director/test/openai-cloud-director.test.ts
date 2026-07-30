@@ -274,22 +274,47 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
       .filter((event) => event.message.startsWith('Repaired '))
       .map((event) => event.message)
     expect(repairMessages).toEqual([
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration, 0 merge-whitespace-segment; passage IDs: passage-001',
     ])
     expect(repairMessages.join('\n')).not.toContain(source)
     expect(repairMessages.join('\n')).not.toContain('quietly')
   })
 
-  it('reports both repair-mode counts without source text', async () => {
-    const sources: readonly [string, string] = ['First. ', 'Second ending.']
-    server.respondWith(
-      multiPassageOutput([
-        { id: 'passage-001', text: 'First.' },
-        { id: 'passage-002', text: 'Second' },
-      ]),
-    )
+  it('reports all three repair-mode counts without source text', async () => {
+    const sources = ['First middle.', 'Second. ', 'Third ending.'] as const
+    server.respondWith({
+      segments: [
+        narrationSegment('First', 'passage-001'),
+        narrationSegment(' ', 'passage-001'),
+        narrationSegment('middle.', 'passage-001'),
+        narrationSegment('Second.', 'passage-002'),
+        narrationSegment('Third', 'passage-003'),
+      ],
+    })
     const progress: DirectChapterProgress[] = []
-    const book = makeTwoPassageBook(sources)
+    const book = new Book({
+      id: 'book-01',
+      title: 'Three-Mode Fixture',
+      author: null,
+      coverPath: null,
+      source: { epubPath: '/private/three-mode.epub', sha256: 'f'.repeat(64) },
+      chapters: [
+        new Chapter({
+          id: 'chapter-01',
+          bookId: 'book-01',
+          position: 1,
+          title: 'Three Modes',
+          sourcePassages: sources.map(
+            (sourceText, index) =>
+              new SourcePassage({
+                id: `passage-00${index + 1}`,
+                chapterId: 'chapter-01',
+                sourceText,
+              }),
+          ),
+        }),
+      ],
+    })
 
     await create().directChapter(book, book.chapters[0] as Chapter, {
       onProgress: (event) => {
@@ -301,12 +326,12 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
       .filter((event) => event.message.startsWith('Repaired '))
       .map((event) => event.message)
     expect(repairMessages).toEqual([
-      'Repaired 2 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 1 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001, passage-002',
+      'Repaired 3 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 1 attach-to-previous, 1 synthesize-narration, 1 merge-whitespace-segment; passage IDs: passage-001, passage-002, passage-003',
     ])
-    expect(repairMessages.join('\n')).not.toContain(sources[0])
-    expect(repairMessages.join('\n')).not.toContain(sources[1])
+    for (const source of sources) expect(repairMessages.join('\n')).not.toContain(source)
     expect(repairMessages.join('\n')).not.toContain('First')
     expect(repairMessages.join('\n')).not.toContain('Second')
+    expect(repairMessages.join('\n')).not.toContain('Third')
   })
 
   it('includes each repair mode in per-window output provenance', async () => {
@@ -318,21 +343,25 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
       bookSourceSha256: 'e'.repeat(64),
       chapterId: 'chapter-provenance',
       chapterPosition: 1,
-      chapterTitle: 'Two Modes',
+      chapterTitle: 'Three Modes',
       passages: [
-        { id: 'passage-001', text: 'First. ' },
-        { id: 'passage-002', text: 'Second ending.' },
+        { id: 'passage-001', text: 'First middle.' },
+        { id: 'passage-002', text: 'Second. ' },
+        { id: 'passage-003', text: 'Third ending.' },
       ],
       speakers: [],
       narratorSpeakerId: 'narrator',
       fallbackSpeakerId: 'fallback-dialogue',
     })
-    server.respondWith(
-      multiPassageOutput([
-        { id: 'passage-001', text: 'First.' },
-        { id: 'passage-002', text: 'Second' },
-      ]),
-    )
+    server.respondWith({
+      segments: [
+        narrationSegment('First', 'passage-001'),
+        narrationSegment(' ', 'passage-001'),
+        narrationSegment('middle.', 'passage-001'),
+        narrationSegment('Second.', 'passage-002'),
+        narrationSegment('Third', 'passage-003'),
+      ],
+    })
 
     const result = await executeOpenAiCloudWindow(
       {
@@ -351,10 +380,15 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
         {
           sourcePassageId: 'passage-001',
           appendedCodeUnitCount: 1,
-          mode: 'attach-to-previous',
+          mode: 'merge-whitespace-segment',
         },
         {
           sourcePassageId: 'passage-002',
+          appendedCodeUnitCount: 1,
+          mode: 'attach-to-previous',
+        },
+        {
+          sourcePassageId: 'passage-003',
           appendedCodeUnitCount: ' ending.'.length,
           mode: 'synthesize-narration',
         },
@@ -410,8 +444,8 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
         .filter((event) => event.message.startsWith('Repaired '))
         .map((event) => event.message),
     ).toEqual([
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 2 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration, 0 merge-whitespace-segment; passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 2 of 3); modes: 0 attach-to-previous, 1 synthesize-narration, 0 merge-whitespace-segment; passage IDs: passage-001',
     ])
   })
 

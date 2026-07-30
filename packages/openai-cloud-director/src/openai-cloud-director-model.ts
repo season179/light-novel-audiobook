@@ -77,8 +77,11 @@ function narrationTailRepairMessage(
 ): string {
   const passageIds = repairs.map((repair) => repair.sourcePassageId).join(', ')
   const attachCount = repairs.filter((repair) => repair.mode === 'attach-to-previous').length
-  const synthesizeCount = repairs.length - attachCount
-  return `Repaired ${repairs.length} narration tail(s) in window ${windowIndex + 1} of ${windowCount} (attempt ${attempt} of ${MAX_WINDOW_ATTEMPTS}); modes: ${attachCount} attach-to-previous, ${synthesizeCount} synthesize-narration; passage IDs: ${passageIds}`
+  const synthesizeCount = repairs.filter((repair) => repair.mode === 'synthesize-narration').length
+  const whitespaceMergeCount = repairs.filter(
+    (repair) => repair.mode === 'merge-whitespace-segment',
+  ).length
+  return `Repaired ${repairs.length} narration tail(s) in window ${windowIndex + 1} of ${windowCount} (attempt ${attempt} of ${MAX_WINDOW_ATTEMPTS}); modes: ${attachCount} attach-to-previous, ${synthesizeCount} synthesize-narration, ${whitespaceMergeCount} merge-whitespace-segment; passage IDs: ${passageIds}`
 }
 
 export interface OpenAiCloudDirectorModelOptions {

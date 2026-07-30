@@ -137,6 +137,204 @@ describe('deterministic narration-tail completion repair', () => {
     expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
   })
 
+  it('merges a mid-passage whitespace-only segment backward end to end', () => {
+    const sourceText = 'Mira crossed the room.'
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', 'Mira crossed'),
+        narration('p1', ' '),
+        narration('p1', 'the room.'),
+      ],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+    ])
+    expect(result.output.segments).toHaveLength(2)
+    expect(result.output.segments[0]?.source_text).toBe('Mira crossed ')
+    expect(result.output.segments[1]).toBe(output.segments[2])
+    expect(() => directionWireOutputSchemaFor(request).parse(result.output)).not.toThrow()
+    const validated = validateDirectionOutput(result.output, request, 0.8)
+    const split = splitDirectedSegments(validated.annotations)
+    expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
+    expect(split.some((segment) => segment.sourceText.trim().length === 0)).toBe(false)
+  })
+
+  it('merges a leading whitespace-only segment forward without crossing passages', () => {
+    const sourceText = ' Leading narration.'
+    const request = requestFor([
+      { id: 'p0', text: 'Earlier passage.' },
+      { id: 'p1', text: sourceText },
+    ])
+    const earlier = narration('p0', 'Earlier passage.')
+    const leading = narration('p1', ' ')
+    const content = narration('p1', 'Leading narration.')
+    const output: DirectionWireOutput = { segments: [earlier, leading, content] }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+    ])
+    expect(result.output.segments).toHaveLength(2)
+    expect(result.output.segments[0]).toBe(earlier)
+    expect(result.output.segments[1]).not.toBe(content)
+    expect(result.output.segments[1]).toEqual({ ...content, source_text: sourceText })
+    expect(Object.isFrozen(result.output.segments[1])).toBe(true)
+    expect(content.source_text).toBe('Leading narration.')
+  })
+
+  it('leaves a whitespace-only segment unchanged when both splitter probes reject it', () => {
+    const previousText = 'a'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const whitespace = ' '.repeat(SEPARATOR_OVERSHOOT + 1)
+    const nextText = 'b'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const request = requestFor([{ id: 'p1', text: previousText + whitespace + nextText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', previousText),
+        narration('p1', whitespace),
+        narration('p1', nextText),
+      ],
+    }
+
+    expect(() =>
+      splitDirectedSegments([
+        {
+          sourcePassageId: 'p1',
+          sourceText: previousText + whitespace,
+          kind: 'narration',
+          speakerId: null,
+          confidence: 1,
+          delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 0 },
+        },
+      ]),
+    ).toThrow()
+    expect(() =>
+      splitDirectedSegments([
+        {
+          sourcePassageId: 'p1',
+          sourceText: whitespace + nextText,
+          kind: 'narration',
+          speakerId: null,
+          confidence: 1,
+          delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 0 },
+        },
+      ]),
+    ).toThrow()
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output).toBe(output)
+    expect(result.repairs).toEqual([])
+  })
+
+  it('folds adjacent whitespace-only segments left to right into one running merge', () => {
+    const sourceText = 'Alpha \t\nOmega'
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', 'Alpha'),
+        narration('p1', ' '),
+        narration('p1', '\t'),
+        narration('p1', '\n'),
+        narration('p1', 'Omega'),
+      ],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+    ])
+    expect(result.output.segments.map((segment) => segment.source_text)).toEqual([
+      'Alpha \t\n',
+      'Omega',
+    ])
+    expect(result.output.segments.map((segment) => segment.source_text).join('')).toBe(sourceText)
+  })
+
+  it('falls forward for the remainder of a run when the running backward merge fills', () => {
+    const previousText = 'a'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const backwardWhitespace = ' '.repeat(SEPARATOR_OVERSHOOT)
+    const forwardWhitespace = '\t'
+    const nextText = 'b'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const sourceText = previousText + backwardWhitespace + forwardWhitespace + nextText
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', previousText),
+        narration('p1', backwardWhitespace),
+        narration('p1', forwardWhitespace),
+        narration('p1', nextText),
+      ],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output.segments.map((segment) => segment.source_text)).toEqual([
+      previousText + backwardWhitespace,
+      forwardWhitespace + nextText,
+    ])
+    expect(result.output.segments.map((segment) => segment.source_text).join('')).toBe(sourceText)
+    expect(result.repairs.map((repair) => repair.appendedCodeUnitCount)).toEqual([
+      SEPARATOR_OVERSHOOT,
+      1,
+    ])
+  })
+
+  it('preserves order when an adjacent leading run folds forward', () => {
+    const sourceText = ' \t\nOmega'
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', ' '),
+        narration('p1', '\t'),
+        narration('p1', '\n'),
+        narration('p1', 'Omega'),
+      ],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output.segments.map((segment) => segment.source_text)).toEqual([sourceText])
+    expect(result.output.segments[0]?.source_text).not.toBe('\n\t Omega')
+    expect(result.repairs).toHaveLength(3)
+    expect(result.repairs.every((repair) => repair.mode === 'merge-whitespace-segment')).toBe(true)
+  })
+
+  it('repairs the 184-unit diagnosed shape with one standalone single-space segment', () => {
+    const tokens = ['"abc"', "'def'", ...Array.from({ length: 31 }, () => 'word'), 'z'.repeat(16)]
+    const sourceText = `${tokens.join(' ')} `
+    const standaloneSpaceIndex = sourceText.indexOf(' ', 40)
+    const before = sourceText.slice(0, standaloneSpaceIndex)
+    const after = sourceText.slice(standaloneSpaceIndex + 1)
+    expect(sourceText).toHaveLength(184)
+    expect(sourceText.match(/ /gu)).toHaveLength(34)
+    expect(sourceText.match(/["']/gu)).toHaveLength(4)
+    expect(sourceText.endsWith(' ')).toBe(true)
+    expect(sourceText).not.toMatch(/ {2}/u)
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [narration('p1', before), narration('p1', ' '), narration('p1', after)],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+    ])
+    expect(() => directionWireOutputSchemaFor(request).parse(result.output)).not.toThrow()
+    const validated = validateDirectionOutput(result.output, request, 0.8)
+    const split = splitDirectedSegments(validated.annotations)
+    expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
+    expect(split.some((segment) => segment.sourceText.trim().length === 0)).toBe(false)
+  })
+
   it('preserves every wire field in a frozen copy without mutating input segments', () => {
     const first = Object.freeze(narration('p1', 'Opening'))
     const delivery = Object.freeze({
@@ -175,11 +373,26 @@ describe('deterministic narration-tail completion repair', () => {
     )
   })
 
-  it('declines a whitespace tail when the last same-passage segment is trim-empty', () => {
-    const request = requestFor([{ id: 'p1', text: 'Prefix  ' }])
+  it('composes the whitespace pre-pass with whitespace-tail attachment', () => {
+    const request = requestFor([{ id: 'p1', text: 'Prefix   ' }])
     const output: DirectionWireOutput = {
       segments: [narration('p1', 'Prefix'), narration('p1', ' ')],
     }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'merge-whitespace-segment' },
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 2, mode: 'attach-to-previous' },
+    ])
+    expect(result.output.segments).toHaveLength(1)
+    expect(result.output.segments[0]?.source_text).toBe('Prefix   ')
+    expect(() => validateDirectionOutput(result.output, request, 0.8)).not.toThrow()
+  })
+
+  it('still declines tail completion for whole-passage whitespace output', () => {
+    const request = requestFor([{ id: 'p1', text: '   ' }])
+    const output: DirectionWireOutput = { segments: [narration('p1', ' ')] }
 
     const result = repairNarrationTailCompletion(output, request)
 
