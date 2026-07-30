@@ -187,7 +187,13 @@ GPU, no model weights, and no ffmpeg guarantees beyond the pinned toolchain, so 
 loads Gemma would break every test in the repo. `pnpm dev` without the variable is exactly the
 fake app it has always been.
 
-The MVP cloud-director browser flow is explicit and keeps Qwen local:
+The server loads an optional `.env` from the repository root with Node's built-in loader before it
+selects adapters. This works even when pnpm starts Vite from `apps/web`. Already-exported process
+environment values take precedence, a missing file is harmless, and the file is never loaded into
+injected test environments or a client bundle. Keep `OPENAI_API_KEY` unprefixed — never use `VITE_`.
+
+The MVP cloud-director browser flow is explicit and keeps Qwen local. These values may be exported as
+shown or placed in the ignored repository-root `.env`:
 
 ```sh
 LNA_WEB_TRANSPORTS=real \
@@ -205,7 +211,12 @@ pnpm --filter @light-novel-audiobook/web dev
 
 This mode requires no `LNA_DIRECTOR_URL`, llama.cpp runtime, or Gemma model file. The key is read only
 by the server composition root. Source excerpts are sent only in OpenAI request bodies; provider raw
-responses and the key are not persisted or exposed to the browser.
+responses and the key are not persisted or exposed to the browser. The final one-request synthetic
+acceptance smoke uses the same root `.env` loader without shell-sourcing the file:
+
+```sh
+pnpm --filter @light-novel-audiobook/openai-cloud-director smoke:real
+```
 
 The historical local Gemma path remains available with `LNA_DIRECTOR_MODE=local-gemma` (the default
 when the mode is omitted). It additionally requires `LNA_DIRECTOR_URL` and the issue-6 brain runtime.

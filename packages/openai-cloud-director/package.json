@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --root ../.. packages/openai-cloud-director/test"
+    "test": "vitest run --root ../.. packages/openai-cloud-director/test",
+    "smoke:real": "tsx scripts/real-smoke.ts"
   },
   "dependencies": {
     "@light-novel-audiobook/application": "workspace:*",

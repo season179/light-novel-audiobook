@@ -38,23 +38,59 @@ function makeBook(sourceText = SOURCE): Book {
   })
 }
 
-function narrationOutput(sourceText = 'Rain fell.'): Record<string, unknown> {
+function narrationSegment(sourceText: string, passageId: string): Record<string, unknown> {
   return {
-    segments: [
-      {
-        source_passage_id: 'passage-001',
-        source_text: sourceText,
-        kind: 'narration',
-        confidence: 0.98,
-        delivery: {
-          emotion: 'calm',
-          pace: 'normal',
-          volume: 'normal',
-          pause_after_ms: 250,
-        },
-      },
-    ],
+    source_passage_id: passageId,
+    source_text: sourceText,
+    kind: 'narration',
+    confidence: 0.98,
+    delivery: {
+      emotion: 'calm',
+      pace: 'normal',
+      volume: 'normal',
+      pause_after_ms: 250,
+    },
   }
+}
+
+function narrationOutput(
+  sourceText = 'Rain fell.',
+  passageId = 'passage-001',
+): Record<string, unknown> {
+  return { segments: [narrationSegment(sourceText, passageId)] }
+}
+
+function multiPassageOutput(
+  passages: ReadonlyArray<{ readonly id: string; readonly text: string }>,
+): Record<string, unknown> {
+  return {
+    segments: passages.map((passage) => narrationSegment(passage.text, passage.id)),
+  }
+}
+
+function makeMultiWindowBook(): Book {
+  const chapter = new Chapter({
+    id: 'chapter-01',
+    bookId: 'book-01',
+    position: 1,
+    title: 'Three Moments',
+    sourcePassages: ['First.', 'Second.', 'Third.'].map(
+      (sourceText, index) =>
+        new SourcePassage({
+          id: `passage-00${index + 1}`,
+          chapterId: 'chapter-01',
+          sourceText,
+        }),
+    ),
+  })
+  return new Book({
+    id: 'book-01',
+    title: 'Synthetic Window Fixture',
+    author: null,
+    coverPath: null,
+    source: { epubPath: '/private/synthetic-window.epub', sha256: 'b'.repeat(64) },
+    chapters: [chapter],
+  })
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
@@ -170,6 +206,61 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
     ).not.toThrow()
   })
 
+  it('stitches contiguous exact source and honest progress across multiple windows', async () => {
+    const book = makeMultiWindowBook()
+    server.respondInSequence([
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First.' },
+        { id: 'passage-002', text: 'Second.' },
+      ]),
+      multiPassageOutput([{ id: 'passage-003', text: 'Third.' }]),
+    ])
+    const progress: DirectChapterProgress[] = []
+    const model = new OpenAiCloudDirectorModel({
+      apiKey: API_KEY,
+      fetch: redirectingFetch,
+      confidenceThreshold: 0.8,
+      chunking: { windowPassageBudget: 2 },
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+    })
+    models.push(model)
+
+    const result = await model.directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        progress.push(event)
+      },
+    })
+
+    expect(server.requests).toHaveLength(2)
+    expect(result.segments.map((segment) => segment.sourcePassageId)).toEqual([
+      'passage-001',
+      'passage-002',
+      'passage-003',
+    ])
+    expect(result.segments.map((segment) => segment.sourceText).join('')).toBe(
+      'First.Second.Third.',
+    )
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
+    ).not.toThrow()
+    expect(
+      progress
+        .filter((event) => event.state === 'requesting')
+        .map((event) => event.completedPassages),
+    ).toEqual([0, 2])
+    expect(progress.at(-1)).toMatchObject({
+      state: 'completed',
+      completedPassages: 3,
+      totalPassages: 3,
+    })
+  })
+
   it('blocks fidelity failures without an identical cloud rerequest', async () => {
     server.respondWith(narrationOutput('Rain changed.'))
     const book = makeBook()
@@ -210,21 +301,31 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
     expect(rendered).not.toContain(SOURCE)
   })
 
-  it('does not log provider responses, credentials, or source excerpts', async () => {
+  it('forces SDK logging off even when OPENAI_LOG is hostile', async () => {
     server.setMode('http-error')
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.stubEnv('OPENAI_LOG', 'debug')
+    const spies = (['debug', 'info', 'warn', 'error'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => undefined),
+    )
     try {
+      const identityBefore = create().identity
       const book = makeBook()
       await create()
         .directChapter(book, book.chapters[0] as Chapter)
         .catch(() => undefined)
-      const logged = inspect(consoleError.mock.calls, { depth: 20 })
+      expect(create().identity).toBe(identityBefore)
+      const logged = inspect(
+        spies.flatMap((spy) => spy.mock.calls),
+        { depth: 20 },
+      )
+      expect(logged).toBe('[]')
       expect(logged).not.toContain(API_KEY)
       expect(logged).not.toContain('raw-provider-secret')
       expect(logged).not.toContain('raw-source-excerpt')
       expect(logged).not.toContain(SOURCE)
     } finally {
-      consoleError.mockRestore()
+      for (const spy of spies) spy.mockRestore()
+      vi.unstubAllEnvs()
     }
   })
 
@@ -239,6 +340,31 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
     controller.abort()
 
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    await waitFor(() => server.abortedRequests > 0)
+  })
+
+  it('classifies a timer-first request abort as timeout, not cancellation', async () => {
+    server.setMode('delay')
+    const model = new OpenAiCloudDirectorModel({
+      apiKey: API_KEY,
+      confidenceThreshold: 0.8,
+      requestTimeoutMs: 10,
+      fetch: redirectingFetch,
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+    })
+    models.push(model)
+    const book = makeBook()
+
+    await expect(model.directChapter(book, book.chapters[0] as Chapter)).rejects.toMatchObject({
+      code: 'timeout',
+      retryable: true,
+    })
     await waitFor(() => server.abortedRequests > 0)
   })
 

@@ -79,6 +79,7 @@ export class FakeResponsesServer {
   private server: Server | undefined
   private mode: ResponsesMode = 'success'
   private responseValue: unknown
+  private responseSequence: unknown[] = []
   readonly requests: CapturedResponsesRequest[] = []
   abortedRequests = 0
   port = 0
@@ -90,6 +91,13 @@ export class FakeResponsesServer {
 
   respondWith(value: unknown): void {
     this.responseValue = value
+    this.responseSequence = []
+  }
+
+  respondInSequence(values: readonly unknown[]): void {
+    if (values.length === 0) throw new Error('Fake response sequence cannot be empty')
+    this.responseSequence = [...values]
+    this.responseValue = values[values.length - 1]
   }
 
   setMode(mode: ResponsesMode): void {
@@ -137,9 +145,11 @@ export class FakeResponsesServer {
     })
 
     switch (this.mode) {
-      case 'success':
-        sendResponsesStream(response, JSON.stringify(this.responseValue))
+      case 'success': {
+        const sequenced = this.responseSequence.shift()
+        sendResponsesStream(response, JSON.stringify(sequenced ?? this.responseValue))
         break
+      }
       case 'malformed':
         sendResponsesStream(response, '{"segments":[')
         break

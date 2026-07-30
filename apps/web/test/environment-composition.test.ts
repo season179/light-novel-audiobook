@@ -188,6 +188,7 @@ describe('the server entry point', () => {
 
   it('builds the fake composition when the mode variable is absent', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'lna-web-env-fake-'))
+    vi.stubEnv(TRANSPORT_MODE_ENV_VAR, 'fake')
     vi.stubEnv('AUDIOBOOK_WORKSPACE_DIR', root)
     vi.stubEnv('LNA_REVIEWER', 'env-fake-test')
     vi.resetModules()

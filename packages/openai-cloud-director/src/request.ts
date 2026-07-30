@@ -122,6 +122,7 @@ export async function executeOpenAiCloudWindow(
       apiKey: client.apiKey,
       name: 'openai',
       maxRetries: 0,
+      logLevel: 'off',
       fetch: client.fetch,
     })
     const outputSchema = directionWireOutputSchemaFor(request)
@@ -143,20 +144,10 @@ export async function executeOpenAiCloudWindow(
     for await (const event of stream) {
       if (event.type === 'TEXT_MESSAGE_CONTENT') await options.onTextDelta?.(event.delta)
       if (event.type === 'RUN_ERROR') {
-        if (
-          event.code === 'structured-output-parse-failed' ||
-          event.code === 'parse-error' ||
-          event.code === 'empty-response'
-        ) {
+        if (event.code === 'parse-error' || event.code === 'empty-response') {
           throw new DirectorError(
             'malformed_output',
             'OpenAI cloud director returned malformed JSON',
-          )
-        }
-        if (event.code === 'structured-output-validation-failed') {
-          throw new DirectorError(
-            'schema_validation',
-            'OpenAI cloud director output failed schema validation',
           )
         }
         if (event.code === 'refusal' || event.code === 'structured-output-missing-result') {

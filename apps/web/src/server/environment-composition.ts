@@ -63,6 +63,19 @@ export const resolveDirectorMode = (env: NodeJS.ProcessEnv): DirectorMode => {
   )
 }
 
+export const loadRepositoryRootEnv = (env: NodeJS.ProcessEnv, repositoryRoot: string): void => {
+  // Explicit test/config objects are complete inputs. Loading the host's private file into them
+  // would make tests machine-dependent and could accidentally select real adapters.
+  if (env !== process.env) return
+  try {
+    process.loadEnvFile(path.join(repositoryRoot, '.env'))
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    // Do not retain the filesystem/parser cause: it may contain a line or path from the secret file.
+    throw new WebApiError('internal', 'Could not load repository-root .env configuration')
+  }
+}
+
 const required = (env: NodeJS.ProcessEnv, name: string): string => {
   const value = env[name]
   if (value === undefined || value.trim().length === 0) {
@@ -123,10 +136,12 @@ export const resolveRealTransportConfig = async (
 export const resolveEnvironmentCompositionOptions = async (
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AudiobookWebApiOptions> => {
+  const repositoryRoot = findRepositoryRoot(process.cwd())
+  if (repositoryRoot !== undefined) loadRepositoryRootEnv(env, repositoryRoot)
+
   const mode = resolveTransportMode(env)
   if (mode === 'fake') return {}
 
-  const repositoryRoot = findRepositoryRoot(process.cwd())
   if (repositoryRoot === undefined) {
     throw new WebApiError(
       'internal',
