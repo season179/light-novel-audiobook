@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { appendFile, link, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -9,8 +9,10 @@ const mode = process.env.FAKE_QWEN_MODE ?? 'normal'
 // Stands in for GPU residency: this process exists between these two markers, so a lease acquired
 // before the first and released after the second can never overlap a resident worker.
 const lifecycleLog = process.env.FAKE_QWEN_LIFECYCLE_LOG
+let workerNumber = 1
 if (lifecycleLog) {
   appendFileSync(lifecycleLog, 'worker-spawned\n')
+  workerNumber = (readFileSync(lifecycleLog, 'utf8').match(/^worker-spawned$/gmu) ?? []).length
   process.on('exit', () => appendFileSync(lifecycleLog, 'worker-exited\n'))
 }
 let terminating = false
@@ -84,6 +86,7 @@ try {
   const begin = await nextMessage()
   const invocation = {
     ...begin,
+    workerNumber,
     segments: [],
     ambientPython: {
       PYTHONHOME: process.env.PYTHONHOME ?? null,
@@ -91,13 +94,23 @@ try {
       PYTHONSTARTUP: process.env.PYTHONSTARTUP ?? null,
     },
   }
+  let invocationLogged = false
+  const logInvocation = async () => {
+    if (!invocationLogged && process.env.FAKE_QWEN_LOG) {
+      invocationLogged = true
+      await appendFile(process.env.FAKE_QWEN_LOG, `${JSON.stringify(invocation)}\n`)
+    }
+  }
   emit('runtime-validated')
   if (mode === 'malformed-event') {
     process.stdout.write('{not json}\n')
     setInterval(() => undefined, 1_000)
   } else {
     emit('model-loading')
-    if (mode === 'process-failure-before-load') {
+    if (
+      mode === 'process-failure-before-load' ||
+      (mode === 'health-gate-then-load-failure' && workerNumber === 2)
+    ) {
       process.stderr.write('synthetic model load failure\n')
       emit('fatal', { stage: 'model-load', message: 'synthetic model load failure' })
       process.exit(23)
@@ -115,6 +128,28 @@ try {
           segmentId: segment.segmentId,
           sequence: mode === 'wrong-order' ? segment.sequence + 1 : segment.sequence,
         })
+        const exactGateFailure =
+          mode === 'health-gate-always' ||
+          ((mode === 'health-gate-once' || mode === 'health-gate-then-load-failure') &&
+            workerNumber === 1)
+        if (
+          exactGateFailure ||
+          mode === 'health-gate-wrong-detail' ||
+          mode === 'health-gate-wrong-segment' ||
+          mode === 'process-exit-during-render'
+        ) {
+          await logInvocation()
+          if (mode === 'process-exit-during-render') process.exit(24)
+          emit('fatal', {
+            stage: 'render-batch',
+            message:
+              mode === 'health-gate-wrong-detail'
+                ? 'ValueError: generated WAV failed a different check'
+                : 'ValueError: generated WAV failed configured health gates',
+            segmentId: mode === 'health-gate-wrong-segment' ? 'ch99-9999' : segment.segmentId,
+          })
+          process.exit(1)
+        }
         const hash = await atomicWav(begin, segment)
         emit('segment-rendered', {
           segmentId: segment.segmentId,
@@ -129,9 +164,7 @@ try {
           })
         }
       }
-      if (process.env.FAKE_QWEN_LOG) {
-        await appendFile(process.env.FAKE_QWEN_LOG, `${JSON.stringify(invocation)}\n`)
-      }
+      await logInvocation()
       emit('gpu-cleanup-complete')
       emit('batch-complete')
     }

@@ -11,6 +11,8 @@ import { SpeechEngineError } from './types.js'
 const SHA256 = /^[0-9a-f]{64}$/
 const MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 const MAX_STDERR_BYTES = 16 * 1024
+const HEALTH_GATE_FATAL_STAGE = 'render-batch'
+const HEALTH_GATE_FATAL_DETAIL = 'ValueError: generated WAV failed configured health gates'
 
 interface WorkerEvent {
   readonly protocolVersion: number
@@ -29,6 +31,23 @@ class ProgressCallbackError extends Error {
   constructor(original: unknown) {
     super('Qwen progress callback failed', { cause: original })
     this.original = original
+  }
+}
+
+/**
+ * Package-internal provenance marker. It is exported only for engine orchestration and deliberately
+ * omitted from the package index: callers cannot manufacture retry eligibility by matching a
+ * public error message. The frozen worker uses this one detail for all five WAV health gates
+ * (duration cap, text-relative duration bounds, clipping, and active-frame fraction), so the
+ * bounded retry policy necessarily covers their union.
+ */
+export class WorkerHealthGateError extends SpeechEngineError {
+  constructor(segmentId: string) {
+    super(
+      'process-failed',
+      `Qwen batch worker failed at ${HEALTH_GATE_FATAL_STAGE}: ${HEALTH_GATE_FATAL_DETAIL}`,
+      { segmentId },
+    )
   }
 }
 
@@ -270,6 +289,13 @@ export class QwenWorkerSession {
       throw protocolError('invalid event envelope')
     }
     if (event.type === 'fatal') {
+      if (
+        event.stage === HEALTH_GATE_FATAL_STAGE &&
+        event.message === HEALTH_GATE_FATAL_DETAIL &&
+        typeof event.segmentId === 'string'
+      ) {
+        throw new WorkerHealthGateError(event.segmentId)
+      }
       throw new SpeechEngineError(
         'process-failed',
         `Qwen batch worker failed at ${event.stage ?? 'worker'}: ${event.message ?? 'unknown failure'}`,
