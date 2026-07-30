@@ -1,7 +1,11 @@
 import { inspect } from 'node:util'
 import type { DirectChapterProgress } from '@light-novel-audiobook/application'
 import { Book, Chapter, ExactSourceCoverage, SourcePassage } from '@light-novel-audiobook/domain'
-import { DirectorError, DirectorFidelityError } from '@light-novel-audiobook/gemma-director'
+import {
+  DirectorError,
+  DirectorFidelityError,
+  parseDirectionRequest,
+} from '@light-novel-audiobook/gemma-director'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createOpenAiCloudDirectorIdentity,
@@ -9,6 +13,7 @@ import {
   OpenAiCloudDirectorModel,
   openAiCloudDirectorIdentityMaterial,
 } from '../src/index.js'
+import { executeOpenAiCloudWindow } from '../src/request.js'
 import { FakeResponsesServer } from './fake-responses-server.js'
 
 const API_KEY = 'fake-openai-key-do-not-leak-0000000001'
@@ -93,13 +98,13 @@ function makeMultiWindowBook(): Book {
   })
 }
 
-function makeTwoPassageBook(): Book {
+function makeTwoPassageBook(sourceTexts: readonly [string, string] = ['First.', 'Second.']): Book {
   const chapter = new Chapter({
     id: 'chapter-01',
     bookId: 'book-01',
     position: 1,
     title: 'Two Passages',
-    sourcePassages: ['First.', 'Second.'].map(
+    sourcePassages: sourceTexts.map(
       (sourceText, index) =>
         new SourcePassage({
           id: `passage-00${index + 1}`,
@@ -269,10 +274,92 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
       .filter((event) => event.message.startsWith('Repaired '))
       .map((event) => event.message)
     expect(repairMessages).toEqual([
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
     ])
     expect(repairMessages.join('\n')).not.toContain(source)
     expect(repairMessages.join('\n')).not.toContain('quietly')
+  })
+
+  it('reports both repair-mode counts without source text', async () => {
+    const sources: readonly [string, string] = ['First. ', 'Second ending.']
+    server.respondWith(
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First.' },
+        { id: 'passage-002', text: 'Second' },
+      ]),
+    )
+    const progress: DirectChapterProgress[] = []
+    const book = makeTwoPassageBook(sources)
+
+    await create().directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        progress.push(event)
+      },
+    })
+
+    const repairMessages = progress
+      .filter((event) => event.message.startsWith('Repaired '))
+      .map((event) => event.message)
+    expect(repairMessages).toEqual([
+      'Repaired 2 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 1 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001, passage-002',
+    ])
+    expect(repairMessages.join('\n')).not.toContain(sources[0])
+    expect(repairMessages.join('\n')).not.toContain(sources[1])
+    expect(repairMessages.join('\n')).not.toContain('First')
+    expect(repairMessages.join('\n')).not.toContain('Second')
+  })
+
+  it('includes each repair mode in per-window output provenance', async () => {
+    const request = parseDirectionRequest({
+      requestId: 'request-provenance',
+      bookId: 'book-provenance',
+      bookTitle: 'Synthetic Provenance Fixture',
+      bookAuthor: null,
+      bookSourceSha256: 'e'.repeat(64),
+      chapterId: 'chapter-provenance',
+      chapterPosition: 1,
+      chapterTitle: 'Two Modes',
+      passages: [
+        { id: 'passage-001', text: 'First. ' },
+        { id: 'passage-002', text: 'Second ending.' },
+      ],
+      speakers: [],
+      narratorSpeakerId: 'narrator',
+      fallbackSpeakerId: 'fallback-dialogue',
+    })
+    server.respondWith(
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First.' },
+        { id: 'passage-002', text: 'Second' },
+      ]),
+    )
+
+    const result = await executeOpenAiCloudWindow(
+      {
+        apiKey: API_KEY,
+        confidenceThreshold: 0.8,
+        directorIdentity: 'synthetic-director-identity',
+        fetch: redirectingFetch,
+        shutdownSignal: new AbortController().signal,
+      },
+      request,
+      { timeoutMs: 1_000 },
+    )
+
+    expect(result.outputIdentity).toMatchObject({
+      narrationTailCompletionRepairs: [
+        {
+          sourcePassageId: 'passage-001',
+          appendedCodeUnitCount: 1,
+          mode: 'attach-to-previous',
+        },
+        {
+          sourcePassageId: 'passage-002',
+          appendedCodeUnitCount: ' ending.'.length,
+          mode: 'synthesize-narration',
+        },
+      ],
+    })
   })
 
   it('does not repair a quoted dropped tail and exhausts the existing retry budget', async () => {
@@ -323,8 +410,8 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
         .filter((event) => event.message.startsWith('Repaired '))
         .map((event) => event.message),
     ).toEqual([
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); passage IDs: passage-001',
-      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 2 of 3); passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 2 of 3); modes: 0 attach-to-previous, 1 synthesize-narration; passage IDs: passage-001',
     ])
   })
 
@@ -771,7 +858,11 @@ describe('OpenAI cloud identity', () => {
     const settings = { confidenceThreshold: 0.5 }
     const material = openAiCloudDirectorIdentityMaterial(settings)
 
-    expect(createOpenAiCloudDirectorIdentity(settings)).toMatch(/^[a-f0-9]{64}$/u)
+    // Deliberately unchanged for resume compatibility: the old whitespace-only synthesized branch
+    // could never pass application splitting and therefore could not persist a chapter checkpoint.
+    expect(createOpenAiCloudDirectorIdentity(settings)).toBe(
+      '9e0d2cf25e51b3a9d471baa2373e8bc0a347b7f7f8a0a60172774ed7aae9686a',
+    )
     expect(material).toMatchObject({
       adapter: {
         api: 'responses',
