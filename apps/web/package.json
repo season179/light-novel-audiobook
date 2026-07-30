@@ -14,6 +14,8 @@
     "@light-novel-audiobook/domain": "workspace:*",
     "@light-novel-audiobook/epub-ingestion": "workspace:*",
     "@light-novel-audiobook/gemma-director": "workspace:*",
+    "@light-novel-audiobook/gpu-lease": "workspace:*",
+    "@light-novel-audiobook/openai-cloud-director": "workspace:*",
     "@light-novel-audiobook/persistence": "workspace:*",
     "@light-novel-audiobook/pipeline-driver": "workspace:*",
     "@light-novel-audiobook/qwen-tts": "workspace:*",

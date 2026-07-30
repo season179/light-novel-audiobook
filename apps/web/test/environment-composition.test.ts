@@ -6,6 +6,7 @@ import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
 import { resolveDefaultModelSnapshotPath } from '@light-novel-audiobook/pipeline-driver'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  DIRECTOR_MODE_ENV_VAR,
   DIRECTOR_URL_ENV_VAR,
   GPU_LOCK_ENV_VAR,
   LLAMA_RUNTIME_ROOT_ENV_VAR,
@@ -13,7 +14,9 @@ import {
   QWEN_RUNTIME_MANIFEST_ENV_VAR,
   QWEN_SNAPSHOT_ENV_VAR,
   QWEN_WORKER_ENV_VAR,
+  resolveDirectorMode,
   resolveEnvironmentCompositionOptions,
+  resolveRealQwenTransportConfig,
   resolveRealTransportConfig,
   resolveTransportMode,
   TRANSPORT_MODE_ENV_VAR,
@@ -75,6 +78,21 @@ describe('transport mode selection', () => {
   })
 })
 
+describe('director mode selection', () => {
+  it('preserves local Gemma as the default and accepts explicit cloud mode', () => {
+    expect(resolveDirectorMode({})).toBe('local-gemma')
+    expect(resolveDirectorMode({ [DIRECTOR_MODE_ENV_VAR]: 'local-gemma' })).toBe('local-gemma')
+    expect(resolveDirectorMode({ [DIRECTOR_MODE_ENV_VAR]: 'openai-cloud' })).toBe('openai-cloud')
+  })
+
+  it('refuses an unknown director mode', () => {
+    expectConfigError(
+      caught(() => resolveDirectorMode({ [DIRECTOR_MODE_ENV_VAR]: 'automatic' })),
+      DIRECTOR_MODE_ENV_VAR,
+    )
+  })
+})
+
 describe('real transport configuration', () => {
   const completeEnv: NodeJS.ProcessEnv = {
     [DIRECTOR_URL_ENV_VAR]: 'http://127.0.0.1:8080/v1',
@@ -84,7 +102,19 @@ describe('real transport configuration', () => {
     [GPU_LOCK_ENV_VAR]: '/gpu/exclusive.lock',
   }
 
-  it('requires the director URL first', async () => {
+  it('resolves the local Qwen/GPU transport without any llama configuration', async () => {
+    const { [DIRECTOR_URL_ENV_VAR]: _directorUrl, ...qwenOnly } = completeEnv
+    const config = await resolveRealQwenTransportConfig(qwenOnly, REPOSITORY_ROOT)
+    expect(config).toEqual({
+      pythonExecutable: '/runtimes/tts/bin/python',
+      workerScriptPath: '/repo/packages/qwen-tts/python/qwen_batch_worker.py',
+      runtimeManifestPath: '/runtimes/tts/manifest.json',
+      modelSnapshotPath: await resolveDefaultModelSnapshotPath(REPOSITORY_ROOT),
+      gpuLockFilePath: '/gpu/exclusive.lock',
+    })
+  })
+
+  it('requires the director URL first for historical local mode', async () => {
     expectConfigError(
       await caughtAsync(() => resolveRealTransportConfig({}, REPOSITORY_ROOT)),
       DIRECTOR_URL_ENV_VAR,

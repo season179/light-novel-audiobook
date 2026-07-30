@@ -187,37 +187,40 @@ GPU, no model weights, and no ffmpeg guarantees beyond the pinned toolchain, so 
 loads Gemma would break every test in the repo. `pnpm dev` without the variable is exactly the
 fake app it has always been.
 
-The one start command for the real browser flow:
+The MVP cloud-director browser flow is explicit and keeps Qwen local:
 
 ```sh
 LNA_WEB_TRANSPORTS=real \
+LNA_DIRECTOR_MODE=openai-cloud \
+OPENAI_API_KEY="$OPENAI_API_KEY" \
 LNA_REVIEWER='Ada Lovelace' \
 AUDIOBOOK_WORKSPACE_DIR=/absolute/path/outside/the/repo \
-LNA_DIRECTOR_URL=http://127.0.0.1:8080/v1 \
-LNA_QWEN_PYTHON="$HOME/.local/share/light-novel-audiobook/runtimes/tts/qwen3-tts/<uv-lock-sha256>/bin/python" \
+LNA_QWEN_PYTHON=/absolute/path/to/qwen/runtime/bin/python \
 LNA_QWEN_WORKER="$PWD/packages/qwen-tts/python/qwen_batch_worker.py" \
-LNA_QWEN_RUNTIME_MANIFEST="$HOME/.local/share/light-novel-audiobook/runtimes/tts/qwen3-tts/<uv-lock-sha256>/manifest.json" \
-LNA_GPU_LOCK="$HOME/.local/share/light-novel-audiobook/gpu/exclusive.lock" \
+LNA_QWEN_RUNTIME_MANIFEST=/absolute/path/to/qwen/runtime/manifest.json \
+LNA_QWEN_SNAPSHOT=/absolute/path/to/qwen/model/snapshot \
+LNA_GPU_LOCK=/absolute/path/to/gpu/exclusive.lock \
 pnpm --filter @light-novel-audiobook/web dev
 ```
 
+This mode requires no `LNA_DIRECTOR_URL`, llama.cpp runtime, or Gemma model file. The key is read only
+by the server composition root. Source excerpts are sent only in OpenAI request bodies; provider raw
+responses and the key are not persisted or exposed to the browser.
+
+The historical local Gemma path remains available with `LNA_DIRECTOR_MODE=local-gemma` (the default
+when the mode is omitted). It additionally requires `LNA_DIRECTOR_URL` and the issue-6 brain runtime.
+
 The environment it requires:
 
-- **The pinned runtimes, installed.** The issue-6 brain runtime (built `llama-server` plus the
-  pinned Gemma GGUF, at `LNA_LLAMA_RUNTIME_ROOT`, defaulting to the selected profile's
-  `~/.cache/light-novel-audiobook/issue-6-brain`) and the Qwen3-TTS runtime installed by
-  `scripts/qwen3-tts-extension.sh` (the `<uv-lock-sha256>` directory is keyed by the pinned
-  `scripts/qwen3-tts-runtime/uv.lock`). `LNA_QWEN_SNAPSHOT` may be set to override the model
-  snapshot; by default it is derived from `config/qwen3-tts-custom-voice.lock.json`, exactly as
-  the pipeline driver's real mode derives it.
-- **A free, dedicated director port.** The app *owns* its `llama-server`: it is spawned when
-  Gemma takes the GPU lease and reaped before the lease is released. The port in
-  `LNA_DIRECTOR_URL` must be free, and a `pipeline:demo -- --transports real` run must not be
-  using the same port at the same time — the GPU lease is a correct kernel flock, but two real
-  runs still collide on a fixed port.
+- **The pinned Qwen runtime, installed.** It is installed by `scripts/qwen3-tts-extension.sh` and
+  keyed by `scripts/qwen3-tts-runtime/uv.lock`. `LNA_QWEN_SNAPSHOT` may override the model snapshot;
+  otherwise it is derived from `config/qwen3-tts-custom-voice.lock.json`.
+- **Local Gemma mode only:** the issue-6 brain runtime (built `llama-server` plus pinned Gemma GGUF)
+  and a free `LNA_DIRECTOR_URL`. The app owns that server and reaps it before handing the GPU lease
+  to Qwen. Cloud mode constructs none of this.
 - **`LNA_REVIEWER`** — already required by `resolveReviewerIdentity`; unchanged.
-- **The GPU lock file** at `LNA_GPU_LOCK`, shared by Gemma and Qwen so the two models cannot hold
-  the card at the same time.
+- **The GPU lock file** at `LNA_GPU_LOCK`. Qwen still uses the existing local lease; local Gemma mode
+  shares it so the two local models cannot overlap.
 
 Point `AUDIOBOOK_WORKSPACE_DIR` at the same root the pipeline driver used and the two share one
 SQLite workspace: a job the driver produced is visible in the browser, its pending fallback
