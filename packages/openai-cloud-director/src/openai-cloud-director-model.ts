@@ -23,6 +23,7 @@ import {
   type OpenAiCloudModelIdentity,
 } from './profile.js'
 import { executeOpenAiCloudWindow, type OpenAiCloudWindowResult } from './request.js'
+import type { NarrationTailCompletionRepair } from './tail-completion-repair.js'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000
 const DEFAULT_CHAPTER_TIMEOUT_MS = 60 * 60_000
@@ -65,6 +66,17 @@ function windowRetryMessage(
       ? `fidelity findings (${[...new Set(error.findings.map((finding) => finding.code))].join(', ')})`
       : 'malformed output'
   return `Retrying window ${windowNumber} of ${windowCount} after ${reason} (attempt ${attempt} of ${MAX_WINDOW_ATTEMPTS}); window has ${windowPassageCount} passage(s)`
+}
+
+/** Text-free repair notice: bounded counts plus passage IDs, never immutable source text. */
+function narrationTailRepairMessage(
+  repairs: readonly NarrationTailCompletionRepair[],
+  windowIndex: number,
+  windowCount: number,
+  attempt: number,
+): string {
+  const passageIds = repairs.map((repair) => repair.sourcePassageId).join(', ')
+  return `Repaired ${repairs.length} narration tail(s) in window ${windowIndex + 1} of ${windowCount} (attempt ${attempt} of ${MAX_WINDOW_ATTEMPTS}); passage IDs: ${passageIds}`
 }
 
 export interface OpenAiCloudDirectorModelOptions {
@@ -305,6 +317,12 @@ export class OpenAiCloudDirectorModel implements DirectorModel {
                       `Directing ${completedPassages} of ${totalPassages} passages`,
                     )
                   }
+                },
+                onTailCompletionRepair: async (repairs) => {
+                  await emit(
+                    'validating',
+                    narrationTailRepairMessage(repairs, windowIndex, windows.length, attempt),
+                  )
                 },
               },
             )

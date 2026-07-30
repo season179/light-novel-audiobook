@@ -231,6 +231,123 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
     ).not.toThrow()
   })
 
+  it('repairs a quote-free dropped tail on attempt 1 and surfaces IDs without source text', async () => {
+    const source = 'Mira crossed the room quietly.'
+    server.respondWith(narrationOutput('Mira crossed the room'))
+    const progress: DirectChapterProgress[] = []
+    const book = makeBook(source)
+
+    const result = await create().directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        progress.push(event)
+      },
+    })
+
+    expect(server.requests).toHaveLength(1)
+    expect(result.segments).toHaveLength(2)
+    expect(result.segments.map((segment) => segment.sourceText)).toEqual([
+      'Mira crossed the room',
+      ' quietly.',
+    ])
+    expect(result.segments[1]).toMatchObject({
+      sourcePassageId: 'passage-001',
+      kind: 'narration',
+      speakerId: null,
+      confidence: 1,
+      delivery: {
+        emotion: 'neutral',
+        pace: 'normal',
+        volume: 'normal',
+        pauseAfterMs: 0,
+      },
+    })
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
+    ).not.toThrow()
+
+    const repairMessages = progress
+      .filter((event) => event.message.startsWith('Repaired '))
+      .map((event) => event.message)
+    expect(repairMessages).toEqual([
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); passage IDs: passage-001',
+    ])
+    expect(repairMessages.join('\n')).not.toContain(source)
+    expect(repairMessages.join('\n')).not.toContain('quietly')
+  })
+
+  it('does not repair a quoted dropped tail and exhausts the existing retry budget', async () => {
+    const source = 'He waited. "No."'
+    server.respondWith(narrationOutput('He waited. '))
+    const progress: DirectChapterProgress[] = []
+    const book = makeBook(source)
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter, {
+        onProgress: (event) => {
+          progress.push(event)
+        },
+      })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    expect(error).toBeInstanceOf(DirectorFidelityError)
+    expect(server.requests).toHaveLength(3)
+    expect(progress.some((event) => event.message.startsWith('Repaired '))).toBe(false)
+  })
+
+  it('applies tail completion on every retry attempt before unchanged validation', async () => {
+    server.respondInSequence([
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First' },
+        { id: 'passage-002', text: 'Second changed.' },
+      ]),
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First' },
+        { id: 'passage-002', text: 'Second.' },
+      ]),
+    ])
+    const progress: DirectChapterProgress[] = []
+    const book = makeTwoPassageBook()
+
+    const result = await create().directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        progress.push(event)
+      },
+    })
+
+    expect(server.requests).toHaveLength(2)
+    expect(result.segments.map((segment) => segment.sourceText)).toEqual(['First', '.', 'Second.'])
+    expect(
+      progress
+        .filter((event) => event.message.startsWith('Repaired '))
+        .map((event) => event.message),
+    ).toEqual([
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 1 of 3); passage IDs: passage-001',
+      'Repaired 1 narration tail(s) in window 1 of 1 (attempt 2 of 3); passage IDs: passage-001',
+    ])
+  })
+
+  it('does not turn an entirely omitted passage into a synthesized segment', async () => {
+    server.respondWith(multiPassageOutput([{ id: 'passage-002', text: 'Second.' }]))
+    const progress: DirectChapterProgress[] = []
+    const book = makeTwoPassageBook()
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter, {
+        onProgress: (event) => {
+          progress.push(event)
+        },
+      })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    expect(error).toBeInstanceOf(DirectorFidelityError)
+    expect(server.requests).toHaveLength(3)
+    expect(progress.some((event) => event.message.startsWith('Repaired '))).toBe(false)
+  })
+
   it('stitches contiguous exact source and honest progress across multiple windows', async () => {
     const book = makeMultiWindowBook()
     server.respondInSequence([
