@@ -1,7 +1,7 @@
 import { inspect } from 'node:util'
 import type { DirectChapterProgress } from '@light-novel-audiobook/application'
 import { Book, Chapter, ExactSourceCoverage, SourcePassage } from '@light-novel-audiobook/domain'
-import { DirectorError } from '@light-novel-audiobook/gemma-director'
+import { DirectorError, DirectorFidelityError } from '@light-novel-audiobook/gemma-director'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createOpenAiCloudDirectorIdentity,
@@ -89,6 +89,31 @@ function makeMultiWindowBook(): Book {
     author: null,
     coverPath: null,
     source: { epubPath: '/private/synthetic-window.epub', sha256: 'b'.repeat(64) },
+    chapters: [chapter],
+  })
+}
+
+function makeTwoPassageBook(): Book {
+  const chapter = new Chapter({
+    id: 'chapter-01',
+    bookId: 'book-01',
+    position: 1,
+    title: 'Two Passages',
+    sourcePassages: ['First.', 'Second.'].map(
+      (sourceText, index) =>
+        new SourcePassage({
+          id: `passage-00${index + 1}`,
+          chapterId: 'chapter-01',
+          sourceText,
+        }),
+    ),
+  })
+  return new Book({
+    id: 'book-01',
+    title: 'Two-Passage Fixture',
+    author: null,
+    coverPath: null,
+    source: { epubPath: '/private/two-passage.epub', sha256: 'c'.repeat(64) },
     chapters: [chapter],
   })
 }
@@ -261,8 +286,124 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
     })
   })
 
-  it('blocks fidelity failures without an identical cloud rerequest', async () => {
-    server.respondWith(narrationOutput('Rain changed.'))
+  it('exhausts bounded retries on persistent fidelity failures and fails closed', async () => {
+    // Each attempt corrupts a different passage, so the findings are distinguishable per attempt.
+    // Attempt 3 corrupts passage-002; a stale first/second-attempt error would reference passage-001.
+    server.respondInSequence([
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First changed.' },
+        { id: 'passage-002', text: 'Second.' },
+      ]),
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First changed.' },
+        { id: 'passage-002', text: 'Second.' },
+      ]),
+      multiPassageOutput([
+        { id: 'passage-001', text: 'First.' },
+        { id: 'passage-002', text: 'Second changed.' },
+      ]),
+    ])
+    const model = new OpenAiCloudDirectorModel({
+      apiKey: API_KEY,
+      fetch: redirectingFetch,
+      confidenceThreshold: 0.8,
+      chunking: { windowPassageBudget: 2 },
+      contextProvider: {
+        forChapter: async () => ({
+          speakers: [],
+          narratorSpeakerId: 'narrator',
+          fallbackSpeakerId: 'fallback-dialogue',
+        }),
+      },
+    })
+    models.push(model)
+    const book = makeTwoPassageBook()
+    const error = await model.directChapter(book, book.chapters[0] as Chapter).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )
+
+    // The final error is the DirectorFidelityError subclass (not just the base class) and carries
+    // the FINAL attempt's findings — proving exhaustion throws the current attempt's error, not a
+    // cached first/second-attempt error.
+    expect(error).toBeInstanceOf(DirectorFidelityError)
+    expect((error as DirectorError).code).toBe('fidelity')
+    expect((error as Error).message).toContain('deterministic fidelity validation')
+    const findings = (error as DirectorFidelityError).findings.map(
+      (finding) => finding.sourcePassageId,
+    )
+    expect(findings).toContain('passage-002')
+    expect(findings).not.toContain('passage-001')
+    // Three total attempts (one initial + two bounded rerequests); the deterministic validator
+    // is unchanged, so fail-closed still surfaces the same error class/shape as before.
+    expect(server.requests).toHaveLength(3)
+  })
+
+  it('retries a single stochastic fidelity failure and then completes the chapter', async () => {
+    server.respondInSequence([narrationOutput('Rain changed.'), narrationOutput()])
+    const progress: DirectChapterProgress[] = []
+    const book = makeBook()
+    const result = await create().directChapter(book, book.chapters[0] as Chapter, {
+      onProgress: (event) => {
+        progress.push(event)
+      },
+    })
+
+    expect(server.requests).toHaveLength(2)
+    expect(result.segments).toHaveLength(1)
+    expect(result.segments[0]?.sourceText).toBe(SOURCE)
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
+    ).not.toThrow()
+
+    // The retry is observable through the progress sink and carries no passage IDs or source text —
+    // only bounded values (window ordinal, finding codes, attempt budget, passage count).
+    const retryEvents = progress.filter(
+      (event) => event.state === 'requesting' && event.message.startsWith('Retrying window'),
+    )
+    expect(retryEvents).toHaveLength(1)
+    expect(retryEvents[0]?.message).toContain('fidelity findings')
+    expect(retryEvents[0]?.message).toContain('attempt 2 of 3')
+    expect(retryEvents[0]?.message).toContain('window has 1 passage')
+    expect(retryEvents[0]?.message).not.toContain('passage-001')
+    expect(retryEvents[0]?.message).not.toContain(SOURCE)
+    expect(retryEvents[0]?.message).not.toContain('Rain')
+  })
+
+  it('exhausts bounded retries on persistent malformed output and fails closed', async () => {
+    server.setMode('malformed')
+    const progress: DirectChapterProgress[] = []
+    const book = makeBook()
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter, {
+        onProgress: (event) => {
+          progress.push(event)
+        },
+      })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    expect(error).toBeInstanceOf(DirectorError)
+    expect((error as DirectorError).code).toBe('malformed_output')
+    expect(server.requests).toHaveLength(3)
+    // Both malformed-output retry notices are text-free and carry no credentials.
+    const retryMessages = progress
+      .filter(
+        (event) => event.state === 'requesting' && event.message.startsWith('Retrying window'),
+      )
+      .map((event) => event.message)
+    expect(retryMessages).toHaveLength(2)
+    expect(retryMessages.join('\n')).toContain('malformed output')
+    expect(retryMessages.join('\n')).toContain('window has 1 passage')
+    expect(retryMessages.join('\n')).not.toContain('passage-001')
+    expect(retryMessages.join('\n')).not.toContain(SOURCE)
+    expect(retryMessages.join('\n')).not.toContain(API_KEY)
+  })
+
+  it('does not retry non-stochastic failures such as schema validation', async () => {
+    server.setMode('schema-invalid')
     const book = makeBook()
     const error = await create()
       .directChapter(book, book.chapters[0] as Chapter)
@@ -272,9 +413,86 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
       )
 
     expect(error).toBeInstanceOf(DirectorError)
-    expect((error as DirectorError).code).toBe('fidelity')
-    expect((error as Error).message).toContain('deterministic fidelity validation')
+    expect((error as DirectorError).code).toBe('schema_validation')
     expect(server.requests).toHaveLength(1)
+  })
+
+  it('does not retry transport or auth failures such as HTTP errors', async () => {
+    server.setMode('http-error')
+    const book = makeBook()
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter)
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    expect(error).toBeInstanceOf(DirectorError)
+    expect((error as DirectorError).code).toBe('http')
+    // Transport/auth/rate-limit failures are not stochastic-validations and must not be retried.
+    expect(server.requests).toHaveLength(1)
+  })
+
+  it('retries twice and completes when only the third attempt passes', async () => {
+    server.respondInSequence([
+      narrationOutput('Rain changed.'),
+      narrationOutput('Rain stormed.'),
+      narrationOutput(),
+    ])
+    const book = makeBook()
+    const result = await create().directChapter(book, book.chapters[0] as Chapter)
+
+    // Three requests, and the accepted output is the third attempt's (the only one that passed).
+    expect(server.requests).toHaveLength(3)
+    expect(result.segments).toHaveLength(1)
+    expect(result.segments[0]?.sourceText).toBe(SOURCE)
+    expect(() =>
+      ExactSourceCoverage.createSegments(book.chapters[0] as Chapter, result.segments),
+    ).not.toThrow()
+  })
+
+  it('does not start a retry after its progress callback exhausts the chapter deadline', async () => {
+    server.respondWith(narrationOutput('Rain changed.'))
+    const book = makeBook()
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter, {
+        timeoutMs: 100,
+        onProgress: async (event) => {
+          // A slow retry-progress sink exhausts the chapter deadline during the retry notice.
+          if (event.message.startsWith('Retrying window')) {
+            await new Promise((resolve) => setTimeout(resolve, 300))
+          }
+        },
+      })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    // Attempt 1 failed fidelity (1 request); the retry must not start once its progress callback
+    // has exhausted the deadline, and the chapter fails with the same timeout error as today.
+    expect(server.requests).toHaveLength(1)
+    expect(error).toBeInstanceOf(DirectorError)
+    expect((error as DirectorError).code).toBe('timeout')
+    expect((error as DirectorError).retryable).toBe(true)
+  })
+
+  it('does not retry or accept output when the caller signal is pre-aborted', async () => {
+    server.respondWith(narrationOutput())
+    const book = makeBook()
+    const controller = new AbortController()
+    controller.abort()
+    const error = await create()
+      .directChapter(book, book.chapters[0] as Chapter, { signal: controller.signal })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      )
+
+    expect(error).toBeInstanceOf(DirectorError)
+    expect((error as DirectorError).code).toBe('cancelled')
+    // At most one request (the fetch may be initiated and immediately aborted); never retried.
+    expect(server.requests.length).toBeLessThanOrEqual(1)
   })
 
   it.each([
@@ -341,6 +559,8 @@ describe('OpenAiCloudDirectorModel Responses contract', () => {
 
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
     await waitFor(() => server.abortedRequests > 0)
+    // A cancelled attempt is never retried: the chapter surfaces exactly one request.
+    expect(server.requests).toHaveLength(1)
   })
 
   it('classifies a timer-first request abort as timeout, not cancellation', async () => {

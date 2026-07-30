@@ -7,6 +7,7 @@ import {
   type DirectionOptions,
   type DirectorContextProvider,
   DirectorError,
+  DirectorFidelityError,
   type DirectorWarning,
   estimateWindowOutputChars,
   parseDirectionRequest,
@@ -21,10 +22,50 @@ import {
   OPENAI_CLOUD_MODEL_IDENTITY,
   type OpenAiCloudModelIdentity,
 } from './profile.js'
-import { executeOpenAiCloudWindow } from './request.js'
+import { executeOpenAiCloudWindow, type OpenAiCloudWindowResult } from './request.js'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000
 const DEFAULT_CHAPTER_TIMEOUT_MS = 60 * 60_000
+
+/**
+ * Bounded retry budget for a single direction window whose failure is a deterministic validation
+ * of stochastic model output (issue #131). Three total attempts == two additional rerequests.
+ */
+const MAX_WINDOW_ATTEMPTS = 3
+
+/**
+ * A window attempt is retryable only when the failure is a deterministic check of stochastic model
+ * output: a fidelity finding or unparseable structured output. Auth, rate-limit, transport,
+ * timeout, schema-validation, model, stream, and cancellation failures propagate immediately —
+ * the adapter's transport `maxRetries` stays 0, so this is the only retry surface.
+ */
+function isRetryableWindowFailure(error: unknown): boolean {
+  if (error instanceof DirectorFidelityError) return true
+  if (error instanceof DirectorError && error.code === 'malformed_output') return true
+  return false
+}
+
+/**
+ * Text-free retry notice for the progress sink. Surfaces only bounded values: the window ordinal,
+ * the window count, the deterministic failure reason (fidelity finding codes or "malformed
+ * output"), the attempt budget, and the passage COUNT. It deliberately interpolates no passage
+ * IDs — a `SourcePassage` id is an otherwise-unconstrained string, so echoing it verbatim could
+ * leak source text or credentials if a non-stable ID ever reached the adapter boundary.
+ */
+function windowRetryMessage(
+  error: unknown,
+  windowIndex: number,
+  windowCount: number,
+  windowPassageCount: number,
+  attempt: number,
+): string {
+  const windowNumber = windowIndex + 1
+  const reason =
+    error instanceof DirectorFidelityError
+      ? `fidelity findings (${[...new Set(error.findings.map((finding) => finding.code))].join(', ')})`
+      : 'malformed output'
+  return `Retrying window ${windowNumber} of ${windowCount} after ${reason} (attempt ${attempt} of ${MAX_WINDOW_ATTEMPTS}); window has ${windowPassageCount} passage(s)`
+}
 
 export interface OpenAiCloudDirectorModelOptions {
   /** Server-only credential. The adapter never includes it in identities, progress, or errors. */
@@ -210,47 +251,84 @@ export class OpenAiCloudDirectorModel implements DirectorModel {
           fallbackSpeakerId: context.fallbackSpeakerId,
           ...(context.storyContext === undefined ? {} : { storyContext: context.storyContext }),
         })
-        const requestRemaining = remaining()
-        if (requestRemaining < 1) {
-          throw new DirectorError(
-            'timeout',
-            `OpenAI cloud director chapter direction timed out after ${timeoutMs} ms`,
-            true,
+        // Bounded fail-closed retry (issue #131): a single stochastic fidelity/malformed-output
+        // failure no longer kills the whole job. Each attempt is a fresh request with its own
+        // `abortControl` lifecycle inside `executeOpenAiCloudWindow`; the deterministic validator
+        // is unchanged, so output is only ever accepted by passing the same gate as before.
+        let lastAttemptError: unknown
+        for (let attempt = 1; attempt <= MAX_WINDOW_ATTEMPTS; attempt += 1) {
+          await emit(
+            'requesting',
+            attempt === 1
+              ? 'Waiting for the OpenAI cloud director'
+              : windowRetryMessage(
+                  lastAttemptError,
+                  windowIndex,
+                  windows.length,
+                  windowPassages.length,
+                  attempt,
+                ),
           )
+          // Sample the chapter deadline AFTER the (possibly slow) progress sink, immediately
+          // before the request, so a retry cannot start — or succeed — with a stale positive
+          // budget once that callback has exhausted it (review MAJOR 1).
+          const requestRemaining = remaining()
+          if (requestRemaining < 1) {
+            throw new DirectorError(
+              'timeout',
+              `OpenAI cloud director chapter direction timed out after ${timeoutMs} ms`,
+              true,
+            )
+          }
+          let responseStarted = false
+          let attemptResult: OpenAiCloudWindowResult
+          try {
+            attemptResult = await executeOpenAiCloudWindow(
+              {
+                apiKey: this.apiKey,
+                confidenceThreshold: this.confidenceThreshold,
+                directorIdentity: this.identity,
+                fetch: this.fetchImplementation,
+                shutdownSignal: this.shutdownController.signal,
+              },
+              request,
+              {
+                ...(options.signal === undefined ? {} : { signal: options.signal }),
+                timeoutMs: Math.min(this.requestTimeoutMs, requestRemaining),
+                onTextDelta: async () => {
+                  if (!responseStarted) {
+                    responseStarted = true
+                    await emit('response_started', 'OpenAI response streaming started')
+                  } else {
+                    await emit(
+                      'streaming',
+                      `Directing ${completedPassages} of ${totalPassages} passages`,
+                    )
+                  }
+                },
+              },
+            )
+          } catch (error: unknown) {
+            // Exhausted budget, non-retryable failure, or an aborted signal: propagate the
+            // original error so its class/shape is identical to the pre-retry adapter.
+            if (attempt === MAX_WINDOW_ATTEMPTS) throw error
+            if (!isRetryableWindowFailure(error)) throw error
+            if (options.signal?.aborted === true || this.shutdownController.signal.aborted) {
+              throw error
+            }
+            lastAttemptError = error
+            continue
+          }
+          // Success: accumulate outside the retry catch so a downstream progress-sink failure
+          // cannot trigger a spurious retry of an already-validated window.
+          await emit('validating', 'Validating exact source ranges and speaker semantics')
+          annotations.push(...attemptResult.validated.annotations)
+          warnings.push(...attemptResult.validated.warnings)
+          requestHashes.push(attemptResult.requestSha256)
+          outputIdentities.push(attemptResult.outputIdentity)
+          completedPassages = window.end
+          break
         }
-        await emit('requesting', 'Waiting for the OpenAI cloud director')
-        let responseStarted = false
-        const result = await executeOpenAiCloudWindow(
-          {
-            apiKey: this.apiKey,
-            confidenceThreshold: this.confidenceThreshold,
-            directorIdentity: this.identity,
-            fetch: this.fetchImplementation,
-            shutdownSignal: this.shutdownController.signal,
-          },
-          request,
-          {
-            ...(options.signal === undefined ? {} : { signal: options.signal }),
-            timeoutMs: Math.min(this.requestTimeoutMs, requestRemaining),
-            onTextDelta: async () => {
-              if (!responseStarted) {
-                responseStarted = true
-                await emit('response_started', 'OpenAI response streaming started')
-              } else {
-                await emit(
-                  'streaming',
-                  `Directing ${completedPassages} of ${totalPassages} passages`,
-                )
-              }
-            },
-          },
-        )
-        await emit('validating', 'Validating exact source ranges and speaker semantics')
-        annotations.push(...result.validated.annotations)
-        warnings.push(...result.validated.warnings)
-        requestHashes.push(result.requestSha256)
-        outputIdentities.push(result.outputIdentity)
-        completedPassages = window.end
       }
 
       const fallbackWarningByRange = new Map<string, DirectorWarning>(
