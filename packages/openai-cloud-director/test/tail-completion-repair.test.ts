@@ -1,4 +1,9 @@
 import {
+  MAX_FRAGMENT_CHARACTERS,
+  SEPARATOR_OVERSHOOT,
+  splitDirectedSegments,
+} from '@light-novel-audiobook/application'
+import {
   type DirectionRequest,
   type DirectionWireOutput,
   directionWireOutputSchemaFor,
@@ -6,7 +11,6 @@ import {
   validateDirectionOutput,
 } from '@light-novel-audiobook/gemma-director'
 import { describe, expect, it } from 'vitest'
-import { splitDirectedSegments } from '../../application/src/split-directed-segments.js'
 import {
   NARRATION_TAIL_COMPLETION_MAX_CODE_UNITS,
   repairNarrationTailCompletion,
@@ -308,6 +312,52 @@ describe('deterministic narration-tail completion repair', () => {
     expect(result.output.segments).toHaveLength(1)
     expect(result.output.segments[0]?.source_text).toBe(`${prefix}${tail}`)
     expect(() => validateDirectionOutput(result.output, request, 0.8)).not.toThrow()
+  })
+
+  it('declines a whitespace tail the splitter would reject on a near-budget segment', () => {
+    const lastText = 'b'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const tail = ' '.repeat(SEPARATOR_OVERSHOOT + 1)
+    const request = requestFor([{ id: 'p1', text: `${lastText}${tail}` }])
+    const output: DirectionWireOutput = { segments: [narration('p1', lastText)] }
+
+    expect(() =>
+      splitDirectedSegments([
+        {
+          sourcePassageId: 'p1',
+          sourceText: `${lastText}${tail}`,
+          kind: 'narration',
+          speakerId: null,
+          confidence: 1,
+          delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 0 },
+        },
+      ]),
+    ).toThrow()
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output).toBe(output)
+    expect(result.repairs).toEqual([])
+    expect(() => validateDirectionOutput(result.output, request, 0.8)).toThrow()
+  })
+
+  it('attaches an over-budget whitespace tail merge the splitter accepts', () => {
+    const lastText = 'word '.repeat(MAX_FRAGMENT_CHARACTERS / 5 + 1).trimEnd()
+    const sourceText = `${lastText} `
+    expect(sourceText.length).toBeGreaterThan(MAX_FRAGMENT_CHARACTERS)
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = { segments: [narration('p1', lastText)] }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'attach-to-previous' },
+    ])
+    expect(result.output.segments).toHaveLength(1)
+    expect(result.output.segments[0]?.source_text).toBe(sourceText)
+    const validated = validateDirectionOutput(result.output, request, 0.8)
+    const split = splitDirectedSegments(validated.annotations)
+    expect(split.some((segment) => segment.sourceText.trim().length === 0)).toBe(false)
+    expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
   })
 
   it('declines a tail over the 200-code-unit cap so normal validation can reject it', () => {

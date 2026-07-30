@@ -1,3 +1,4 @@
+import { splitDirectedSegments } from '@light-novel-audiobook/application'
 import type {
   DirectionRequest,
   DirectionWireOutput,
@@ -24,6 +25,39 @@ export interface NarrationTailCompletionRepair {
 export interface NarrationTailCompletionRepairResult {
   readonly output: DirectionWireOutput
   readonly repairs: readonly NarrationTailCompletionRepair[]
+}
+
+const SPLITTER_PROBE_DELIVERY = Object.freeze({
+  emotion: 'neutral',
+  pace: 'normal',
+  volume: 'normal',
+  pauseAfterMs: 0,
+} as const)
+
+/**
+ * Probes the real application splitter with the candidate merged text. Splitting is per-segment
+ * and reads only sourceText and sourcePassageId, so acceptance here is exactly acceptance in the
+ * pipeline; only the merged segment's split outcome changes with this repair. Declining hands the
+ * passage back to the unchanged fidelity validator, whose window retry is the recovery path —
+ * attaching an unsplittable tail would instead fail the chapter deterministically after direction
+ * succeeded, outside any retry budget.
+ */
+function splitterAcceptsMergedTail(sourceText: string, sourcePassageId: string): boolean {
+  try {
+    splitDirectedSegments([
+      {
+        sourcePassageId,
+        sourceText,
+        kind: 'narration',
+        speakerId: null,
+        confidence: 1,
+        delivery: SPLITTER_PROBE_DELIVERY,
+      },
+    ])
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -79,17 +113,23 @@ export function repairNarrationTailCompletion(
         // unchanged fidelity validator then owns rejection and lets the window retry normally.
         continue
       }
+      const mergedSourceText = lastSegment.source_text + missingTail
+      if (!splitterAcceptsMergedTail(mergedSourceText, passage.id)) {
+        // A tail the splitter rejects (e.g. a trailing whitespace run beyond the separator
+        // allowance on a near-budget segment) must decline: the fidelity validator owns the
+        // failure and the window retries, instead of a post-direction terminal split failure.
+        continue
+      }
       // Preserve global director identity for resume compatibility: the previous standalone
       // whitespace repair could never persist because application splitting deterministically
-      // rejects a leading whitespace-only piece before chapter persistence. A long attached
-      // whitespace run can still exceed the splitter's separator allowance; that pre-existing edge
-      // remains validator/splitter-owned. Appending a whitespace suffix also cannot split a source
-      // grapheme. The spread deliberately preserves every provider-owned wire semantic field.
+      // rejects a leading whitespace-only piece before chapter persistence. Appending a
+      // whitespace suffix also cannot split a source grapheme. The spread deliberately preserves
+      // every provider-owned wire semantic field.
       replacementBySegmentIndex.set(
         lastSegmentIndex,
         Object.freeze({
           ...lastSegment,
-          source_text: lastSegment.source_text + missingTail,
+          source_text: mergedSourceText,
         }),
       )
       repairs.push({
