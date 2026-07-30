@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import { withDirectorContentIdentity } from '@light-novel-audiobook/application'
+import { type DirectorModel, withDirectorContentIdentity } from '@light-novel-audiobook/application'
 import { FfmpegAudioAssembler } from '@light-novel-audiobook/audio-assembly'
 import { DomainEpubExtractor } from '@light-novel-audiobook/epub-ingestion'
 import { GemmaDirectorModel } from '@light-novel-audiobook/gemma-director'
@@ -18,17 +18,23 @@ import type { AudiobookAdapterFactories } from './composition-root.js'
 import { createDirectorContentIdentity } from './director-content-identity.js'
 import type { LocalWorkspace } from './workspace.js'
 
+export interface DirectorFactoryBinding {
+  readonly identity: string
+  create(): DirectorModel | Promise<DirectorModel>
+}
+
 export interface RealAdapterFactoryOptions {
   /** The same workspace the persistence layout and the speech engine's segment output live in. */
   readonly workspace: LocalWorkspace
   readonly repositoryRoot: string
   /**
-   * Where the director's HTTP endpoint is, which Python worker the speech engine spawns, and who
-   * arbitrates the GPU. Constructed by the caller — `createRealTransports` in production, fake
-   * transports in tests — so this module never decides how real the runtime is. Its director runtime
-   * factory is invoked once per model; the transport object itself remains process-lived.
+   * Qwen worker paths and GPU arbitration. Local Gemma mode passes the complete pipeline transport;
+   * cloud mode deliberately passes only speech/GPU so no llama lifecycle can be reached.
    */
-  readonly transports: PipelineTransports
+  readonly transports: Pick<PipelineTransports, 'speech' | 'gpu'> &
+    Partial<Pick<PipelineTransports, 'director'>>
+  /** Omitted preserves the historical local Gemma factory path byte-for-byte in behavior. */
+  readonly director?: DirectorFactoryBinding | undefined
   /**
    * Speaker IDs the director may legitimately emit, i.e. the ones the cast can actually render. The
    * roster excludes narrator/fallback role IDs because Gemma rejects them as character speakers.
@@ -85,50 +91,60 @@ export const createRealAdapterFactories = async (
   const approvals = new SqliteFallbackApprovalRepository(database)
   const directionApprovals = new SqliteDirectionApprovalRepository(database)
 
-  // --- director: identity bound from configuration only, and a fresh model per run. The wrapper
-  // and the factory value MUST be the same string: `DirectAudiobook` releases a director whose
-  // self-reported identity disagrees with what the command identity bound, then fails the run.
-  const directorSettings = {
-    baseUrl: transports.director.baseUrl,
-    confidenceThreshold,
-    gpuLeaseLockFilePath: transports.gpu.lockFilePath,
-  }
-  const directorIdentity = createDirectorContentIdentity(directorSettings)
-  const createDirectorModel = async () => {
-    const runtime = transports.director.createRuntime()
-    try {
-      return withDirectorContentIdentity(
-        new GemmaDirectorModel({
-          baseUrl: transports.director.baseUrl,
-          apiKey: runtime.apiKey,
-          confidenceThreshold,
-          contextProvider: {
-            // The story bible does not exist yet, so the cast itself is the context: the director may
-            // only attribute dialogue to a speaker this run can actually render.
-            forChapter: async () => ({
-              speakers: options.characterSpeakerIds.map((id) => ({ id, aliases: [] })),
-              narratorSpeakerId: options.narratorProfileId,
-              fallbackSpeakerId: options.fallbackProfileId,
-            }),
-          },
-          // The web surfaces progress from job state, not from the director's event stream.
-          progressStore: { append: async () => undefined },
-          lifecycle: runtime.lifecycle,
-          gpuLeaseCoordinator: transports.gpu.coordinator,
-          gpuLeaseLockFilePath: transports.gpu.lockFilePath,
-        }),
-        directorIdentity,
-      )
-    } catch (constructionFailure: unknown) {
+  // --- director: an explicit cloud binding never touches local lifecycle/GPU/port logic. With no
+  // binding, preserve the historical local Gemma construction and content-identity behavior.
+  let directorIdentity: string
+  let createDirectorModel: () => DirectorModel | Promise<DirectorModel>
+  if (options.director !== undefined) {
+    // Cloud identity is already content-only: no endpoint, key, lifecycle, or lock path is hashed,
+    // so it needs no Gemma-style environment-pinning wrapper.
+    const cloudDirector = options.director
+    directorIdentity = cloudDirector.identity
+    createDirectorModel = () => cloudDirector.create()
+  } else {
+    const localDirector = transports.director
+    if (localDirector === undefined) {
+      throw new Error('Local Gemma adapter construction requires a director runtime transport')
+    }
+    const directorSettings = {
+      baseUrl: localDirector.baseUrl,
+      confidenceThreshold,
+      gpuLeaseLockFilePath: transports.gpu.lockFilePath,
+    }
+    directorIdentity = createDirectorContentIdentity(directorSettings)
+    createDirectorModel = async () => {
+      const runtime = localDirector.createRuntime()
       try {
-        await runtime.lifecycle.release()
-      } catch (releaseFailure: unknown) {
-        throw new AggregateError(
-          [constructionFailure, releaseFailure],
-          'Director construction failed and its runtime could not be released',
+        return withDirectorContentIdentity(
+          new GemmaDirectorModel({
+            baseUrl: localDirector.baseUrl,
+            apiKey: runtime.apiKey,
+            confidenceThreshold,
+            contextProvider: {
+              forChapter: async () => ({
+                speakers: options.characterSpeakerIds.map((id) => ({ id, aliases: [] })),
+                narratorSpeakerId: options.narratorProfileId,
+                fallbackSpeakerId: options.fallbackProfileId,
+              }),
+            },
+            progressStore: { append: async () => undefined },
+            lifecycle: runtime.lifecycle,
+            gpuLeaseCoordinator: transports.gpu.coordinator,
+            gpuLeaseLockFilePath: transports.gpu.lockFilePath,
+          }),
+          directorIdentity,
         )
+      } catch (constructionFailure: unknown) {
+        try {
+          await runtime.lifecycle.release()
+        } catch (releaseFailure: unknown) {
+          throw new AggregateError(
+            [constructionFailure, releaseFailure],
+            'Director construction failed and its runtime could not be released',
+          )
+        }
+        throw constructionFailure
       }
-      throw constructionFailure
     }
   }
 

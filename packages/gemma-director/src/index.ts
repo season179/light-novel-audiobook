@@ -28,6 +28,7 @@ export {
   planWindow,
   resolveChunkingSettings,
   shrinkSettings,
+  windowBudgetError,
 } from './chunking.js'
 export { DEFAULT_GEMMA_DIRECTOR_BASE_URL, GemmaDirectorEndpoint } from './config.js'
 export {

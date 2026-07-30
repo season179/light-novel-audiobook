@@ -24,6 +24,7 @@ import {
 } from '@light-novel-audiobook/pipeline-driver'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDirectorContentIdentity } from '../src/server/director-content-identity.js'
+import { FakeDirectorModel } from '../src/server/fakes/fake-director-model.js'
 import {
   createRealAdapterFactories,
   type RealAdapterFactories,
@@ -61,7 +62,10 @@ afterEach(async () => {
  * no network beyond loopback. This is as real as construction can get without loading weights —
  * the genuine classes, the genuine SQLite persistence boundary, the genuine identity material.
  */
-const buildRealFactories = async (): Promise<{
+const buildRealFactories = async (director?: {
+  readonly identity: string
+  create(): FakeDirectorModel
+}): Promise<{
   readonly factories: RealAdapterFactories['factories']
   readonly workspaceRoot: string
   readonly transports: PipelineTransports
@@ -97,6 +101,7 @@ const buildRealFactories = async (): Promise<{
     characterSpeakerIds: ['alice'],
     narratorProfileId: 'narrator-aiden-calm',
     fallbackProfileId: 'fallback-ryan-restrained',
+    ...(director === undefined ? {} : { director }),
   })
   built.push(result)
   return { factories: result.factories, workspaceRoot, transports, directorRuntimes }
@@ -177,6 +182,28 @@ describe.skipIf(!TOOLCHAIN_PRESENT)('real adapter factories over fake transports
       'director:start',
       'director:release',
     ])
+  })
+
+  it('uses an explicit cloud-style director binding without constructing a llama runtime', async () => {
+    const directors: FakeDirectorModel[] = []
+    const identity = new FakeDirectorModel().identity
+    const { factories, directorRuntimes } = await buildRealFactories({
+      identity,
+      create: () => {
+        const director = new FakeDirectorModel()
+        directors.push(director)
+        return director
+      },
+    })
+
+    const first = await factories.createDirectorModel?.()
+    const second = await factories.createDirectorModel?.()
+    expect(first?.identity).toBe(identity)
+    expect(second?.identity).toBe(identity)
+    expect(directors).toHaveLength(2)
+    expect(directorRuntimes).toHaveLength(0)
+    await first?.release()
+    await second?.release()
   })
 
   it('shares one speech engine across per-book factories, with a stable identity', async () => {

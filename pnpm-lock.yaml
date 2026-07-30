@@ -48,6 +48,12 @@ importers:
       '@light-novel-audiobook/gemma-director':
         specifier: workspace:*
         version: link:../../packages/gemma-director
+      '@light-novel-audiobook/gpu-lease':
+        specifier: workspace:*
+        version: link:../../packages/gpu-lease
+      '@light-novel-audiobook/openai-cloud-director':
+        specifier: workspace:*
+        version: link:../../packages/openai-cloud-director
       '@light-novel-audiobook/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
@@ -220,6 +226,27 @@ importers:
 
   packages/llama-cpp-spike:
     dependencies:
+      '@tanstack/ai':
+        specifier: 0.42.0
+        version: 0.42.0
+      '@tanstack/ai-openai':
+        specifier: 0.17.1
+        version: 0.17.1(@tanstack/ai@0.42.0)(zod@4.4.3)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/openai-cloud-director:
+    dependencies:
+      '@light-novel-audiobook/application':
+        specifier: workspace:*
+        version: link:../application
+      '@light-novel-audiobook/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@light-novel-audiobook/gemma-director':
+        specifier: workspace:*
+        version: link:../gemma-director
       '@tanstack/ai':
         specifier: 0.42.0
         version: 0.42.0

@@ -1,5 +1,10 @@
 import path from 'node:path'
 import { SELECTED_GEMMA_PROFILE } from '@light-novel-audiobook/gemma-director'
+import { FileGpuLeaseCoordinator } from '@light-novel-audiobook/gpu-lease'
+import {
+  createOpenAiCloudDirectorIdentity,
+  OpenAiCloudDirectorModel,
+} from '@light-novel-audiobook/openai-cloud-director'
 import {
   createRealTransports,
   type RealTransportConfig,
@@ -24,6 +29,8 @@ import { createWorkspace, resolveWorkspaceRoot, WORKSPACE_ENV_VAR } from './work
  * breaks every test in the repo. Real adapters exist only when this variable says so.
  */
 export const TRANSPORT_MODE_ENV_VAR = 'LNA_WEB_TRANSPORTS'
+export const DIRECTOR_MODE_ENV_VAR = 'LNA_DIRECTOR_MODE'
+export const OPENAI_API_KEY_ENV_VAR = 'OPENAI_API_KEY'
 
 export const DIRECTOR_URL_ENV_VAR = 'LNA_DIRECTOR_URL'
 export const LLAMA_RUNTIME_ROOT_ENV_VAR = 'LNA_LLAMA_RUNTIME_ROOT'
@@ -34,6 +41,7 @@ export const QWEN_SNAPSHOT_ENV_VAR = 'LNA_QWEN_SNAPSHOT'
 export const GPU_LOCK_ENV_VAR = 'LNA_GPU_LOCK'
 
 export type TransportMode = 'fake' | 'real'
+export type DirectorMode = 'local-gemma' | 'openai-cloud'
 
 export const resolveTransportMode = (env: NodeJS.ProcessEnv): TransportMode => {
   const raw = env[TRANSPORT_MODE_ENV_VAR]
@@ -43,6 +51,29 @@ export const resolveTransportMode = (env: NodeJS.ProcessEnv): TransportMode => {
     'internal',
     `${TRANSPORT_MODE_ENV_VAR} must be 'fake' or 'real', got ${JSON.stringify(raw)}`,
   )
+}
+
+export const resolveDirectorMode = (env: NodeJS.ProcessEnv): DirectorMode => {
+  const raw = env[DIRECTOR_MODE_ENV_VAR]
+  if (raw === undefined || raw.trim().length === 0) return 'local-gemma'
+  if (raw === 'local-gemma' || raw === 'openai-cloud') return raw
+  throw new WebApiError(
+    'internal',
+    `${DIRECTOR_MODE_ENV_VAR} must be 'local-gemma' or 'openai-cloud', got ${JSON.stringify(raw)}`,
+  )
+}
+
+export const loadRepositoryRootEnv = (env: NodeJS.ProcessEnv, repositoryRoot: string): void => {
+  // Explicit test/config objects are complete inputs. Loading the host's private file into them
+  // would make tests machine-dependent and could accidentally select real adapters.
+  if (env !== process.env) return
+  try {
+    process.loadEnvFile(path.join(repositoryRoot, '.env'))
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    // Do not retain the filesystem/parser cause: it may contain a line or path from the secret file.
+    throw new WebApiError('internal', 'Could not load repository-root .env configuration')
+  }
 }
 
 const required = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -61,6 +92,26 @@ const required = (env: NodeJS.ProcessEnv, name: string): string => {
  * mode: everything locates a pinned runtime, and the two paths the driver leaves to convention
  * (the llama.cpp runtime root, the Qwen snapshot) default exactly as `--transports real` does.
  */
+export interface RealQwenTransportConfig {
+  readonly pythonExecutable: string
+  readonly workerScriptPath: string
+  readonly runtimeManifestPath: string
+  readonly modelSnapshotPath: string
+  readonly gpuLockFilePath: string
+}
+
+export const resolveRealQwenTransportConfig = async (
+  env: NodeJS.ProcessEnv,
+  repositoryRoot: string,
+): Promise<RealQwenTransportConfig> => ({
+  pythonExecutable: required(env, QWEN_PYTHON_ENV_VAR),
+  workerScriptPath: required(env, QWEN_WORKER_ENV_VAR),
+  runtimeManifestPath: required(env, QWEN_RUNTIME_MANIFEST_ENV_VAR),
+  modelSnapshotPath:
+    env[QWEN_SNAPSHOT_ENV_VAR] ?? (await resolveDefaultModelSnapshotPath(repositoryRoot)),
+  gpuLockFilePath: required(env, GPU_LOCK_ENV_VAR),
+})
+
 export const resolveRealTransportConfig = async (
   env: NodeJS.ProcessEnv,
   repositoryRoot: string,
@@ -68,12 +119,7 @@ export const resolveRealTransportConfig = async (
 ): Promise<RealTransportConfig> => ({
   directorBaseUrl: required(env, DIRECTOR_URL_ENV_VAR),
   llamaRuntimeRoot: env[LLAMA_RUNTIME_ROOT_ENV_VAR] ?? SELECTED_GEMMA_PROFILE.defaultRuntimeRoot,
-  pythonExecutable: required(env, QWEN_PYTHON_ENV_VAR),
-  workerScriptPath: required(env, QWEN_WORKER_ENV_VAR),
-  runtimeManifestPath: required(env, QWEN_RUNTIME_MANIFEST_ENV_VAR),
-  modelSnapshotPath:
-    env[QWEN_SNAPSHOT_ENV_VAR] ?? (await resolveDefaultModelSnapshotPath(repositoryRoot)),
-  gpuLockFilePath: required(env, GPU_LOCK_ENV_VAR),
+  ...(await resolveRealQwenTransportConfig(env, repositoryRoot)),
   directorCaptureDirectory: path.join(workspaceRoot, 'diagnostics', 'llama-server'),
 })
 
@@ -90,10 +136,12 @@ export const resolveRealTransportConfig = async (
 export const resolveEnvironmentCompositionOptions = async (
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AudiobookWebApiOptions> => {
+  const repositoryRoot = findRepositoryRoot(process.cwd())
+  if (repositoryRoot !== undefined) loadRepositoryRootEnv(env, repositoryRoot)
+
   const mode = resolveTransportMode(env)
   if (mode === 'fake') return {}
 
-  const repositoryRoot = findRepositoryRoot(process.cwd())
   if (repositoryRoot === undefined) {
     throw new WebApiError(
       'internal',
@@ -104,13 +152,67 @@ export const resolveEnvironmentCompositionOptions = async (
   const workspace = await createWorkspace(resolveWorkspaceRoot(env[WORKSPACE_ENV_VAR]))
   const voices = createM1VoiceCast(await loadPinnedQwenConfig(env[QWEN_PRODUCTION_CONFIG_ENV_VAR]))
   const shutdownController = new AbortController()
-  const transports = await createRealTransports(
-    await resolveRealTransportConfig(env, repositoryRoot, workspace.root),
-  )
+  const directorMode = resolveDirectorMode(env)
+
+  if (directorMode === 'local-gemma') {
+    const transports = await createRealTransports(
+      await resolveRealTransportConfig(env, repositoryRoot, workspace.root),
+    )
+    const realAdapters = await createRealAdapterFactories({
+      workspace,
+      repositoryRoot,
+      transports,
+      characterSpeakerIds: M1_CHARACTER_SPEAKER_IDS,
+      narratorProfileId: voices.narrator.id,
+      fallbackProfileId: voices.fallback.id,
+      shutdownSignal: shutdownController.signal,
+    })
+    return {
+      workspace,
+      voices,
+      ...realAdapters.factories,
+      runtimeShutdown: {
+        controller: shutdownController,
+        releaseOwnedResources: transports.close,
+        closeResources: realAdapters.close,
+      },
+    }
+  }
+
+  const apiKey = required(env, OPENAI_API_KEY_ENV_VAR)
+  const qwen = await resolveRealQwenTransportConfig(env, repositoryRoot)
+  const cloudDirectorIdentity = createOpenAiCloudDirectorIdentity({ confidenceThreshold: 0.5 })
   const realAdapters = await createRealAdapterFactories({
     workspace,
     repositoryRoot,
-    transports,
+    transports: {
+      speech: {
+        pythonExecutable: qwen.pythonExecutable,
+        workerScriptPath: qwen.workerScriptPath,
+        runtimeManifestPath: qwen.runtimeManifestPath,
+        modelSnapshotPath: qwen.modelSnapshotPath,
+        processEnvironment: {},
+      },
+      gpu: {
+        coordinator: new FileGpuLeaseCoordinator({ lockFilePath: qwen.gpuLockFilePath }),
+        lockFilePath: qwen.gpuLockFilePath,
+      },
+    },
+    director: {
+      identity: cloudDirectorIdentity,
+      create: () =>
+        new OpenAiCloudDirectorModel({
+          apiKey,
+          confidenceThreshold: 0.5,
+          contextProvider: {
+            forChapter: async () => ({
+              speakers: M1_CHARACTER_SPEAKER_IDS.map((id) => ({ id, aliases: [] })),
+              narratorSpeakerId: voices.narrator.id,
+              fallbackSpeakerId: voices.fallback.id,
+            }),
+          },
+        }),
+    },
     characterSpeakerIds: M1_CHARACTER_SPEAKER_IDS,
     narratorProfileId: voices.narrator.id,
     fallbackProfileId: voices.fallback.id,
@@ -122,7 +224,7 @@ export const resolveEnvironmentCompositionOptions = async (
     ...realAdapters.factories,
     runtimeShutdown: {
       controller: shutdownController,
-      releaseOwnedResources: transports.close,
+      releaseOwnedResources: async () => undefined,
       closeResources: realAdapters.close,
     },
   }

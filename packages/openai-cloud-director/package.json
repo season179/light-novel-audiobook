@@ -1,0 +1,24 @@
+{
+  "name": "@light-novel-audiobook/openai-cloud-director",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixed OpenAI Responses DirectorModel adapter",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/openai-cloud-director/test",
+    "smoke:real": "tsx scripts/real-smoke.ts"
+  },
+  "dependencies": {
+    "@light-novel-audiobook/application": "workspace:*",
+    "@light-novel-audiobook/domain": "workspace:*",
+    "@light-novel-audiobook/gemma-director": "workspace:*",
+    "@tanstack/ai": "0.42.0",
+    "@tanstack/ai-openai": "0.17.1",
+    "zod": "4.4.3"
+  }
+}
