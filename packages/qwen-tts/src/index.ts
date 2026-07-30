@@ -35,6 +35,7 @@ export {
   DEFAULT_DELIVERY,
   deriveSeed,
   effectiveInstruction,
+  MAX_SEED_ATTEMPTS,
   sha256,
 } from './manifest.js'
 export { prepareEmptySmokeOutputRoot } from './smoke-output.js'

@@ -9,6 +9,8 @@ import type { RenderIdentity, SegmentPlan } from '../src/manifest.js'
 import {
   canonicalJson,
   createSegmentPlan,
+  deriveSeed,
+  MAX_SEED_ATTEMPTS,
   recordRendered,
   sha256,
   tryReuse,
@@ -84,25 +86,149 @@ function canonicalWav(text: string): Buffer {
 const directories: Array<string> = []
 
 afterEach(async () => {
+  deepGate.calls = 0
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
 async function renderOnce(
   runtimeIdentity: QwenWorkerRuntimeIdentity = RUNTIME_IDENTITY,
+  attempt = 1,
+  request: SpeechSegmentRequest = REQUEST,
 ): Promise<{ config: LoadedProductionConfig; plan: SegmentPlan; directory: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'qwen-tts-reuse-'))
   directories.push(directory)
   const output = join(directory, 'audio')
   await mkdir(output, { recursive: true })
   const config = await loadProductionConfig(PRODUCTION_CONFIG)
-  const plan = createSegmentPlan(1, REQUEST, output, config, runtimeIdentity)
-  const bytes = canonicalWav(REQUEST.text)
+  const plan = createSegmentPlan(1, request, output, config, runtimeIdentity, attempt)
+  const bytes = canonicalWav(request.text)
   await writeFile(plan.wavPath, bytes, { mode: 0o600 })
   await recordRendered(plan, config, sha256(bytes))
   return { config, plan, directory }
 }
 
 describe('render manifest reuse', () => {
+  it('pins the canonical seed and plan identity while deriving the reviewed attempt family', async () => {
+    const config = await loadProductionConfig(PRODUCTION_CONFIG)
+    const profile = config.selectedProfiles.get('ryan-low-weary')
+    if (profile === undefined) throw new Error('Pinned profile missing')
+    const segmentId = 'book-ca2ed4f871d99b32da10361c-ch0003-p000027-s0001'
+    const request: SpeechSegmentRequest = {
+      segmentId,
+      text: 'Synthetic seed identity fixture.',
+      voiceProfileId: 'ryan-low-weary',
+    }
+
+    expect(
+      Array.from({ length: MAX_SEED_ATTEMPTS }, (_unused, index) =>
+        deriveSeed(profile, segmentId, index + 1),
+      ),
+    ).toEqual([408223135, 2104183315, 1460219530, 1087971059])
+    const implicit = createSegmentPlan(1, request, '/tmp/qwen', config, RUNTIME_IDENTITY)
+    const explicit = createSegmentPlan(1, request, '/tmp/qwen', config, RUNTIME_IDENTITY, 1)
+    expect(canonicalJson(explicit)).toBe(canonicalJson(implicit))
+    expect(implicit.identitySha256).toBe(
+      '2fc06cdf22ead151cf6a880300a9341a4a9c1ddefe828dba88c28318f9d8196b',
+    )
+  })
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid seed attempt %s',
+    async (attempt) => {
+      const config = await loadProductionConfig(PRODUCTION_CONFIG)
+      const profile = config.selectedProfiles.get('ryan-low-weary')
+      if (profile === undefined) throw new Error('Pinned profile missing')
+      expect(() => deriveSeed(profile, REQUEST.segmentId, attempt)).toThrow('positive safe integer')
+    },
+  )
+
+  it('accepts only exact attempt-family manifests and returns their truthful identity hash', async () => {
+    for (let attempt = 1; attempt <= MAX_SEED_ATTEMPTS; attempt += 1) {
+      const { config, plan: rendered, directory } = await renderOnce(RUNTIME_IDENTITY, attempt)
+      const canonical = createSegmentPlan(
+        1,
+        REQUEST,
+        join(directory, 'audio'),
+        config,
+        RUNTIME_IDENTITY,
+      )
+      const reused = await tryReuse(canonical, config)
+      expect(reused?.renderIdentitySha256).toBe(rendered.identitySha256)
+      if (attempt > 1) expect(reused?.renderIdentitySha256).not.toBe(canonical.identitySha256)
+    }
+  })
+
+  it('rejects attempt 5 and a recomputed near-family seed', async () => {
+    const attemptFive = await renderOnce(RUNTIME_IDENTITY, MAX_SEED_ATTEMPTS + 1)
+    const canonicalFive = createSegmentPlan(
+      1,
+      REQUEST,
+      join(attemptFive.directory, 'audio'),
+      attemptFive.config,
+      RUNTIME_IDENTITY,
+    )
+    expect(await tryReuse(canonicalFive, attemptFive.config)).toBeUndefined()
+
+    const attemptTwo = await renderOnce(RUNTIME_IDENTITY, 2)
+    const manifest = JSON.parse(await readFile(attemptTwo.plan.manifestPath, 'utf8')) as {
+      renderIdentitySha256: string
+      renderIdentity: RenderIdentity
+    }
+    const nearIdentity: RenderIdentity = {
+      ...manifest.renderIdentity,
+      settings: { ...manifest.renderIdentity.settings, seed: attemptTwo.plan.seed + 1 },
+    }
+    manifest.renderIdentity = nearIdentity
+    manifest.renderIdentitySha256 = sha256(canonicalJson(nearIdentity))
+    await writeFile(attemptTwo.plan.manifestPath, `${canonicalJson(manifest)}\n`)
+    const canonicalTwo = createSegmentPlan(
+      1,
+      REQUEST,
+      join(attemptTwo.directory, 'audio'),
+      attemptTwo.config,
+      RUNTIME_IDENTITY,
+    )
+    expect(await tryReuse(canonicalTwo, attemptTwo.config)).toBeUndefined()
+  })
+
+  it('rejects non-seed identity changes and canonical JSON/hash disagreement', async () => {
+    const mutation = await renderOnce(RUNTIME_IDENTITY, 2)
+    const canonical = createSegmentPlan(
+      1,
+      REQUEST,
+      join(mutation.directory, 'audio'),
+      mutation.config,
+      RUNTIME_IDENTITY,
+    )
+    const manifest = JSON.parse(await readFile(mutation.plan.manifestPath, 'utf8')) as {
+      renderIdentitySha256: string
+      renderIdentity: RenderIdentity
+    }
+    const changed: RenderIdentity = {
+      ...manifest.renderIdentity,
+      delivery: { ...manifest.renderIdentity.delivery, emotion: 'different-fixture-emotion' },
+    }
+    manifest.renderIdentity = changed
+    manifest.renderIdentitySha256 = sha256(canonicalJson(changed))
+    await writeFile(mutation.plan.manifestPath, `${canonicalJson(manifest)}\n`)
+    expect(await tryReuse(canonical, mutation.config)).toBeUndefined()
+
+    const disagreement = await renderOnce(RUNTIME_IDENTITY, 2)
+    const mismatched = JSON.parse(await readFile(disagreement.plan.manifestPath, 'utf8')) as {
+      renderIdentitySha256: string
+    }
+    mismatched.renderIdentitySha256 = 'f'.repeat(64)
+    await writeFile(disagreement.plan.manifestPath, `${canonicalJson(mismatched)}\n`)
+    const disagreementCanonical = createSegmentPlan(
+      1,
+      REQUEST,
+      join(disagreement.directory, 'audio'),
+      disagreement.config,
+      RUNTIME_IDENTITY,
+    )
+    expect(await tryReuse(disagreementCanonical, disagreement.config)).toBeUndefined()
+  })
+
   it('reuses a cached clip on its content address without rerunning the deep audio gate', async () => {
     const { config, plan } = await renderOnce()
     expect(deepGate.calls).toBe(1)

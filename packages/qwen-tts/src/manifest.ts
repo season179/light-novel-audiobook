@@ -23,6 +23,13 @@ import { readCanonicalWavHeader, validateCanonicalWav } from './wav.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
+/**
+ * One canonical seed plus three deterministic fallbacks. This bound is shared by rendering and
+ * reuse so the engine can never produce an artifact that the next process refuses to recognize.
+ * Changing it or the salt format requires an explicit application-identity migration decision.
+ */
+export const MAX_SEED_ATTEMPTS = 4
+
 export interface RenderIdentity {
   readonly adapter: LoadedProductionConfig['value']['adapter']
   readonly model: LoadedProductionConfig['value']['model']
@@ -99,9 +106,15 @@ export function effectiveInstruction(
   return `${profile.instruction} For this segment, use ${delivery.emotion} emotion, ${delivery.pace} pacing, and ${delivery.volume} volume while preserving the approved voice.`
 }
 
-export function deriveSeed(profile: VoiceProfile, segmentId: string): number {
+export function deriveSeed(profile: VoiceProfile, segmentId: string, attempt = 1): number {
+  if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    throw new RangeError('Seed attempt must be a positive safe integer')
+  }
+  // Attempt 1 deliberately executes the original byte sequence exactly. Existing manifests and
+  // all banked audio therefore retain their seed and render identity bit-for-bit.
+  const attemptSalt = attempt === 1 ? '' : `\0attempt-${attempt}`
   const digest = createHash('sha256')
-    .update(`${profile.id}\0${profile.seedSalt}\0${segmentId}`)
+    .update(`${profile.id}\0${profile.seedSalt}\0${segmentId}${attemptSalt}`)
     .digest()
   return Math.max(1, digest.readUInt32BE(0) & 0x7fffffff)
 }
@@ -112,12 +125,13 @@ export function createSegmentPlan(
   outputDirectory: string,
   config: LoadedProductionConfig,
   runtimeIdentity: QwenWorkerRuntimeIdentity,
+  attempt = 1,
 ): SegmentPlan {
   const usedFallback = request.voiceProfileId === undefined
   const profileId = request.voiceProfileId ?? config.value.fallbackVoiceProfileId
   const profile = config.selectedProfiles.get(profileId)
   if (!profile) throw new Error(`Missing configured voice profile: ${profileId}`)
-  const seed = deriveSeed(profile, request.segmentId)
+  const seed = deriveSeed(profile, request.segmentId, attempt)
   const delivery = request.delivery ?? DEFAULT_DELIVERY
   const instruction = effectiveInstruction(profile, delivery)
   const identity: RenderIdentity = {
@@ -225,17 +239,36 @@ function recordedAudioClaim(
   return { sha256: digest, bytes, frames, durationSeconds }
 }
 
+function identityWithSeed(plan: SegmentPlan, seed: number): RenderIdentity {
+  return {
+    ...plan.identity,
+    settings: { ...plan.identity.settings, seed },
+  }
+}
+
+function matchesExactIdentity(manifest: RenderManifest, identity: RenderIdentity): boolean {
+  const json = canonicalJson(identity)
+  return (
+    manifest.renderIdentitySha256 === sha256(json) &&
+    canonicalJson(manifest.renderIdentity) === json
+  )
+}
+
 function matchesRenderIdentity(
   manifest: RenderManifest,
   plan: SegmentPlan,
   config: LoadedProductionConfig,
 ): boolean {
-  if (
-    manifest.renderIdentitySha256 === plan.identitySha256 &&
-    canonicalJson(manifest.renderIdentity) === canonicalJson(plan.identity)
-  ) {
-    return true
+  // This is a deliberately fixed compatibility family: recompute every admitted seed rather than
+  // trusting the manifest's seed, and require full canonical JSON plus its hash for each variant.
+  for (let attempt = 1; attempt <= MAX_SEED_ATTEMPTS; attempt += 1) {
+    const candidate = identityWithSeed(
+      plan,
+      deriveSeed(plan.profile, plan.request.segmentId, attempt),
+    )
+    if (matchesExactIdentity(manifest, candidate)) return true
   }
+
   const migration = AFFINE_WAV_GATE_REUSE_MIGRATION
   if (
     config.sha256 !== migration.successorProductionConfigSha256 ||
@@ -244,17 +277,16 @@ function matchesRenderIdentity(
   ) {
     return false
   }
+  // Keep the spent #91 affine bridge exact: only its canonical attempt-1 predecessor is eligible.
+  // Salted seeds did not exist under that worker/config pair and must never be admitted there.
   const predecessorIdentity: RenderIdentity = {
-    ...plan.identity,
+    ...identityWithSeed(plan, deriveSeed(plan.profile, plan.request.segmentId, 1)),
     workerRuntime: {
       ...plan.identity.workerRuntime,
       workerSha256: migration.predecessorWorkerSha256,
     },
   }
-  return (
-    manifest.renderIdentitySha256 === sha256(canonicalJson(predecessorIdentity)) &&
-    canonicalJson(manifest.renderIdentity) === canonicalJson(predecessorIdentity)
-  )
+  return matchesExactIdentity(manifest, predecessorIdentity)
 }
 
 export async function tryReuse(
@@ -301,7 +333,7 @@ export async function tryReuse(
     usedFallback: plan.usedFallback,
     wavPath: plan.wavPath,
     manifestPath: plan.manifestPath,
-    renderIdentitySha256: plan.identitySha256,
+    renderIdentitySha256: manifest.renderIdentitySha256,
     audio: {
       sha256: claim.sha256,
       bytes: bytes.length,

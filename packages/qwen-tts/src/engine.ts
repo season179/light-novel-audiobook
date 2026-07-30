@@ -3,7 +3,13 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { LoadedProductionConfig } from './config.js'
 import { loadProductionConfig } from './config.js'
 import type { SegmentPlan } from './manifest.js'
-import { canonicalJson, createSegmentPlan, sha256, tryReuse } from './manifest.js'
+import {
+  canonicalJson,
+  createSegmentPlan,
+  MAX_SEED_ATTEMPTS,
+  sha256,
+  tryReuse,
+} from './manifest.js'
 import type { QwenWorkerRuntimeIdentity } from './runtime-identity.js'
 import { loadWorkerRuntimeIdentity, waveformProducingRuntimeIdentity } from './runtime-identity.js'
 import type {
@@ -18,7 +24,7 @@ import type {
   SpeechSegmentResult,
 } from './types.js'
 import { SpeechEngineError } from './types.js'
-import { QwenWorkerSession } from './worker-session.js'
+import { QwenWorkerSession, WorkerHealthGateError } from './worker-session.js'
 
 /** Issue #29 `StableIds`. Book-scoped, so two books can never share one flat output filename. */
 const BOOK_SCOPED_SEGMENT_ID = /^book-[0-9a-f]{24}-ch[0-9]{4}-p[0-9]{6}-s[0-9]{4}$/
@@ -56,6 +62,10 @@ export interface QwenTtsEngineConfig {
    * construction. Defaults to one hour, far beyond the seconds a live staging file exists.
    */
   readonly staleTemporaryFileAgeMs?: number
+}
+
+interface SessionSlot {
+  current: QwenWorkerSession
 }
 
 interface NormalizedPaths {
@@ -447,12 +457,14 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     let leaseReleaseError: Error | undefined
     if (stale.length > 0) {
       const lease = await this.#acquireLease(options.signal)
-      let session: QwenWorkerSession | undefined
+      let slot: SessionSlot | undefined
       let failure: unknown
       try {
-        session = await QwenWorkerSession.start(this.#workerConfig(), options, stale.length)
+        slot = {
+          current: await QwenWorkerSession.start(this.#workerConfig(), options, stale.length),
+        }
         for (const plan of stale) {
-          const result = await session.render(plan)
+          const result = await this.#renderWithSeedRetries(slot, plan, options, stale.length)
           rendered.set(plan.request.segmentId, result)
           completed += 1
           await progress(options, {
@@ -462,10 +474,10 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
             total: plans.length,
           })
         }
-        await session.finish()
+        await slot.current.finish()
       } catch (error) {
         failure = error
-        if (session !== undefined) await session.abort()
+        if (slot !== undefined) await slot.current.abort()
         throw error
       } finally {
         // Worker exit is always awaited before the cross-process GPU lease is released. A release
@@ -524,7 +536,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
     let session: QwenWorkerSession | undefined
     try {
       session = await QwenWorkerSession.start(this.#workerConfig(), options, 0)
-      const activeSession = session
+      const slot: SessionSlot = { current: session }
       let sequence = 0
       let ended = false
       const batch: QwenManagedBatch = {
@@ -534,7 +546,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
           ended = true
           let failure: unknown
           try {
-            await activeSession.finish()
+            await slot.current.finish()
           } catch (error) {
             failure = error
             throw error
@@ -560,8 +572,8 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
             this.#production,
             this.#runtimeIdentity,
           )
-          const cached = await tryReuse(plan, this.#production)
           try {
+            const cached = await tryReuse(plan, this.#production)
             if (cached) {
               await progress(options, {
                 type: 'segment-reused',
@@ -571,7 +583,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
               })
               return cached
             }
-            const rendered = await activeSession.render(plan)
+            const rendered = await this.#renderWithSeedRetries(slot, plan, options, 0)
             await progress(options, {
               type: 'segment-rendered',
               segmentId: request.segmentId,
@@ -581,7 +593,7 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
             return rendered
           } catch (error) {
             ended = true
-            await activeSession.abort()
+            await slot.current.abort()
             batch.leaseReleaseError = await releaseLease(lease, error)
             throw error
           }
@@ -592,6 +604,73 @@ export class QwenTtsSpeechEngine implements SpeechEngine {
       if (session !== undefined) await session.abort()
       await releaseLease(lease, error)
       throw error
+    }
+  }
+
+  /**
+   * Renders one logical segment across a bounded deterministic seed family. A health-gate fatal
+   * has already terminated and been awaited by QwenWorkerSession.render(); the replacement starts
+   * only afterward and under the caller's still-held lease. The mutable slot preserves that
+   * replacement for later segments and for the batch's final finish/abort.
+   */
+  async #renderWithSeedRetries(
+    slot: SessionSlot,
+    canonicalPlan: SegmentPlan,
+    options: SpeechRenderOptions,
+    renderCount: number,
+  ): Promise<SpeechSegmentResult> {
+    let attempt = 1
+    let plan = canonicalPlan
+    while (true) {
+      try {
+        return await slot.current.render(plan)
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw new SpeechEngineError('cancelled', 'Qwen render batch was cancelled', {
+            cause: error,
+            segmentId: canonicalPlan.request.segmentId,
+          })
+        }
+        if (
+          !(error instanceof WorkerHealthGateError) ||
+          error.segmentId !== canonicalPlan.request.segmentId
+        ) {
+          throw error
+        }
+        if (attempt >= MAX_SEED_ATTEMPTS) {
+          throw new SpeechEngineError(
+            'process-failed',
+            `Qwen render attempts exhausted for ${canonicalPlan.request.segmentId} after ${MAX_SEED_ATTEMPTS} attempts`,
+            { cause: error, segmentId: canonicalPlan.request.segmentId },
+          )
+        }
+
+        // render() already awaited the fatal worker's exit; abort() is idempotent and makes that
+        // ordering explicit at this orchestration boundary before a replacement can be spawned.
+        await slot.current.abort()
+        if (options.signal?.aborted) {
+          throw new SpeechEngineError('cancelled', 'Qwen render batch was cancelled', {
+            cause: error,
+            segmentId: canonicalPlan.request.segmentId,
+          })
+        }
+        attempt += 1
+        plan = createSegmentPlan(
+          canonicalPlan.sequence,
+          canonicalPlan.request,
+          this.#paths.outputDirectory,
+          this.#production,
+          this.#runtimeIdentity,
+          attempt,
+        )
+        if (options.signal?.aborted) {
+          throw new SpeechEngineError('cancelled', 'Qwen render batch was cancelled', {
+            cause: error,
+            segmentId: canonicalPlan.request.segmentId,
+          })
+        }
+        slot.current = await QwenWorkerSession.start(this.#workerConfig(), options, renderCount)
+      }
     }
   }
 

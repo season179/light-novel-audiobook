@@ -17,17 +17,26 @@ import { fileURLToPath } from 'node:url'
 import { Segment, VoiceProfile } from '@light-novel-audiobook/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  canonicalJson,
+  deriveSeed,
   type ExclusiveGpuGate,
   type FallbackApprovalRecord,
   type GpuLease,
   type GpuOwner,
+  loadProductionConfig,
+  MAX_SEED_ATTEMPTS,
   prepareEmptySmokeOutputRoot,
   QwenApplicationSpeechEngine,
   QwenTtsSpeechEngine,
   SpeechEngineError,
   type SpeechProgressEvent,
   type SpeechSegmentRequest,
+  sha256,
 } from '../src/index.js'
+import {
+  loadWorkerRuntimeIdentity,
+  waveformProducingRuntimeIdentity,
+} from '../src/runtime-identity.js'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, '../..')
@@ -285,6 +294,261 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     expect(gate.releases).toBe(1)
   })
 
+  it('pins the compatibility engine and application adapter identity composition', async () => {
+    // The runtime identity hashes the real python executable (process.execPath here), so the
+    // final digest is platform-specific and cannot be pinned as a literal. Rebuilding the exact
+    // identity input from its sources pins what #143 must not change: the field set. Folding the
+    // retry bound or salt policy into either identity would break these equalities.
+    const fixture = await makeEngine()
+    const config = await loadProductionConfig(PRODUCTION_CONFIG)
+    const runtimeIdentity = await loadWorkerRuntimeIdentity(
+      {
+        workerScriptPath: fixture.workerScriptPath,
+        pythonExecutable: process.execPath,
+        runtimeManifestPath: join(fixture.root, 'runtime-manifest.json'),
+        uvLockPath: UV_LOCK,
+      },
+      config,
+    )
+    expect(fixture.engine.identity).toBe(
+      sha256(
+        canonicalJson({
+          adapter: config.value.adapter,
+          model: config.value.model,
+          runtime: config.value.runtime,
+          workerRuntime: waveformProducingRuntimeIdentity(runtimeIdentity),
+          generation: config.value.generation,
+          seedStrategy: config.value.seedStrategy,
+          mpsMvpVoicePolicy: config.value.mpsMvpVoicePolicy,
+        }),
+      ),
+    )
+    expect(new QwenApplicationSpeechEngine(fixture.engine).identity).toBe(
+      sha256(
+        canonicalJson({
+          bridge: { id: 'qwen-issue-29-speech-engine', version: 2 },
+          engine: fixture.engine.identity,
+        }),
+      ),
+    )
+    expect(fixture.gate.acquisitions).toBe(0)
+  })
+
+  it('retries a gate failure in renderBatch and keeps later stale segments in the replacement', async () => {
+    const fixture = await makeEngine('health-gate-once')
+    const events: SpeechProgressEvent[] = []
+    const requests: SpeechSegmentRequest[] = [
+      {
+        segmentId: 'ch01-0101',
+        text: 'Synthetic first retry fixture.',
+        voiceProfileId: 'ryan-low-weary',
+      },
+      {
+        segmentId: 'ch01-0102',
+        text: 'Synthetic replacement-session fixture.',
+        voiceProfileId: 'aiden-calm-narrator',
+      },
+    ]
+
+    const result = await fixture.engine.renderBatch(requests, {
+      onProgress: (event) => {
+        events.push(event)
+      },
+    })
+    const calls = await invocations(fixture.log)
+    const config = await loadProductionConfig(PRODUCTION_CONFIG)
+    const profile = config.selectedProfiles.get('ryan-low-weary')
+    if (profile === undefined) throw new Error('Pinned retry profile is missing')
+
+    expect(result).toMatchObject({ rendered: 2, reused: 0 })
+    expect(calls).toHaveLength(2)
+    expect(invocationSegmentIds(calls, 0)).toEqual([requests[0]?.segmentId])
+    expect(invocationSegmentIds(calls, 1)).toEqual(requests.map((request) => request.segmentId))
+    const firstSegments = calls[0]?.segments
+    const replacement = calls[1]?.segments
+    if (!Array.isArray(firstSegments) || !Array.isArray(replacement)) {
+      throw new Error('Retry invocations are missing segments')
+    }
+    const firstAttempt = firstSegments[0] as Record<string, unknown> | undefined
+    expect(firstAttempt?.seed).toBe(deriveSeed(profile, requests[0]?.segmentId ?? '', 1))
+    expect(replacement[0]?.seed).toBe(deriveSeed(profile, requests[0]?.segmentId ?? '', 2))
+    expect(
+      events
+        .filter((event) => event.type === 'segment-rendered')
+        .map((event) => ('completed' in event ? event.completed : null)),
+    ).toEqual([1, 2])
+    expect(fixture.gate.acquisitions).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+  })
+
+  it('never retries worker failures without exact health-gate provenance', async () => {
+    for (const mode of [
+      'health-gate-wrong-detail',
+      'health-gate-wrong-segment',
+      'process-exit-during-render',
+      'wrong-order',
+    ]) {
+      const fixture = await makeEngine(mode)
+      await expect(
+        fixture.engine.renderBatch([
+          {
+            segmentId: 'ch01-0201',
+            text: 'Synthetic non-retry fixture.',
+            voiceProfileId: 'ryan-low-weary',
+          },
+        ]),
+      ).rejects.toBeInstanceOf(SpeechEngineError)
+      expect(
+        (await lifecycle(fixture.lifecycleLog)).filter((item) => item === 'worker-spawned'),
+      ).toHaveLength(1)
+      expect(fixture.gate.acquisitions).toBe(1)
+      expect(fixture.gate.releases).toBe(1)
+    }
+  })
+
+  it('does not retry a progress callback lookalike SpeechEngineError', async () => {
+    const fixture = await makeEngine('normal')
+    const segmentId = 'ch01-0202'
+    const lookalike = new SpeechEngineError(
+      'process-failed',
+      'Qwen batch worker failed at render-batch: ValueError: generated WAV failed configured health gates',
+      { segmentId },
+    )
+
+    await expect(
+      fixture.engine.renderBatch(
+        [{ segmentId, text: 'Synthetic callback fixture.', voiceProfileId: 'ryan-low-weary' }],
+        {
+          onProgress: (event) => {
+            if (event.type === 'segment-started') throw lookalike
+          },
+        },
+      ),
+    ).rejects.toBe(lookalike)
+    expect(
+      (await lifecycle(fixture.lifecycleLog)).filter((item) => item === 'worker-spawned'),
+    ).toHaveLength(1)
+    expect(fixture.gate.releases).toBe(1)
+  })
+
+  it('propagates replacement startup failure without starting a third worker', async () => {
+    const fixture = await makeEngine('health-gate-then-load-failure')
+    const error = await expectCode(
+      fixture.engine.renderBatch([
+        {
+          segmentId: 'ch01-0203',
+          text: 'Synthetic replacement startup failure fixture.',
+          voiceProfileId: 'ryan-low-weary',
+        },
+      ]),
+      'process-failed',
+    )
+
+    expect(error.message).toContain('synthetic model load failure')
+    expect(
+      (await lifecycle(fixture.lifecycleLog)).filter((item) => item === 'worker-spawned'),
+    ).toHaveLength(2)
+    expect(fixture.gate.acquisitions).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+  })
+
+  it('stops after four exact gate failures with the last worker error as cause', async () => {
+    const fixture = await makeEngine('health-gate-always')
+    const segmentId = 'ch01-0301'
+    const error = await expectCode(
+      fixture.engine.renderBatch([
+        { segmentId, text: 'Synthetic exhaustion fixture.', voiceProfileId: 'ryan-low-weary' },
+      ]),
+      'process-failed',
+    )
+
+    expect(error.message).toContain(segmentId)
+    expect(error.message).toContain(`${MAX_SEED_ATTEMPTS} attempts`)
+    expect(error.cause).toBeInstanceOf(SpeechEngineError)
+    expect(await invocations(fixture.log)).toHaveLength(MAX_SEED_ATTEMPTS)
+    const workers = (await lifecycle(fixture.lifecycleLog)).filter(
+      (item) => item === 'worker-spawned',
+    )
+    expect(workers).toHaveLength(MAX_SEED_ATTEMPTS)
+    expect(fixture.gate.acquisitions).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+  })
+
+  it('cancels during replacement startup after a gate fatal and awaits both workers', async () => {
+    const fixture = await makeEngine('health-gate-once')
+    const controller = new AbortController()
+    let starts = 0
+    const render = fixture.engine.renderBatch(
+      [
+        {
+          segmentId: 'ch01-0302',
+          text: 'Synthetic replacement cancellation fixture.',
+          voiceProfileId: 'ryan-low-weary',
+        },
+      ],
+      {
+        signal: controller.signal,
+        onProgress: (event) => {
+          if (event.type === 'process-started') starts += 1
+          if (event.type === 'model-loading' && starts === 2) controller.abort()
+        },
+      },
+    )
+
+    await expectCode(render, 'cancelled')
+    expect(starts).toBe(2)
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+    expect(fixture.gate.acquisitions).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+  })
+
+  it.each([true, false])(
+    'reuses an attempt-2 artifact against the canonical plan with overwrite=%s',
+    async (allowOverwriteExisting) => {
+      const fixture = await makeEngine('health-gate-once', {}, { allowOverwriteExisting })
+      const request = [
+        {
+          segmentId: 'ch01-0401',
+          text: 'Synthetic durable salted artifact fixture.',
+          voiceProfileId: 'ryan-low-weary' as const,
+        },
+      ]
+      const rendered = await fixture.engine.renderBatch(request)
+      expect(rendered.results[0]?.status).toBe('rendered')
+      const renderedHash = rendered.results[0]?.renderIdentitySha256
+      expect(await invocations(fixture.log)).toHaveLength(2)
+
+      const restarted = await makeEngine(
+        'normal',
+        {},
+        {
+          reuseRoot: fixture.root,
+          allowOverwriteExisting,
+        },
+      )
+      const resumed = await restarted.engine.renderBatch(request)
+      expect(resumed).toMatchObject({ rendered: 0, reused: 1 })
+      expect(resumed.results[0]?.renderIdentitySha256).toBe(renderedHash)
+      expect(await invocations(fixture.log)).toHaveLength(2)
+      expect(restarted.gate.acquisitions).toBe(0)
+    },
+  )
+
   it('rejects Eric and Serena at the TypeScript selection boundary before Python starts', async () => {
     const fixture = await makeEngine()
     const instruction =
@@ -403,9 +667,9 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     ['process-failure-before-load', 'process-failed'],
     ['duplicate-render', 'protocol'],
   ] as const)('rejects adversarial fake process mode %s', async (mode, code) => {
-    const { engine, gate } = await makeEngine(mode)
+    const fixture = await makeEngine(mode)
     const error = await expectCode(
-      engine.renderBatch([
+      fixture.engine.renderBatch([
         {
           segmentId: 'ch05-0001',
           text: 'Adversarial protocol line.',
@@ -416,7 +680,10 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
     )
     if (mode === 'process-failure-before-load')
       expect(error.message).toContain('synthetic model load failure')
-    expect(gate.releases).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+    expect(
+      (await lifecycle(fixture.lifecycleLog)).filter((item) => item === 'worker-spawned'),
+    ).toHaveLength(1)
   })
 
   it('rejects unsafe and duplicate stable IDs before spawning', async () => {
@@ -643,6 +910,10 @@ describe('QwenTtsSpeechEngine fake-process contract', () => {
       ),
     ).rejects.toThrow()
     expect(await readFile(target, 'utf8')).toBe('racing canonical output')
+    expect(
+      (await lifecycle(fixture.lifecycleLog)).filter((item) => item === 'worker-spawned'),
+    ).toHaveLength(1)
+    expect(fixture.gate.releases).toBe(1)
   })
 
   it('rejects caller attempts to alter ambient Python import paths', async () => {
@@ -1005,6 +1276,108 @@ describe('QwenApplicationSpeechEngine issue #29 port', () => {
     expect(fallbackManifest.renderIdentity.applicationInputIdentity).toBe(requests[2].inputIdentity)
     expect(fixture.gate.acquisitions).toBe(1)
     expect(fixture.gate.releases).toBe(1)
+  })
+
+  it('retries through application begin/render/end and retains the replacement session', async () => {
+    const fixture = await makeEngine('health-gate-once')
+    const events: SpeechProgressEvent[] = []
+    const adapter = new QwenApplicationSpeechEngine(fixture.engine, {
+      onProgress: (event) => {
+        events.push(event)
+      },
+    })
+    const narrator = approvedVoice('narrator-aiden', 'narrator', 'narrator')
+    const firstId = `${BOOK}-ch0001-p000014-s0001`
+    const laterId = `${BOOK}-ch0001-p000015-s0001`
+
+    await adapter.beginBatch()
+    const first = await adapter.render({
+      segment: applicationSegment(firstId, 'Synthetic managed retry fixture.', narrator),
+      voice: narrator,
+      inputIdentity: 'c'.repeat(64),
+    })
+    const later = await adapter.render({
+      segment: applicationSegment(laterId, 'Synthetic retained replacement fixture.', narrator),
+      voice: narrator,
+      inputIdentity: 'd'.repeat(64),
+    })
+    await adapter.endBatch()
+
+    const calls = await invocations(fixture.log)
+    const config = await loadProductionConfig(PRODUCTION_CONFIG)
+    const profile = config.selectedProfiles.get('aiden-calm-narrator')
+    if (profile === undefined) throw new Error('Pinned narrator profile is missing')
+    const firstWorkerSegments = calls[0]?.segments
+    const replacementSegments = calls[1]?.segments
+    if (!Array.isArray(firstWorkerSegments) || !Array.isArray(replacementSegments)) {
+      throw new Error('Managed retry invocations are missing segments')
+    }
+    const firstWorkerSegment = firstWorkerSegments[0] as Record<string, unknown> | undefined
+    expect(first.segmentId).toBe(firstId)
+    expect(later.segmentId).toBe(laterId)
+    expect(calls).toHaveLength(2)
+    expect(invocationSegmentIds(calls, 0)).toEqual([firstId])
+    expect(invocationSegmentIds(calls, 1)).toEqual([firstId, laterId])
+    expect(firstWorkerSegment?.seed).toBe(deriveSeed(profile, firstId, 1))
+    expect(replacementSegments[0]?.seed).toBe(deriveSeed(profile, firstId, 2))
+    expect(
+      events
+        .filter((event) => event.type === 'segment-rendered')
+        .map((event) => ('segmentId' in event ? event.segmentId : null)),
+    ).toEqual([firstId, laterId])
+    expect(fixture.gate.acquisitions).toBe(1)
+    expect(fixture.gate.releases).toBe(1)
+    expect(await lifecycle(fixture.lifecycleLog)).toEqual([
+      'lease-acquired',
+      'worker-spawned',
+      'worker-exited',
+      'worker-spawned',
+      'worker-exited',
+      'lease-released',
+    ])
+  })
+
+  it('recovers an orphaned salted artifact through the managed adapter without rerendering', async () => {
+    const fixture = await makeEngine('health-gate-once')
+    const narrator = approvedVoice('narrator-aiden', 'narrator', 'narrator')
+    const segmentId = `${BOOK}-ch0001-p000016-s0001`
+    const request = {
+      segment: applicationSegment(
+        segmentId,
+        'Synthetic orphaned salted artifact fixture.',
+        narrator,
+      ),
+      voice: narrator,
+      inputIdentity: 'e'.repeat(64),
+    }
+    const firstAdapter = new QwenApplicationSpeechEngine(fixture.engine)
+    await firstAdapter.beginBatch()
+    const rendered = await firstAdapter.render(request)
+    await firstAdapter.endBatch()
+    expect(await invocations(fixture.log)).toHaveLength(2)
+
+    const restarted = await makeEngine('normal', {}, { reuseRoot: fixture.root })
+    const events: SpeechProgressEvent[] = []
+    const resumedAdapter = new QwenApplicationSpeechEngine(restarted.engine, {
+      onProgress: (event) => {
+        events.push(event)
+      },
+    })
+    await resumedAdapter.beginBatch()
+    const recovered = await resumedAdapter.render(request)
+    await resumedAdapter.endBatch()
+
+    expect(recovered).toEqual(rendered)
+    const calls = await invocations(fixture.log)
+    expect(calls).toHaveLength(3)
+    expect(invocationSegmentIds(calls, 2)).toEqual([])
+    expect(
+      events
+        .filter((event) => event.type === 'segment-reused')
+        .map((event) => ('segmentId' in event ? event.segmentId : null)),
+    ).toEqual([segmentId])
+    expect(restarted.gate.acquisitions).toBe(1)
+    expect(restarted.gate.releases).toBe(1)
   })
 
   it('rejects fallback application renders without an explicit approval record', async () => {
