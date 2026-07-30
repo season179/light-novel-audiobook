@@ -13,6 +13,10 @@ import { chat } from '@tanstack/ai'
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible'
 import { cloudFidelityError, sanitizeOpenAiCloudError } from './errors.js'
 import { OPENAI_CLOUD_DIRECTOR_PROFILE } from './profile.js'
+import {
+  type NarrationTailCompletionRepair,
+  repairNarrationTailCompletion,
+} from './tail-completion-repair.js'
 
 export interface OpenAiCloudRequestClientOptions {
   readonly apiKey: string
@@ -102,6 +106,9 @@ export async function executeOpenAiCloudWindow(
     readonly signal?: AbortSignal
     readonly timeoutMs: number
     readonly onTextDelta?: ((delta: string) => void | Promise<void>) | undefined
+    readonly onTailCompletionRepair?:
+      | ((repairs: readonly NarrationTailCompletionRepair[]) => void | Promise<void>)
+      | undefined
   },
 ): Promise<OpenAiCloudWindowResult> {
   const payload = directionRequestPayload(request)
@@ -169,20 +176,34 @@ export async function executeOpenAiCloudWindow(
       throw new DirectorError('malformed_output', 'OpenAI cloud director response did not complete')
     }
 
-    const repaired = repairMechanicalSourceEcho(output, request)
+    const mechanicallyRepaired = repairMechanicalSourceEcho(output, request)
+    const tailCompleted = repairNarrationTailCompletion(mechanicallyRepaired.output, request)
+    let repairNoticeFailure: { readonly error: unknown } | undefined
+    if (tailCompleted.repairs.length > 0) {
+      try {
+        await options.onTailCompletionRepair?.(tailCompleted.repairs)
+      } catch (error: unknown) {
+        // A failed progress sink must not bypass the deterministic validator's final decision.
+        repairNoticeFailure = { error }
+      }
+    }
     let validated: ValidatedDirection
     try {
-      validated = validateDirectionOutput(repaired.output, request, client.confidenceThreshold)
+      validated = validateDirectionOutput(tailCompleted.output, request, client.confidenceThreshold)
     } catch (error: unknown) {
       if (error instanceof DirectorFidelityError) throw cloudFidelityError(error)
       throw error
     }
+    if (repairNoticeFailure !== undefined) throw repairNoticeFailure.error
     return {
       validated,
       requestSha256,
       outputIdentity: Object.freeze({
-        outputSha256: canonicalSha256(repaired.output),
-        repairs: repaired.repairs,
+        outputSha256: canonicalSha256(tailCompleted.output),
+        repairs: mechanicallyRepaired.repairs,
+        ...(tailCompleted.repairs.length === 0
+          ? {}
+          : { narrationTailCompletionRepairs: tailCompleted.repairs }),
       }),
     }
   } catch (error: unknown) {
