@@ -1,7 +1,13 @@
 import {
+  MAX_FRAGMENT_CHARACTERS,
+  SEPARATOR_OVERSHOOT,
+  splitDirectedSegments,
+} from '@light-novel-audiobook/application'
+import {
   type DirectionRequest,
   type DirectionWireOutput,
   directionWireOutputSchemaFor,
+  type ModelDirectedWireSegment,
   validateDirectionOutput,
 } from '@light-novel-audiobook/gemma-director'
 import { describe, expect, it } from 'vitest'
@@ -54,7 +60,11 @@ describe('deterministic narration-tail completion repair', () => {
     const result = repairNarrationTailCompletion(output, request)
 
     expect(result.repairs).toEqual([
-      { sourcePassageId: 'p1', appendedCodeUnitCount: ' quietly.'.length },
+      {
+        sourcePassageId: 'p1',
+        appendedCodeUnitCount: ' quietly.'.length,
+        mode: 'synthesize-narration',
+      },
     ])
     expect(result.output.segments).toEqual([
       output.segments[0],
@@ -79,6 +89,103 @@ describe('deterministic narration-tail completion repair', () => {
       speakerId: 'narrator',
       confidence: 1,
     })
+  })
+
+  it('attaches the diagnosed one-unit whitespace tail to the last of two segments', () => {
+    const firstText = 'a'.repeat(39)
+    const lastText = 'b'.repeat(83)
+    const sourceText = `${firstText}${lastText} `
+    expect(sourceText).toHaveLength(123)
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = {
+      segments: [
+        narration('p1', firstText),
+        {
+          source_passage_id: 'p1',
+          source_text: lastText,
+          kind: 'dialogue',
+          speaker_id: null,
+          speaker_reason: 'Synthetic unresolved-speaker fixture',
+          confidence: 0.61,
+          delivery: {
+            emotion: 'uneasy',
+            pace: 'slow',
+            volume: 'soft',
+            pause_after_ms: 430,
+          },
+        },
+      ],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'attach-to-previous' },
+    ])
+    expect(result.output.segments).toHaveLength(2)
+    expect(result.output.segments[0]).toBe(output.segments[0])
+    expect(result.output.segments[1]?.source_text).toBe(`${lastText} `)
+    expect(result.output.segments.map((segment) => segment.source_text).join('')).toBe(sourceText)
+    expect(() => directionWireOutputSchemaFor(request).parse(result.output)).not.toThrow()
+    const validated = validateDirectionOutput(result.output, request, 0.8)
+    expect(validated.annotations.map((annotation) => annotation.sourceText).join('')).toBe(
+      sourceText,
+    )
+
+    const split = splitDirectedSegments(validated.annotations)
+    expect(split.some((segment) => segment.sourceText.trim().length === 0)).toBe(false)
+    expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
+  })
+
+  it('preserves every wire field in a frozen copy without mutating input segments', () => {
+    const first = Object.freeze(narration('p1', 'Opening'))
+    const delivery = Object.freeze({
+      emotion: 'weary' as const,
+      pace: 'fast' as const,
+      volume: 'loud' as const,
+      pause_after_ms: 987,
+    })
+    const last: ModelDirectedWireSegment = Object.freeze({
+      source_passage_id: 'p1',
+      source_text: ' exchange',
+      kind: 'thought',
+      speaker_id: null,
+      speaker_reason: 'Synthetic ambiguity fixture',
+      confidence: 0.37,
+      delivery,
+    })
+    const segments = Object.freeze([first, last])
+    const output: DirectionWireOutput = Object.freeze({ segments })
+    const request = requestFor([{ id: 'p1', text: 'Opening exchange\t' }])
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output).not.toBe(output)
+    expect(result.output.segments[0]).toBe(first)
+    const attached = result.output.segments[1]
+    expect(attached).not.toBe(last)
+    expect(attached).toEqual({ ...last, source_text: ' exchange\t' })
+    expect(attached?.delivery).toBe(delivery)
+    expect(Object.isFrozen(attached)).toBe(true)
+    expect(Object.isFrozen(result.output.segments)).toBe(true)
+    expect(last.source_text).toBe(' exchange')
+    expect(output.segments).toBe(segments)
+    expect(result.output.segments.map((segment) => segment.source_text).join('')).toBe(
+      request.passages[0]?.text,
+    )
+  })
+
+  it('declines a whitespace tail when the last same-passage segment is trim-empty', () => {
+    const request = requestFor([{ id: 'p1', text: 'Prefix  ' }])
+    const output: DirectionWireOutput = {
+      segments: [narration('p1', 'Prefix'), narration('p1', ' ')],
+    }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output).toBe(output)
+    expect(result.repairs).toEqual([])
+    expect(() => validateDirectionOutput(result.output, request, 0.8)).toThrow()
   })
 
   it.each(['"', "'", '“', '”', '‘', '’'])(
@@ -178,9 +285,79 @@ describe('deterministic narration-tail completion repair', () => {
     const result = repairNarrationTailCompletion(output, request)
 
     expect(result.repairs).toEqual([
-      { sourcePassageId: 'p1', appendedCodeUnitCount: NARRATION_TAIL_COMPLETION_MAX_CODE_UNITS },
+      {
+        sourcePassageId: 'p1',
+        appendedCodeUnitCount: NARRATION_TAIL_COMPLETION_MAX_CODE_UNITS,
+        mode: 'synthesize-narration',
+      },
     ])
     expect(result.output.segments[1]?.source_text).toBe(tail)
+  })
+
+  it('attaches a whitespace-only tail at the 200-code-unit cap', () => {
+    const prefix = 'Prefix'
+    const tail = ' '.repeat(NARRATION_TAIL_COMPLETION_MAX_CODE_UNITS)
+    const request = requestFor([{ id: 'p1', text: `${prefix}${tail}` }])
+    const output: DirectionWireOutput = { segments: [narration('p1', prefix)] }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      {
+        sourcePassageId: 'p1',
+        appendedCodeUnitCount: NARRATION_TAIL_COMPLETION_MAX_CODE_UNITS,
+        mode: 'attach-to-previous',
+      },
+    ])
+    expect(result.output.segments).toHaveLength(1)
+    expect(result.output.segments[0]?.source_text).toBe(`${prefix}${tail}`)
+    expect(() => validateDirectionOutput(result.output, request, 0.8)).not.toThrow()
+  })
+
+  it('declines a whitespace tail the splitter would reject on a near-budget segment', () => {
+    const lastText = 'b'.repeat(MAX_FRAGMENT_CHARACTERS)
+    const tail = ' '.repeat(SEPARATOR_OVERSHOOT + 1)
+    const request = requestFor([{ id: 'p1', text: `${lastText}${tail}` }])
+    const output: DirectionWireOutput = { segments: [narration('p1', lastText)] }
+
+    expect(() =>
+      splitDirectedSegments([
+        {
+          sourcePassageId: 'p1',
+          sourceText: `${lastText}${tail}`,
+          kind: 'narration',
+          speakerId: null,
+          confidence: 1,
+          delivery: { emotion: 'neutral', pace: 'normal', volume: 'normal', pauseAfterMs: 0 },
+        },
+      ]),
+    ).toThrow()
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.output).toBe(output)
+    expect(result.repairs).toEqual([])
+    expect(() => validateDirectionOutput(result.output, request, 0.8)).toThrow()
+  })
+
+  it('attaches an over-budget whitespace tail merge the splitter accepts', () => {
+    const lastText = 'word '.repeat(MAX_FRAGMENT_CHARACTERS / 5 + 1).trimEnd()
+    const sourceText = `${lastText} `
+    expect(sourceText.length).toBeGreaterThan(MAX_FRAGMENT_CHARACTERS)
+    const request = requestFor([{ id: 'p1', text: sourceText }])
+    const output: DirectionWireOutput = { segments: [narration('p1', lastText)] }
+
+    const result = repairNarrationTailCompletion(output, request)
+
+    expect(result.repairs).toEqual([
+      { sourcePassageId: 'p1', appendedCodeUnitCount: 1, mode: 'attach-to-previous' },
+    ])
+    expect(result.output.segments).toHaveLength(1)
+    expect(result.output.segments[0]?.source_text).toBe(sourceText)
+    const validated = validateDirectionOutput(result.output, request, 0.8)
+    const split = splitDirectedSegments(validated.annotations)
+    expect(split.some((segment) => segment.sourceText.trim().length === 0)).toBe(false)
+    expect(split.map((segment) => segment.sourceText).join('')).toBe(sourceText)
   })
 
   it('declines a tail over the 200-code-unit cap so normal validation can reject it', () => {

@@ -122,3 +122,8 @@ export {
   type ReviewerIdentity,
   resolveReviewerIdentity,
 } from './reviewer-identity.js'
+export {
+  MAX_FRAGMENT_CHARACTERS,
+  SEPARATOR_OVERSHOOT,
+  splitDirectedSegments,
+} from './split-directed-segments.js'
